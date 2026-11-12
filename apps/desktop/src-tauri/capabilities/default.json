@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the main window (local app content only; remote pages and game iframes get none).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "window-state:default"
+  ]
+}

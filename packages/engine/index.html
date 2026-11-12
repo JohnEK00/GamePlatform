@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pixelforge Playground</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    #player { display: block; width: 100%; height: 100%; border: 0; background: #000; }
+    #bar {
+      position: fixed; bottom: 8px; left: 8px; z-index: 10; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+      font: 12px/1.2 system-ui, sans-serif; color: #cfd6ee; background: rgba(15, 18, 32, 0.82);
+      border: 1px solid #2c3554; border-radius: 8px; padding: 6px 8px; max-width: calc(100vw - 32px);
+    }
+    #bar select, #bar button {
+      font: inherit; color: #e8ecf4; background: #1e2540; border: 1px solid #36406a; border-radius: 5px; padding: 3px 8px; cursor: pointer;
+    }
+    #log { color: #8ea2ff; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #bar.min > :not(#toggle) { display: none; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <button id="toggle" title="Collapse">☰</button>
+    <strong>Pixelforge</strong>
+    <select id="game"></select>
+    <button data-msg="webgame:pause">Pause</button>
+    <button data-msg="webgame:resume">Resume</button>
+    <button id="mute">Mute</button>
+    <button id="clear" title="Delete this game's saved storage and reload">Clear save</button>
+    <span id="log">host messages appear here</span>
+  </div>
+  <iframe id="player" sandbox="allow-scripts" allow="autoplay; fullscreen; gamepad" title="game"></iframe>
+  <script type="module">
+    // Dev playground host: loads player.html (which mirrors the backend player page) in a sandboxed
+    // iframe and plays the parent role: storage handshake (webgame:hello -> webgame:load), persisting
+    // webgame:save to localStorage under webgame.save.{gameId}, fullscreen, pause/resume/mute.
+    const params = new URLSearchParams(location.search);
+    const select = document.getElementById('game');
+    const log = document.getElementById('log');
+    const frame = document.getElementById('player');
+    const names = await fetch('/examples/index.json').then((r) => r.json()).catch(() => []);
+    const name = params.get('game') || names[0] || 'space-dodge';
+    for (const n of names) select.add(new Option(n, n, false, n === name));
+    select.onchange = () => { location.search = '?game=' + encodeURIComponent(select.value); };
+    const saveKey = `webgame.save.${name}`;
+    const MAX_SAVE = 256 * 1024;
+    const toGame = (msg) => frame.contentWindow?.postMessage(msg, '*');
+
+    let muted = false;
+    document.getElementById('mute').onclick = () => {
+      muted = !muted;
+      toGame({ type: 'webgame:mute', muted });
+      document.getElementById('mute').textContent = muted ? 'Unmute' : 'Mute';
+    };
+    document.getElementById('clear').onclick = () => { localStorage.removeItem(saveKey); location.reload(); };
+    for (const b of document.querySelectorAll('[data-msg]')) b.onclick = () => toGame({ type: b.dataset.msg });
+    document.getElementById('toggle').onclick = () => document.getElementById('bar').classList.toggle('min');
+    for (const b of document.querySelectorAll('#bar button, #bar select')) b.addEventListener('keydown', (e) => e.preventDefault());
+
+    window.addEventListener('message', (e) => {
+      if (e.source !== frame.contentWindow) return;
+      const d = e.data;
+      if (!d || typeof d.type !== 'string' || !d.type.startsWith('webgame:')) return;
+      console.info('[host] received', d);
+      switch (d.type) {
+        case 'webgame:hello': {
+          let data = null;
+          try { data = JSON.parse(localStorage.getItem(saveKey) || 'null'); } catch { data = null; }
+          toGame({ type: 'webgame:load', data });
+          log.textContent = data ? 'hello -> load (saved data)' : 'hello -> load (null)';
+          return;
+        }
+        case 'webgame:save': {
+          const json = JSON.stringify(d.data ?? null);
+          if (json.length > MAX_SAVE) { log.textContent = 'save rejected: over 256KB'; return; }
+          localStorage.setItem(saveKey, json);
+          log.textContent = `saved ${json.length} bytes`;
+          return;
+        }
+        case 'webgame:fullscreen':
+          if (document.fullscreenElement) document.exitFullscreen?.();
+          else frame.requestFullscreen?.().catch(() => {});
+          log.textContent = 'fullscreen';
+          return;
+        case 'webgame:score': log.textContent = `score submitted: ${d.score}`; return;
+        case 'webgame:error': log.textContent = `error: ${d.message}`; return;
+        default: log.textContent = d.type;
+      }
+    });
+
+    const meta = await fetch(`/examples/${encodeURIComponent(name)}/game.json`).then((r) => r.json()).catch(() => null);
+    if (meta) document.title = `${meta.name} · Pixelforge Playground`;
+    frame.src = '/player.html?game=' + encodeURIComponent(name);
+    frame.onload = () => frame.focus();
+  </script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pixelforge Player</title>
+  <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{display:block;margin:auto}</style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <script type="module">
+    // Dev player: mirrors the backend player page (/play/{id}). index.html loads it in a
+    // sandbox="allow-scripts" iframe (opaque origin, no localStorage) and acts as its parent.
+    import { boot } from '/src/index.ts';
+
+    const name = new URLSearchParams(location.search).get('game') || 'space-dodge';
+    const base = new URL(`/examples/${encodeURIComponent(name)}/`, location.href).href;
+    const meta = await fetch(base + 'game.json').then((r) => r.json());
+    const mod = await import(/* @vite-ignore */ base + meta.entry + '?v=' + Date.now());
+    window.engine = await boot(document.getElementById('game'), mod.default, { width: meta.width, height: meta.height, baseUrl: base });
+  </script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+/* Desktop-only chrome (offline banner). Uses @webgame/ui CSS variables. */
+.pfd-banner,
+.pfd-banner * {
+  box-sizing: border-box;
+}
+.pfd-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  padding: 10px 16px;
+  font-family: var(--pf-font, system-ui, sans-serif);
+  font-size: 0.9rem;
+  color: var(--pf-text, #eceef8);
+  background: linear-gradient(0deg, rgba(255, 209, 102, 0.12), rgba(255, 209, 102, 0.12)), var(--pf-bg-2, #0f1120);
+  border-bottom: 1px solid rgba(255, 209, 102, 0.45);
+}
+.pfd-banner__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  max-width: var(--pf-max, 1240px);
+  margin: 0 auto;
+}
+.pfd-banner__icon {
+  color: var(--pf-warning, #ffd166);
+  font-size: 1.2rem;
+}
+.pfd-banner__text {
+  flex: 1 1 360px;
+  line-height: 1.4;
+}
+.pfd-banner__text code {
+  font-family: var(--pf-mono, monospace);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--pf-surface-2, #1b1f36);
+}
+.pfd-banner__actions {
+  display: flex;
+  gap: 8px;
+}
+.pfd-banner__form {
+  max-width: 640px;
+  margin: 12px auto 4px;
+}

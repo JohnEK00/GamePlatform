@@ -1,0 +1,24 @@
+{
+  "name": "webgameapp",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/engine",
+    "packages/ui",
+    "apps/web",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "build:engine": "npm run build -w @webgame/engine",
+    "build:ui": "npm run build -w @webgame/ui",
+    "build:web": "npm run build -w @webgame/web",
+    "build": "npm run build:engine && npm run build:ui && npm run build:web",
+    "dev:web": "npm run dev -w @webgame/web",
+    "dev:backend": "cd backend && cargo run",
+    "dev:desktop": "npm run tauri -w @webgame/desktop -- dev",
+    "examples": "node scripts/pack-examples.mjs"
+  },
+  "devDependencies": {
+    "jszip": "^3.10.2"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Space Dodge",
+  "entry": "main.js",
+  "width": 800,
+  "height": 600,
+  "engine": "1",
+  "description": "Blast asteroids and dodge saucers in this neon arcade shooter. Arrows/WASD to fly, Space to shoot - or drag with mouse/touch.",
+  "controls": "Arrows/WASD move, Space/Z fire, M mute. Mouse/touch: hold & drag to fly (auto-fire)."
+}
