@@ -1,11 +1,16 @@
 //! Router assembly: `/api` (strict CORS) + public hosting routes (`*` CORS).
 
+pub mod achievements;
 pub mod auth;
 pub mod comments;
+pub mod favorites;
 pub mod files;
 pub mod games;
 pub mod play;
+pub mod reports;
+pub mod saves;
 pub mod scores;
+pub mod stats;
 pub mod tags;
 pub mod users;
 
@@ -47,7 +52,13 @@ pub fn api_router() -> Router<AppState> {
             "/users/me/avatar",
             put(users::upload_avatar).layer(image_limit),
         )
+        .route("/users/me/favorites", get(favorites::my_favorites))
+        .route("/users/me/stats", get(stats::my_stats))
         .route("/users/{username}", get(users::get_user))
+        .route(
+            "/users/{username}/achievements",
+            get(achievements::list_user_achievements),
+        )
         // games
         .route(
             "/games",
@@ -84,12 +95,38 @@ pub fn api_router() -> Router<AppState> {
             "/games/{id}/scores",
             get(scores::list_scores).post(scores::submit_score),
         )
+        .route(
+            "/games/{id}/favorite",
+            put(favorites::put_favorite).delete(favorites::delete_favorite),
+        )
+        .route(
+            "/games/{id}/achievements",
+            get(achievements::list_game_achievements),
+        )
+        .route(
+            "/games/{id}/achievements/{achievement_id}",
+            post(achievements::unlock_achievement),
+        )
+        .route(
+            "/games/{id}/save",
+            get(saves::get_save)
+                .put(saves::put_save)
+                .delete(saves::delete_save),
+        )
+        .route("/games/{id}/stats", get(stats::game_stats))
+        .route("/reports", post(reports::create_report))
+        .route("/admin/reports", get(reports::admin_list_reports))
+        .route(
+            "/admin/reports/{id}/resolve",
+            post(reports::admin_resolve_report),
+        )
         .route("/tags", get(tags::list_tags))
         .fallback(api_not_found)
 }
 
 pub fn public_router(state: &AppState) -> Router<AppState> {
     Router::new()
+        .route("/play/studio", get(play::studio_page))
         .route("/play/{id}", get(play::play_page))
         .route("/runtime/{*path}", get(files::runtime_file))
         .route("/games/{id}/files/{*path}", get(files::game_file))
@@ -115,6 +152,7 @@ fn api_cors(origins: &[String]) -> CorsLayer {
             Method::DELETE,
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+        .expose_headers([header::RETRY_AFTER])
         .max_age(std::time::Duration::from_secs(3600))
 }
 

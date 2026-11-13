@@ -1,4 +1,4 @@
-// Types mirroring docs/API.md (REST API contract v1). Keep in sync with the contract.
+// Types mirroring docs/API.md (REST API contract v1 + v2 additions). Keep in sync with the contract.
 
 export type UserRef = {
   id: string;
@@ -7,10 +7,14 @@ export type UserRef = {
   avatarUrl: string | null;
 };
 
+export type UserRole = "user" | "admin";
+
 export type User = UserRef & {
   bio: string;
   /** RFC3339 */
   createdAt: string;
+  /** v2. Admins see the moderation queue. */
+  role: UserRole;
 };
 
 export type AuthResponse = { token: string; user: User };
@@ -29,6 +33,8 @@ export type GameSummary = {
   published: boolean;
   createdAt: string;
   updatedAt: string;
+  /** v2: number of users who favorited the game. */
+  favorites: number;
 };
 
 export type Game = GameSummary & {
@@ -42,6 +48,10 @@ export type Game = GameSummary & {
   /** Only when authenticated */
   myRating: number | null;
   isOwner: boolean;
+  /** v2, only meaningful when authenticated (false when anonymous). */
+  isFavorite: boolean;
+  /** v2: achievement definitions from the current version's game.json. */
+  achievements: AchievementDef[];
 };
 
 export type Page<T> = { items: T[]; total: number; page: number; perPage: number };
@@ -72,6 +82,8 @@ export type ApiErrorCode =
   | "not_found"
   | "conflict"
   | "payload_too_large"
+  /** 429, with a Retry-After header (seconds). */
+  | "rate_limited"
   | "internal"
   /** 503, e.g. engine runtime not built. */
   | "unavailable"
@@ -91,7 +103,7 @@ export type LoginRequest = { login: string; password: string };
 export type UserProfileResponse = { user: User; games: GameSummary[] };
 export type UpdateMeRequest = { displayName?: string; bio?: string };
 
-export type GameSort = "new" | "popular" | "top";
+export type GameSort = "new" | "popular" | "top" | "favorites";
 
 export type ListGamesQuery = {
   q?: string;
@@ -138,3 +150,93 @@ export type HealthResponse = { status: "ok"; version: string };
 
 /** Upload progress callback: `loaded`/`total` in bytes, `fraction` in 0..1. */
 export type UploadProgress = (p: { loaded: number; total: number; fraction: number }) => void;
+
+// ---- v2: favorites ----
+
+export type FavoriteResponse = { favorited: boolean; favorites: number };
+
+// ---- v2: achievements ----
+
+export type AchievementDef = {
+  id: string;
+  name: string;
+  description: string;
+  /** Server-relative URL or null */
+  iconUrl: string | null;
+};
+
+export type GameAchievement = AchievementDef & {
+  unlockedBy: number;
+  /** Only when authenticated: when *you* unlocked it. */
+  unlockedAt: string | null;
+};
+
+export type UserAchievement = AchievementDef & { gameId: string; gameTitle: string; unlockedAt: string };
+
+export type UnlockAchievementResponse = { achievement: UserAchievement; new: boolean };
+
+// ---- v2: cloud saves ----
+
+export type CloudSave = { data: Record<string, unknown> | null; updatedAt: string | null };
+export type PutSaveResponse = { updatedAt: string };
+
+// ---- v2: analytics ----
+
+/** `date` is YYYY-MM-DD (UTC). Always 30 entries, oldest first, zero-filled. */
+export type DailyPlays = { date: string; plays: number };
+
+export type CreatorStats = {
+  totals: {
+    games: number;
+    published: number;
+    plays: number;
+    favorites: number;
+    comments: number;
+    ratingCount: number;
+    /** Weighted across games, 0 if none. */
+    ratingAvg: number;
+  };
+  daily: DailyPlays[];
+};
+
+export type GameStats = {
+  plays: number;
+  favorites: number;
+  comments: number;
+  /** Distinct users with a score, save or achievement. */
+  uniquePlayers: number;
+  daily: DailyPlays[];
+};
+
+// ---- v2: moderation ----
+
+export type ReportReason = "spam" | "offensive" | "broken" | "copyright" | "other";
+export type ReportTargetType = "game" | "comment";
+export type ReportStatus = "open" | "resolved";
+export type ReportAction = "dismiss" | "unpublish" | "delete";
+
+export type Report = {
+  id: string;
+  targetType: ReportTargetType;
+  targetId: string;
+  /** Game title or the first 140 chars of the comment. */
+  targetPreview: string;
+  targetGameId: string;
+  reason: ReportReason;
+  details: string;
+  reporter: UserRef;
+  status: ReportStatus;
+  resolution: ReportAction | null;
+  createdAt: string;
+  resolvedAt: string | null;
+};
+
+export type CreateReportRequest = {
+  targetType: ReportTargetType;
+  targetId: string;
+  reason: ReportReason;
+  /** max 1000 chars */
+  details?: string;
+};
+
+export type ListReportsQuery = PageQuery & { status?: ReportStatus };

@@ -85,3 +85,84 @@ When `WEB_DIST` is set, any GET not matched above (including `/games/{id}` and `
 
 ## Backend env
 `PORT` (8080), `DATABASE_URL` (`sqlite://data/webgame.db?mode=rwc`), `DATA_DIR` (`data`), `JWT_SECRET` (dev default with a warning), `ENGINE_DIST` (`../packages/engine/dist`), `WEB_DIST` (optional; serve SPA), `CORS_ORIGINS`, `PUBLIC_ORIGIN` (optional, e.g. `https://arcade.example.com`; when set, `/play` uses it as `{ORIGIN}` instead of the request `Host` header — recommended in production).
+
+
+---
+
+# v2 additions
+
+All v1 rules apply (camelCase, error shape, auth markers). New error code: `rate_limited` 429 (with `Retry-After` header, seconds).
+
+## Changed types
+```ts
+type User = UserRef & { bio: string; createdAt: string; role: "user" | "admin" }   // + role
+type GameSummary = { ...v1, favorites: number }                                     // + favorites
+type Game = { ...v1, isFavorite: boolean /*🔓, false when anon*/, achievements: AchievementDef[] }
+type AchievementDef = { id: string; name: string; description: string; iconUrl: string | null /* server-relative */ }
+```
+Admins are users whose username is listed in env `ADMIN_USERNAMES` (comma list, case-insensitive), applied at startup and on register.
+
+## Favorites
+| Method | Path | Body | Response |
+|---|---|---|---|
+| PUT 🔒 | /api/games/{id}/favorite | – | `{ favorited: true, favorites: number }` (idempotent) |
+| DELETE 🔒 | /api/games/{id}/favorite | – | `{ favorited: false, favorites: number }` |
+| GET 🔒 | /api/users/me/favorites | `?page=&perPage=` | `Page<GameSummary>` newest favorite first |
+
+`GET /api/games` gains `sort=favorites`.
+
+## Achievements (definitions come from game.json, see GAME_FORMAT.md)
+```ts
+type GameAchievement = AchievementDef & { unlockedBy: number; unlockedAt: string | null /*🔓 mine*/ }
+type UserAchievement = AchievementDef & { gameId: string; gameTitle: string; unlockedAt: string }
+```
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/achievements | – | `GameAchievement[]` in game.json order |
+| POST 🔒 | /api/games/{id}/achievements/{achievementId} | – | `{ achievement: UserAchievement, new: boolean }` (404 if the id is not defined by the CURRENT version; idempotent) |
+| GET | /api/users/{username}/achievements | `?limit=50` (max 100) | `UserAchievement[]` most recent first |
+
+## Cloud saves (per user per game, max 256KB JSON object)
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET 🔒 | /api/games/{id}/save | – | `{ data: object or null, updatedAt: string or null }` |
+| PUT 🔒 | /api/games/{id}/save | `{ data: object }` | `{ updatedAt }` (413 if > 256KB, 422 if not a plain object) |
+| DELETE 🔒 | /api/games/{id}/save | – | 204 |
+
+## Analytics (plays are now also recorded as events with a UTC date)
+```ts
+type DailyPlays = { date: string /*YYYY-MM-DD UTC*/; plays: number }   // always 30 entries, oldest first, zero-filled
+type CreatorStats = { totals: { games: number; published: number; plays: number; favorites: number; comments: number; ratingCount: number; ratingAvg: number /*weighted across games, 0 if none*/ }; daily: DailyPlays[] }
+type GameStats = { plays: number; favorites: number; comments: number; uniquePlayers: number /*distinct users with a score, save or achievement*/; daily: DailyPlays[] }
+```
+| Method | Path | Response |
+|---|---|---|
+| GET 🔒 | /api/users/me/stats | `CreatorStats` |
+| GET 🔒 owner | /api/games/{id}/stats | `GameStats` |
+
+## Moderation
+```ts
+type ReportReason = "spam" | "offensive" | "broken" | "copyright" | "other"
+type Report = { id: string; targetType: "game" | "comment"; targetId: string; targetPreview: string /*game title or first 140 chars of comment*/; targetGameId: string; reason: ReportReason; details: string; reporter: UserRef; status: "open" | "resolved"; resolution: "dismiss" | "unpublish" | "delete" | null; createdAt: string; resolvedAt: string | null }
+```
+| Method | Path | Body | Response |
+|---|---|---|---|
+| POST 🔒 | /api/reports | `{ targetType, targetId, reason, details? (max 1000) }` | 201 `Report` (409 if the same user already has an open report on that target) |
+| GET 🔒 admin | /api/admin/reports | `?status=open or resolved&page=&perPage=` | `Page<Report>` |
+| POST 🔒 admin | /api/admin/reports/{id}/resolve | `{ action: "dismiss" / "unpublish" / "delete" }` | `Report` (unpublish only valid for games; delete removes the game/comment; resolves all open reports on the same target) |
+
+Non-admins get 403 on /api/admin/*.
+
+## Rate limits
+Per client IP for anonymous requests, per user id when authed; in-memory token buckets.
+- login + register: 10/min per IP
+- game create + bundle replace: 20/hour
+- comments: 30 per 10 min
+- reports: 10/hour
+- score submit: 60/min
+- save PUT: 60/min
+
+Exceeding → 429 `rate_limited` + `Retry-After`. Disable with `RATE_LIMIT=off` (tests).
+
+## Studio player
+`GET /play/studio`: player HTML for unsaved projects (same CSP/sandbox headers as /play/{id}, `Access-Control-Allow-Origin: *`). See GAME_FORMAT.md "Studio protocol".

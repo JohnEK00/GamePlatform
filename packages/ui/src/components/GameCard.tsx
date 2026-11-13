@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import type { GameSummary } from "../api/types";
 import { formatCount } from "../util";
+import { FavoriteButton } from "./Favorite";
 import { Avatar, Skeleton, StarsDisplay, Thumbnail } from "./common";
 
 export function GameCard({ game, showStatus }: { game: GameSummary; showStatus?: boolean }) {
@@ -24,6 +25,7 @@ export function GameCard({ game, showStatus }: { game: GameSummary; showStatus?:
         <div className="pf-card__meta">
           <span title={`${game.plays} plays`}>▶ {formatCount(game.plays)}</span>
           {game.ratingCount > 0 ? <StarsDisplay value={game.ratingAvg} count={game.ratingCount} /> : <span className="pf-muted">Not rated</span>}
+          <FavoriteButton gameId={game.id} gameTitle={game.title} favorites={game.favorites ?? 0} />
         </div>
       </div>
     </article>

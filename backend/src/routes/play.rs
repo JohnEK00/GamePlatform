@@ -111,40 +111,91 @@ pub fn player_csp(origin: &str) -> String {
     )
 }
 
-pub async fn play_page(
-    State(state): State<AppState>,
-    ApiPath(id): ApiPath<String>,
-    ApiQuery(query): ApiQuery<PlayQuery>,
-    headers: HeaderMap,
-) -> AppResult<Response> {
-    let game = fetch_game_row(&state, &id)
-        .await?
-        .ok_or_else(|| AppError::not_found("Game"))?;
-    if !game.published {
-        // Only a preview-scoped token minted for this game by its owner unlocks it;
-        // session tokens never authenticate here.
-        let viewer = query
-            .token
-            .as_deref()
-            .filter(|t| !t.is_empty())
-            .and_then(|t| verify_preview_token(&state.config.jwt_secret, t, &game.id));
-        if viewer.as_deref() != Some(game.owner_id.as_str()) {
-            return Err(AppError::not_found("Game"));
-        }
+/// Studio player page (docs/GAME_FORMAT.md "Studio protocol"): loads the engine, posts
+/// `webgame:studio-ready`, waits for `webgame:studio-load` from `window.parent`, imports the
+/// entry from a blob URL and boots with the in-memory `files`.
+pub fn render_studio_html(origin: &str) -> String {
+    let origin = js_string_content(origin);
+    format!(
+        r#"<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html,body{{margin:0;height:100%;background:#000;overflow:hidden}}canvas{{display:block;margin:auto}}</style>
+</head><body><canvas id="game"></canvas>
+<script type="module">
+  const post = (msg) => {{ try {{ window.parent.postMessage(msg, "*"); }} catch (_) {{}} }};
+  const toInt = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : undefined);
+  const reportError = (stage, err, pos) => {{
+    const msg = {{ type: "webgame:error", message: stage + ": " + String((err && err.message) || err || "unknown error") }};
+    let line = pos && toInt(pos.line), column = pos && toInt(pos.column);
+    if (line === undefined && err) {{ line = toInt(err.lineNumber); column = toInt(err.columnNumber); }}
+    if (line === undefined && err && typeof err.stack === "string") {{
+      const m = /blob:[^\s)]*?:(\d+):(\d+)/.exec(err.stack);
+      if (m) {{ line = Number(m[1]); column = Number(m[2]); }}
+    }}
+    if (line !== undefined) msg.line = line;
+    if (column !== undefined) msg.column = column;
+    post(msg);
+  }};
+  let boot;
+  try {{
+    ({{ boot }} = await import("{origin}/runtime/engine.js"));
+  }} catch (err) {{
+    reportError("Failed to load engine", err);
+  }}
+  if (boot) {{
+    let started = false;
+    window.addEventListener("message", async (event) => {{
+      if (event.source !== window.parent) return;
+      const d = event.data;
+      if (!d || d.type !== "webgame:studio-load" || started) return;
+      started = true;
+      const manifest = d.manifest || {{}};
+      const files = d.files && typeof d.files === "object" ? d.files : {{}};
+      const entry = typeof manifest.entry === "string" ? manifest.entry.replace(/^\.\//, "") : "";
+      const src = files[entry] ?? files["./" + entry];
+      if (!entry || src === undefined) {{
+        reportError("Invalid project", new Error("manifest.entry '" + entry + "' is not in files"));
+        return;
+      }}
+      const url = URL.createObjectURL(new Blob([src], {{ type: "text/javascript" }}));
+      let pos;
+      const onError = (e) => {{ if (e && e.filename === url) pos = {{ line: e.lineno, column: e.colno }}; }};
+      window.addEventListener("error", onError);
+      let mod;
+      try {{
+        mod = await import(url);
+      }} catch (err) {{
+        reportError("Failed to load " + entry, err, pos);
+        return;
+      }} finally {{
+        window.removeEventListener("error", onError);
+      }}
+      const num = (v, dflt) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : dflt);
+      try {{
+        await boot(document.getElementById("game"), mod.default, {{
+          width: num(manifest.width, 800), height: num(manifest.height, 600), baseUrl: "about:blank", files,
+        }});
+      }} catch (err) {{
+        // boot() already posted webgame:error before rethrowing; don't report it twice.
+        console.error(err);
+      }}
+    }});
+    post({{ type: "webgame:studio-ready" }});
+  }}
+</script></body></html>
+"#
+    )
+}
+
+fn page_origin(state: &AppState, headers: &HeaderMap) -> AppResult<String> {
+    match &state.config.public_origin {
+        Some(o) => Ok(o.clone()),
+        None => request_origin(headers, state.config.port),
     }
-    let origin = match &state.config.public_origin {
-        Some(o) => o.clone(),
-        None => request_origin(&headers, state.config.port)?,
-    };
-    let html = render_player_html(
-        &origin,
-        &game.id,
-        &game.entry,
-        game.version,
-        game.width,
-        game.height,
-    );
-    let csp = HeaderValue::from_str(&player_csp(&origin))
+}
+
+fn player_response(origin: &str, html: String) -> AppResult<Response> {
+    let csp = HeaderValue::from_str(&player_csp(origin))
         .map_err(|e| AppError::Internal(format!("csp header: {e}")))?;
     Ok((
         [
@@ -166,4 +217,43 @@ pub async fn play_page(
         html,
     )
         .into_response())
+}
+
+/// GET /play/studio
+pub async fn studio_page(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    let origin = page_origin(&state, &headers)?;
+    player_response(&origin, render_studio_html(&origin))
+}
+
+pub async fn play_page(
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<PlayQuery>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let game = fetch_game_row(&state, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Game"))?;
+    if !game.published {
+        // Only a preview-scoped token minted for this game by its owner unlocks it;
+        // session tokens never authenticate here.
+        let viewer = query
+            .token
+            .as_deref()
+            .filter(|t| !t.is_empty())
+            .and_then(|t| verify_preview_token(&state.config.jwt_secret, t, &game.id));
+        if viewer.as_deref() != Some(game.owner_id.as_str()) {
+            return Err(AppError::not_found("Game"));
+        }
+    }
+    let origin = page_origin(&state, &headers)?;
+    let html = render_player_html(
+        &origin,
+        &game.id,
+        &game.entry,
+        game.version,
+        game.width,
+        game.height,
+    );
+    player_response(&origin, html)
 }

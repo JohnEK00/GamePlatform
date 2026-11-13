@@ -1,0 +1,21 @@
+services:
+  webgame:
+    build: .
+    image: webgame-app:latest
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      # Required: a long random secret, e.g. `openssl rand -hex 32`.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      # Public URL players reach the server at (used by /play pages).
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      ADMIN_USERNAMES: ${ADMIN_USERNAMES:-}
+      # Set to "true" only when running behind a reverse proxy that sets X-Forwarded-For.
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      RATE_LIMIT: ${RATE_LIMIT:-on}
+    volumes:
+      - webgame-data:/data
+
+volumes:
+  webgame-data:

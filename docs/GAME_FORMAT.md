@@ -58,3 +58,38 @@ Backend renders this HTML (engine-dev owns nothing here; backend-dev owns it, bu
 </script></body></html>
 ```
 `{ORIGIN}` is the backend's absolute origin derived from the request `Host` header (absolute URLs are needed because the sandboxed iframe has an opaque origin).
+
+
+---
+
+# v2 additions
+
+## Achievements in game.json (optional)
+```json
+"achievements": [
+  { "id": "first_blood", "name": "First Blood", "description": "Destroy your first asteroid", "icon": "assets/ach_first.png" }
+]
+```
+- Max 50 entries. `id` matches `^[a-z0-9_-]{1,32}$` and is unique. `name` 1–60 chars, `description` max 200, `icon` optional bundle-relative image path that must exist in the bundle. Invalid → 422 on upload.
+- Engine: `engine.platform.unlockAchievement(id)` posts `{ type: "webgame:achievement", id }` (the engine de-duplicates per session).
+- Parent (GamePlayer): calls `POST /api/games/{id}/achievements/{achId}` when logged in and shows a toast when `new: true`.
+
+## Cloud saves
+The engine protocol is unchanged (`hello` → `load`, `save`). The parent now:
+- when logged in, prefetches `GET /api/games/{id}/save` as soon as the player mounts and answers `hello` with the server data. It falls back to local data if the request fails or takes > 400ms; a server copy that arrives later is sent as an extra `webgame:load`, which the engine merges.
+- on `webgame:save`, writes localStorage immediately and debounces `PUT …/save` (at least 2s).
+- Anonymous players: localStorage only, as before.
+
+## In-memory files (engine)
+`boot(canvas, game, { width, height, baseUrl, files? })`. `files?: Record<string, Blob | ArrayBuffer | string>` is keyed by bundle-relative path. When present, all asset loaders resolve paths through it first (creating object URLs inside the iframe) and fall back to `baseUrl`.
+
+## Debug overlay
+F3 (or `engine.debug = true`) toggles an overlay: FPS, frame ms, draw calls, sprites, active tweens/particles/bodies.
+
+## Studio protocol (GET /play/studio)
+1. The page loads the engine, then posts `{ type: "webgame:studio-ready" }` to the parent.
+2. The parent posts `{ type: "webgame:studio-load", manifest: <game.json object>, files: { [path]: string | ArrayBuffer } }`. Text files are strings, binary files ArrayBuffers; `manifest.entry` must be present in `files`.
+3. The page creates an object URL for the entry source (blob, `text/javascript`), imports it, and calls `boot(canvas, mod.default, { width, height, baseUrl: "about:blank", files })`.
+4. Errors at any stage are posted as `webgame:error` (with line/column when available).
+
+All other `webgame:*` messages behave as on /play/{id}. The parent must NOT call score/achievement/play APIs for studio sessions; it shows "would unlock / would submit" toasts instead.

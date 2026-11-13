@@ -1,4 +1,5 @@
 /** Simple arcade AABB physics: gravity, velocity, drag, collision vs tilemap + static/kinematic bodies. Pure. */
+import { activity } from './debug';
 import { approach, Rect, type Point, type RectLike } from './math';
 import type { Tilemap, TileRef } from './tilemap';
 
@@ -160,6 +161,7 @@ export class Physics {
 
   /** Advance the simulation by dt seconds. */
   step(dt: number): void {
+    activity.physics(this);
     // 1) kinematic (static with velocity) bodies move first so riders can follow.
     const moved = new Map<Body, { dx: number; dy: number }>();
     for (const b of this.bodies) {

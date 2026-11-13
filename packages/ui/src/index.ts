@@ -3,7 +3,7 @@ export { WebGameApp, WebGameProviders, WebGameRoutes } from "./WebGameApp";
 export type { WebGameAppProps } from "./WebGameApp";
 
 // API
-export { ApiClient, ApiError, isApiError, buildQuery, resolveApiUrl } from "./api/client";
+export { ApiClient, ApiError, isApiError, buildQuery, resolveApiUrl, parseRetryAfter, rateLimitMessage } from "./api/client";
 export type { ApiClientOptions } from "./api/client";
 export type * from "./api/types";
 
@@ -25,7 +25,36 @@ export {
   writeGameSave,
   clearGameSave,
   hasGameSave,
+  discardPendingCloudSave,
+  CLOUD_LOAD_TIMEOUT_MS,
+  CLOUD_SAVE_DEBOUNCE_MS,
 } from "./components/GamePlayer";
+export { FavoritesProvider, FavoriteButton, useFavorites } from "./components/Favorite";
+export type { FavoriteButtonProps, FavoriteState, FavoritesApi } from "./components/Favorite";
+export { AchievementIcon, GameAchievements, RecentAchievements } from "./components/Achievements";
+export { ReportDialog, ReportButton, REPORT_REASONS } from "./components/Report";
+export type { ReportDialogProps } from "./components/Report";
+export { PlaysChart, niceMax } from "./components/PlaysChart";
+export type { PlaysChartProps } from "./components/PlaysChart";
+
+// Studio
+export { createZip, crc32 } from "./studio/zip";
+export type { ZipFiles, ZipInput } from "./studio/zip";
+export {
+  buildBundleZip,
+  validateProject,
+  projectFromFileList,
+  serializeProject,
+  deserializeProject,
+  STUDIO_STORAGE_KEY,
+} from "./studio/project";
+export type { StudioProject, StudioManifest, StudioAchievement } from "./studio/project";
+export { STUDIO_TEMPLATES } from "./studio/templates";
+export type { StudioTemplate } from "./studio/templates";
+export { StudioPreview, STUDIO_READY_TIMEOUT_MS } from "./studio/StudioPreview";
+export type { StudioPreviewProps, StudioConsoleEntry, StudioConsoleLevel } from "./studio/StudioPreview";
+export { CodeEditor } from "./studio/CodeEditor";
+export type { CodeEditorHandle, CodeEditorProps } from "./studio/CodeEditor";
 export type { GamePlayerProps, GamePlayerGame } from "./components/GamePlayer";
 export { GameCard, GameCardSkeleton, GameGrid } from "./components/GameCard";
 export { StarRating } from "./components/StarRating";
@@ -63,6 +92,10 @@ export { SettingsPage } from "./pages/SettingsPage";
 export { LoginPage, RegisterPage } from "./pages/AuthPages";
 export { DocsPage } from "./pages/DocsPage";
 export { NotFoundPage } from "./pages/NotFoundPage";
+export { FavoritesPage } from "./pages/FavoritesPage";
+export { GameStatsPage } from "./pages/GameStatsPage";
+export { AdminPage } from "./pages/AdminPage";
+export { StudioPage, STUDIO_OPEN_FOLDER_EVENT } from "./pages/StudioPage";
 
 // Utils
 export { formatCount, formatDate, timeAgo, errorMessage, looksLikeZip } from "./util";

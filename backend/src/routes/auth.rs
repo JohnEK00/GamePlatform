@@ -11,6 +11,7 @@ use crate::auth::{AuthUser, create_token, hash_password, verify_password};
 use crate::error::{AppError, AppResult};
 use crate::extract::ApiJson;
 use crate::models::{AuthResponse, USER_COLUMNS, User, now_rfc3339, user_from_row};
+use crate::ratelimit::{ClientIp, Limit, key_for};
 
 #[derive(Deserialize)]
 pub struct RegisterBody {
@@ -107,9 +108,14 @@ pub async fn create_user(
 
     let hash = hash_password(password.to_string()).await?;
     let id = uuid::Uuid::new_v4().to_string();
+    let role = if state.config.admin_usernames.contains(&username_lower) {
+        "admin"
+    } else {
+        "user"
+    };
     let res = sqlx::query(
         "INSERT INTO users (id, username, username_lower, email, email_lower, password_hash, \
-         display_name, bio, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?)",
+         display_name, bio, created_at, role) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
     )
     .bind(&id)
     .bind(username)
@@ -119,6 +125,7 @@ pub async fn create_user(
     .bind(&hash)
     .bind(username)
     .bind(now_rfc3339())
+    .bind(role)
     .execute(&state.db)
     .await;
     match res {
@@ -132,8 +139,10 @@ pub async fn create_user(
 
 pub async fn register(
     State(state): State<AppState>,
+    ip: ClientIp,
     ApiJson(body): ApiJson<RegisterBody>,
 ) -> AppResult<(StatusCode, Json<AuthResponse>)> {
+    state.limiter.check(Limit::Auth, &key_for(None, &ip))?;
     let username = body.username.trim();
     let email = body.email.trim();
     let id = create_user(&state, username, email, &body.password).await?;
@@ -144,8 +153,10 @@ pub async fn register(
 
 pub async fn login(
     State(state): State<AppState>,
+    ip: ClientIp,
     ApiJson(body): ApiJson<LoginBody>,
 ) -> AppResult<Json<AuthResponse>> {
+    state.limiter.check(Limit::Auth, &key_for(None, &ip))?;
     let login = body.login.trim().to_lowercase();
     let bad = || AppError::Unauthorized("Invalid username/email or password".into());
     if login.is_empty() || body.password.is_empty() {

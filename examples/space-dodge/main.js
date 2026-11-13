@@ -5,6 +5,11 @@ const W = 800;
 const H = 600;
 const TAU = Math.PI * 2;
 
+// Achievements are declared in game.json. unlockAchievement is v2; guard so older engines still run.
+function unlock(engine, id) {
+  if (typeof engine.platform.unlockAchievement === 'function') engine.platform.unlockAchievement(id);
+}
+
 /** Draw a texture at 2x resolution so it stays crisp on HiDPI screens. */
 function makeTex(engine, w, h, draw) {
   return engine.assets.createTexture(w * 2, h * 2, (ctx) => {
@@ -325,6 +330,7 @@ const game = {
     this.score += pts;
     this.popups.push({ x, y, t: 0.8, text: this.combo > 1 ? `+${pts} x${this.combo}` : `+${pts}` });
     this.combo = Math.min(5, this.combo + 1);
+    if (this.combo >= 5) unlock(engine, 'combo_master');
     this.comboTimer = 1.6;
   },
 
@@ -349,6 +355,7 @@ const game = {
           r.dead = true;
           this.explode(engine, r.x, r.y, r.big ? 40 : 18, r.big ? 7 : 3);
           this.addScore(engine, r.big ? 25 : 10, r.x, r.y);
+          unlock(engine, 'rock_breaker');
           if (r.big) for (let i = 0; i < 2; i++) this.spawnRock(engine, r.x, r.y, false, rnd.range(-140, 140), r.vy * 0.8 + rnd.range(-20, 40));
           if (rnd.chance(r.big ? 0.12 : 0.04)) this.pickups.push({ x: r.x, y: r.y, t: 0, kind: rnd.chance(0.5) ? 'triple' : 'shield' });
         } else {
@@ -364,6 +371,7 @@ const game = {
           s.dead = true;
           this.explode(engine, s.x, s.y, 60, 9);
           this.addScore(engine, 100, s.x, s.y);
+          unlock(engine, 'close_encounter');
           this.pickups.push({ x: s.x, y: s.y, t: 0, kind: rnd.chance(0.5) ? 'triple' : 'shield' });
         }
       }

@@ -1,5 +1,6 @@
 /** Batched WebGL2 2D renderer: sprites, shapes and bitmap text in one dynamic vertex buffer. */
 import { Camera } from './camera';
+import { DrawCounter } from './debug';
 import { Color, type ColorLike } from './math';
 import { ShelfPacker, SpriteSheet, Texture, type TexturePage } from './texture';
 
@@ -217,7 +218,9 @@ export class Renderer {
   /** Default filtering for loaded textures. */
   defaultSmooth = false;
   /** Draw stats of the last completed frame. */
-  readonly stats = { drawCalls: 0, sprites: 0 };
+  readonly stats: { readonly drawCalls: number; readonly sprites: number };
+  /** Live per-frame draw counter (`counter.drawCalls`/`sprites` so far this frame; `counter.last` = previous frame). */
+  readonly counter = new DrawCounter();
 
   private readonly program: WebGLProgram;
   private readonly vao: WebGLVertexArrayObject;
@@ -234,9 +237,9 @@ export class Renderer {
   private readonly fonts = new Map<string, FontAtlas>();
   private readonly atlases: AtlasPage[] = [];
   private readonly maxTex: number;
-  private frameStats = { drawCalls: 0, sprites: 0 };
 
   constructor(canvas: HTMLCanvasElement, width: number, height: number) {
+    this.stats = this.counter.last;
     this.canvas = canvas;
     this.width = width;
     this.height = height;
@@ -400,7 +403,7 @@ export class Renderer {
   /** Engine-internal: start a frame. */
   beginFrame(): void {
     const gl = this.gl;
-    this.frameStats = { drawCalls: 0, sprites: 0 };
+    this.counter.begin();
     gl.viewport(0, 0, this.pixelW, this.pixelH);
     gl.useProgram(this.program);
     gl.bindVertexArray(this.vao);
@@ -417,8 +420,7 @@ export class Renderer {
   /** Engine-internal: finish a frame. */
   endFrame(): void {
     this.flush();
-    this.stats.drawCalls = this.frameStats.drawCalls;
-    this.stats.sprites = this.frameStats.sprites;
+    this.counter.end();
   }
 
   /** Clear the whole screen with a color. */
@@ -485,7 +487,7 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, this.page.glTexture);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.f32, 0, this.verts * FLOATS_PER_VERT);
     gl.drawArrays(gl.TRIANGLES, 0, this.verts);
-    this.frameStats.drawCalls++;
+    this.counter.drawCall();
     this.verts = 0;
   }
 
@@ -548,7 +550,7 @@ export class Renderer {
     if (o.flipY) [v0, v1] = [v1, v0];
     const c = (o.tint !== undefined ? Color.from(o.tint) : Color.WHITE).toABGR(o.alpha ?? 1);
     this.use(tex.page, 6);
-    this.frameStats.sprites++;
+    this.counter.sprite();
     const lx0 = -ox;
     const ly0 = -oy;
     const lx1 = w - ox;

@@ -4,6 +4,7 @@ import type { GameSummary } from "../api/types";
 import { useApi } from "../context/config";
 import { useToast } from "../context/toast";
 import { EmptyState, ErrorState, Pagination, Skeleton, StarsDisplay, Thumbnail } from "../components/common";
+import { PlaysChart } from "../components/PlaysChart";
 import { errorMessage, formatCount, formatDate, useAsync, useDocumentTitle } from "../util";
 
 function Stat({ label, value }: { label: string; value: string }) {
@@ -44,6 +45,7 @@ function Row({ game, onChange }: { game: GameSummary; onChange: (g: GameSummary)
       </div>
       <div className="pf-dashrow__stats">
         <span title="Plays">▶ {formatCount(game.plays)}</span>
+        <span title="Favorites">♥ {formatCount(game.favorites ?? 0)}</span>
         {game.ratingCount ? <StarsDisplay value={game.ratingAvg} count={game.ratingCount} /> : <span className="pf-muted">No ratings</span>}
       </div>
       <label className="pf-switch pf-switch--compact">
@@ -51,6 +53,9 @@ function Row({ game, onChange }: { game: GameSummary; onChange: (g: GameSummary)
         <span className="pf-switch__track" aria-hidden="true" />
         <span className="pf-small">{game.published ? "Published" : "Draft"}</span>
       </label>
+      <Link to={`/games/${game.id}/stats`} className="pf-btn pf-btn--sm pf-btn--ghost">
+        Stats
+      </Link>
       <Link to={`/games/${game.id}/edit`} className="pf-btn pf-btn--sm pf-btn--ghost">
         Edit
       </Link>
@@ -69,12 +74,11 @@ export function DashboardPage() {
     () => api.listGames({ owner: "me", sort: "new", page, perPage: PER_PAGE }),
     [api, page],
   );
+  // Exact totals across all your games + 30-day plays (GET /api/users/me/stats).
+  const stats = useAsync(() => api.getMyStats(), [api]);
   const games = data?.items ?? [];
   const total = data?.total ?? games.length;
   const perPage = data?.perPage || PER_PAGE;
-  const multiPage = total > perPage;
-  // Aggregate stats are computed from the loaded page; label them as such when there are several pages.
-  const scope = multiPage ? " (this page)" : "";
   const goToPage = (p: number) => {
     const next = new URLSearchParams(params);
     if (p === 1) next.delete("page");
@@ -82,10 +86,8 @@ export function DashboardPage() {
     setParams(next);
     window.scrollTo?.({ top: 0, behavior: "smooth" });
   };
-  const plays = games.reduce((s, g) => s + g.plays, 0);
-  const rated = games.filter((g) => g.ratingCount > 0);
-  const ratings = rated.reduce((s, g) => s + g.ratingCount, 0);
-  const avg = ratings ? rated.reduce((s, g) => s + g.ratingAvg * g.ratingCount, 0) / ratings : 0;
+  const t = stats.data?.totals;
+  const dash = "–";
 
   return (
     <div className="pf-container pf-page">
@@ -99,18 +101,37 @@ export function DashboardPage() {
         </Link>
       </header>
 
-      <div className="pf-stats">
-        {loading && !data ? (
-          [0, 1, 2, 3].map((i) => <Skeleton key={i} height={76} />)
+      <div className="pf-stats pf-stats--auto">
+        {stats.loading && !stats.data ? (
+          [0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} height={76} />)
         ) : (
           <>
-            <Stat label="Games" value={String(total)} />
-            <Stat label={`Published${scope}`} value={String(games.filter((g) => g.published).length)} />
-            <Stat label={`Total plays${scope}`} value={formatCount(plays)} />
-            <Stat label={`Avg rating${scope}`} value={ratings ? avg.toFixed(2) : "–"} />
+            <Stat label="Games" value={t ? String(t.games) : String(total)} />
+            <Stat label="Published" value={t ? String(t.published) : dash} />
+            <Stat label="Total plays" value={t ? formatCount(t.plays) : dash} />
+            <Stat label="Favorites" value={t ? formatCount(t.favorites) : dash} />
+            <Stat label="Comments" value={t ? formatCount(t.comments) : dash} />
+            <Stat
+              label={t && t.ratingCount ? `Avg rating (${formatCount(t.ratingCount)})` : "Avg rating"}
+              value={t && t.ratingCount ? t.ratingAvg.toFixed(2) : dash}
+            />
           </>
         )}
       </div>
+      {stats.error ? (
+        <p className="pf-muted pf-small">
+          Couldn't load your stats: {errorMessage(stats.error)}{" "}
+          <button type="button" className="pf-linkbtn" onClick={stats.reload}>
+            Retry
+          </button>
+        </p>
+      ) : stats.data ? (
+        <section className="pf-panel pf-dash-chart" aria-label="Plays over the last 30 days">
+          <PlaysChart daily={stats.data.daily} title="Plays per day · last 30 days (all your games)" />
+        </section>
+      ) : (
+        <Skeleton height={240} />
+      )}
 
       {error ? (
         <ErrorState error={error} onRetry={reload} />
@@ -145,7 +166,10 @@ export function DashboardPage() {
             <Row
               key={g.id}
               game={g}
-              onChange={(ng) => setData((d) => ({ ...d!, items: d!.items.map((x) => (x.id === ng.id ? { ...x, ...ng } : x)) }))}
+              onChange={(ng) => {
+                setData((d) => ({ ...d!, items: d!.items.map((x) => (x.id === ng.id ? { ...x, ...ng } : x)) }));
+                stats.reload();
+              }}
             />
           ))}
         </ul>

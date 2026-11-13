@@ -83,6 +83,7 @@ pub async fn create_comment(
     ApiJson(body): ApiJson<CommentBody>,
 ) -> AppResult<(StatusCode, Json<Comment>)> {
     fetch_visible_game(&state, &game_id, Some(&user.id)).await?;
+    crate::routes::games::limit_user(&state, crate::ratelimit::Limit::Comment, &user.id)?;
     let text = body.body.trim();
     let n = text.chars().count();
     if n == 0 || n > COMMENT_MAX {

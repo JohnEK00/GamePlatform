@@ -11,6 +11,7 @@ afterEach(() => {
   cleanup();
   try {
     localStorage.clear();
+    sessionStorage.clear();
   } catch {
     /* ignore */
   }

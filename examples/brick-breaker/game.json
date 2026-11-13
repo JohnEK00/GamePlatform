@@ -1,0 +1,17 @@
+{
+  "name": "Brick Breaker",
+  "entry": "main.js",
+  "width": 800,
+  "height": 600,
+  "engine": "1",
+  "description": "Smash glowing walls of bricks across six levels. Chain hits for combo multipliers, catch power-ups, and chase the high score.",
+  "controls": "Mouse/touch or Arrows/A/D move the paddle; click/tap/Space launches the ball and fires lasers; M mute; F3 debug overlay.",
+  "achievements": [
+    { "id": "first_brick", "name": "First Break", "description": "Smash your first brick.", "icon": "assets/ach_first_brick.png" },
+    { "id": "wall_breaker", "name": "Wall Breaker", "description": "Clear the first level.", "icon": "assets/ach_level_clear.png" },
+    { "id": "chain_reaction", "name": "Chain Reaction", "description": "Break 10 bricks in a single combo without touching the paddle.", "icon": "assets/ach_combo.png" },
+    { "id": "power_hungry", "name": "Power Hungry", "description": "Collect 5 power-ups in one game.", "icon": "assets/ach_power.png" },
+    { "id": "flawless", "name": "Flawless", "description": "Clear a level without losing a life.", "icon": "assets/ach_flawless.png" },
+    { "id": "champion", "name": "Champion", "description": "Clear all six levels.", "icon": "assets/ach_champion.png" }
+  ]
+}

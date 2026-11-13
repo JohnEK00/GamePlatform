@@ -6,6 +6,7 @@ import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
 import { errorMessage, timeAgo, formatDate } from "../util";
 import { Alert, Avatar, Skeleton, Spinner } from "./common";
+import { ReportButton } from "./Report";
 
 const PER_PAGE = 20;
 
@@ -155,6 +156,11 @@ export function Comments({ gameId, isGameOwner = false }: { gameId: string; isGa
                     <button type="button" className="pf-linkbtn pf-linkbtn--danger" onClick={() => remove(c)} disabled={deleting === c.id}>
                       {deleting === c.id ? "Deleting…" : "Delete"}
                     </button>
+                  )}
+                  {user && user.id !== c.author.id && (
+                    <ReportButton targetType="comment" targetId={c.id} className="pf-linkbtn pf-comment__report">
+                      Report
+                    </ReportButton>
                   )}
                 </div>
                 <p className="pf-comment__body">{c.body}</p>

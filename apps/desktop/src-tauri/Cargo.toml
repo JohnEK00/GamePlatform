@@ -9,7 +9,9 @@ rust-version = "1.80"
 [lib]
 # Distinct lib name avoids a Windows name clash between the bin and lib outputs.
 name = "pixelforge_arcade_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# No "staticlib": it is only needed for iOS (not a target here) and is ~700 MB in debug builds.
+# Re-add it if an iOS target is ever set up (`tauri ios init`).
+crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

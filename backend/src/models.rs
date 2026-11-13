@@ -20,6 +20,7 @@ pub struct User {
     pub user_ref: UserRef,
     pub bio: String,
     pub created_at: String,
+    pub role: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,6 +44,45 @@ pub struct GameSummary {
     pub published: bool,
     pub created_at: String,
     pub updated_at: String,
+    pub favorites: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AchievementDef {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameAchievement {
+    #[serde(flatten)]
+    pub def: AchievementDef,
+    pub unlocked_by: i64,
+    pub unlocked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserAchievement {
+    #[serde(flatten)]
+    pub def: AchievementDef,
+    pub game_id: String,
+    pub game_title: String,
+    pub unlocked_at: String,
+}
+
+/// Server-relative URL of an achievement icon inside the current bundle.
+pub fn achievement_icon_url(game_id: &str, icon: Option<&str>) -> Option<String> {
+    icon.map(|i| {
+        format!(
+            "/games/{game_id}/files/{}",
+            crate::routes::play::encode_path(i)
+        )
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +97,8 @@ pub struct Game {
     pub play_url: String,
     pub my_rating: Option<i64>,
     pub is_owner: bool,
+    pub is_favorite: bool,
+    pub achievements: Vec<AchievementDef>,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,13 +163,14 @@ pub fn user_ref_from_row(row: &SqliteRow, prefix: &str) -> Result<UserRef, sqlx:
 }
 
 pub const USER_COLUMNS: &str =
-    "id, username, display_name, avatar_ext, avatar_version, bio, created_at";
+    "id, username, display_name, avatar_ext, avatar_version, bio, created_at, role";
 
 pub fn user_from_row(row: &SqliteRow) -> Result<User, sqlx::Error> {
     Ok(User {
         user_ref: user_ref_from_row(row, "")?,
         bio: row.try_get("bio")?,
         created_at: row.try_get("created_at")?,
+        role: row.try_get("role")?,
     })
 }
 
@@ -150,6 +193,7 @@ pub struct GameRow {
     pub rating_count: i64,
     pub created_at: String,
     pub updated_at: String,
+    pub favorites: i64,
     pub owner: UserRef,
     pub tags: Vec<String>,
 }
@@ -161,7 +205,8 @@ pub const GAME_SELECT: &str = "SELECT g.id, g.owner_id, g.title, g.description, 
      u.id AS o_id, u.username AS o_username, u.display_name AS o_display_name, \
      u.avatar_ext AS o_avatar_ext, u.avatar_version AS o_avatar_version, \
      (SELECT group_concat(tag, ',') FROM (SELECT tag FROM game_tags t WHERE t.game_id = g.id \
-        ORDER BY t.position, t.tag)) AS tags \
+        ORDER BY t.position, t.tag)) AS tags, \
+     (SELECT COUNT(*) FROM favorites f WHERE f.game_id = g.id) AS favorites \
      FROM games g JOIN users u ON u.id = g.owner_id";
 
 pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
@@ -183,6 +228,7 @@ pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
         rating_count: row.try_get("rating_count")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        favorites: row.try_get("favorites")?,
         owner: user_ref_from_row(row, "o_")?,
         tags: tags
             .map(|t| {
@@ -222,10 +268,17 @@ impl GameRow {
             published: self.published,
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
+            favorites: self.favorites,
         }
     }
 
-    pub fn game(&self, my_rating: Option<i64>, viewer: Option<&str>) -> Game {
+    pub fn game(
+        &self,
+        my_rating: Option<i64>,
+        viewer: Option<&str>,
+        is_favorite: bool,
+        achievements: Vec<AchievementDef>,
+    ) -> Game {
         Game {
             summary: self.summary(),
             width: self.width,
@@ -235,6 +288,8 @@ impl GameRow {
             play_url: format!("/play/{}", self.id),
             my_rating,
             is_owner: viewer == Some(self.owner_id.as_str()),
+            is_favorite,
+            achievements,
         }
     }
 

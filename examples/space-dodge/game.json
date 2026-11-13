@@ -5,5 +5,22 @@
   "height": 600,
   "engine": "1",
   "description": "Blast asteroids and dodge saucers in this neon arcade shooter. Arrows/WASD to fly, Space to shoot - or drag with mouse/touch.",
-  "controls": "Arrows/WASD move, Space/Z fire, M mute. Mouse/touch: hold & drag to fly (auto-fire)."
+  "controls": "Arrows/WASD move, Space/Z fire, M mute. Mouse/touch: hold & drag to fly (auto-fire).",
+  "achievements": [
+    {
+      "id": "rock_breaker",
+      "name": "Rock Breaker",
+      "description": "Destroy your first asteroid."
+    },
+    {
+      "id": "close_encounter",
+      "name": "Close Encounter",
+      "description": "Shoot down a flying saucer."
+    },
+    {
+      "id": "combo_master",
+      "name": "Combo Master",
+      "description": "Reach the x5 combo multiplier."
+    }
+  ]
 }

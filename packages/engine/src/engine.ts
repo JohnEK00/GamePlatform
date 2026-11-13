@@ -2,6 +2,8 @@
 import { Assets } from './assets';
 import { AudioManager, Sound } from './audio';
 import { Camera } from './camera';
+import { activity, debugLines, FrameMeter, type DebugStats } from './debug';
+import { BundleFiles, deriveStorageKey, type FileMap } from './files';
 import { computeLetterbox, GamepadButtons, Input } from './input';
 import { FixedTimestep } from './loop';
 import {
@@ -44,10 +46,20 @@ export interface BootOptions {
   smooth?: boolean;
   /** Frame clear color (default black). */
   background?: ColorLike;
-  /** Namespace for engine.storage (default derived from baseUrl). */
+  /**
+   * Namespace for engine.storage. Default: baseUrl; for studio boots (baseUrl "about:blank" or
+   * `files` given) derived from game.json id/title, else a hash of the file paths.
+   */
   storageKey?: string;
   /** Show the built-in "Paused" overlay when the host pauses the game (default true). */
   pauseOverlay?: boolean;
+  /**
+   * In-memory bundle files keyed by bundle-relative path (studio mode). All asset loaders resolve
+   * paths here first (Blob / ArrayBuffer / string; MIME by extension) and fall back to baseUrl.
+   */
+  files?: FileMap;
+  /** Start with the debug overlay visible (default false; F3 toggles it). */
+  debug?: boolean;
 }
 
 type PauseReason = 'host' | 'hidden' | 'user';
@@ -115,6 +127,12 @@ export class Engine {
   fps = 0;
   /** Device pixels per game unit (for HiDPI-aware drawing decisions). */
   pixelRatio = 1;
+  /** Show the debug overlay (FPS, frame ms, draw calls, sprites, tweens/particles/bodies). F3 toggles it. */
+  debug = false;
+  /** Numbers shown by the debug overlay (updated every rendered frame, also while hidden). */
+  readonly debugStats: DebugStats = { fps: 0, frameMs: 0, workMs: 0, drawCalls: 0, sprites: 0, tweens: 0, particles: 0, bodies: 0 };
+  /** In-memory bundle files (boot option `files`). */
+  readonly files: BundleFiles;
 
   private readonly opts: BootOptions;
   private readonly stepper = new FixedTimestep(1 / 60);
@@ -125,6 +143,7 @@ export class Engine {
   private last = -1;
   private readonly cleanup: (() => void)[] = [];
   private lastSize = '';
+  private readonly meter = new FrameMeter();
 
   constructor(canvas: HTMLCanvasElement, opts: BootOptions) {
     if (!canvas || typeof (canvas as HTMLCanvasElement).getContext !== 'function') throw new Error('boot(): a <canvas> element is required');
@@ -141,10 +160,12 @@ export class Engine {
     this.renderer.defaultSmooth = !!opts.smooth;
     if (opts.background !== undefined) this.renderer.background = opts.background;
     this.audio = new AudioManager();
-    this.assets = new Assets(this.baseUrl, this.renderer, this.audio);
+    this.files = new BundleFiles(opts.files, this.baseUrl);
+    this.assets = new Assets(this.baseUrl, this.renderer, this.audio, this.files);
+    this.debug = !!opts.debug;
     this.input = new Input(canvas, w, h);
     this.scenes = new SceneManager<Engine>(this);
-    this.storage = new Storage(opts.storageKey ?? this.baseUrl, this.platform);
+    this.storage = new Storage(deriveStorageKey(this.baseUrl, opts.files, opts.storageKey),this.platform);
   }
 
   // -------------------------------------------------------------------------
@@ -236,6 +257,11 @@ export class Engine {
     }) as EventListener);
 
     on(window, 'pagehide', () => this.storage.flush());
+    on(window, 'keydown', ((e: KeyboardEvent) => {
+      if (e.code !== 'F3' || e.repeat) return;
+      e.preventDefault(); // browsers bind F3 to find-next
+      this.debug = !this.debug;
+    }) as EventListener);
     on(document, 'visibilitychange', () => this.setPaused('hidden', document.visibilityState === 'hidden'));
     if (document.visibilityState === 'hidden') this.setPaused('hidden', true);
 
@@ -341,6 +367,7 @@ export class Engine {
     const frameDt = this.last < 0 ? 0 : (now - this.last) / 1000;
     this.last = now;
     if (frameDt > 0) this.fps += (1 / frameDt - this.fps) * 0.1;
+    this.meter.sample(frameDt);
     if ((window.devicePixelRatio || 1) * 1000 + window.innerWidth + window.innerHeight * 1e5 !== this.sizeProbe) {
       this.sizeProbe = (window.devicePixelRatio || 1) * 1000 + window.innerWidth + window.innerHeight * 1e5;
       this.resize();
@@ -350,8 +377,9 @@ export class Engine {
         this.renderLoading();
         return;
       }
+      const t0 = performance.now();
       const alpha = this.paused ? 1 : this.stepper.advance(frameDt, this.step);
-      this.render(alpha);
+      this.render(alpha, t0);
     } catch (e) {
       this.fail(e, 'The game crashed');
     }
@@ -371,11 +399,23 @@ export class Engine {
     this.input.endStep();
   };
 
-  private render(alpha: number): void {
+  private render(alpha: number, t0 = performance.now()): void {
     const r = this.renderer;
     r.beginFrame();
     this.game?.render?.(this, alpha);
     this.scenes.render(alpha);
+    r.flush();
+    const s = this.debugStats;
+    const act = activity.collect();
+    s.fps = this.meter.fps;
+    s.frameMs = this.meter.frameMs;
+    s.drawCalls = r.counter.drawCalls;
+    s.sprites = r.counter.sprites;
+    s.tweens = this.tweens.count;
+    s.particles = act.particles;
+    s.bodies = act.bodies;
+    s.workMs = performance.now() - t0;
+    if (this.debug) this.drawDebug();
     if (this.pauseReasons.has('host') && this.opts.pauseOverlay !== false) {
       r.ui(() => {
         r.drawRect(0, 0, this.width, this.height, [0, 0, 0, 0.55]);
@@ -384,6 +424,24 @@ export class Engine {
       });
     }
     r.endFrame();
+  }
+
+  /** The debug overlay, drawn in screen space with the engine's own text rendering. */
+  private drawDebug(): void {
+    const r = this.renderer;
+    const lines = debugLines(this.debugStats);
+    const size = Math.max(9, Math.min(16, Math.round(Math.min(this.width, this.height) / 34)));
+    const lh = Math.round(size * 1.3);
+    const pad = Math.round(size * 0.5);
+    let w = 0;
+    for (const l of lines) w = Math.max(w, r.measureText(l, { size, font: 'mono' }).width);
+    r.setBlend('normal');
+    r.ui(() => {
+      r.drawRect(4, 4, w + pad * 2, (lines.length - 1) * lh + size + pad * 2, [0, 0, 0, 0.72]);
+      const fps = this.debugStats.fps;
+      const fpsColor = fps >= 55 ? '#7dff9a' : fps >= 30 ? '#ffd166' : '#ff6b6b';
+      lines.forEach((l, i) => r.drawText(l, 4 + pad, 4 + pad + i * lh, { size, font: 'mono', color: i === 0 ? fpsColor : '#e8ecf4' }));
+    });
   }
 
   private renderLoading(): void {
@@ -431,6 +489,7 @@ export class Engine {
     for (const f of this.cleanup.splice(0)) f();
     this.audio.stopAll();
     this.renderer.destroy();
+    this.files.dispose();
   }
 }
 

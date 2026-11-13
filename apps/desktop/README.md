@@ -13,6 +13,32 @@ Desktop shell that mounts `<WebGameApp>` from `@webgame/ui` (hash router) inside
 - **Offline / first-run banner** above the app when the server is unreachable (retries every 10 s, inline
   "Change server" form).
 - **Window state** persisted by `tauri-plugin-window-state`.
+- **Open local game folder** (`platform.openLocalProject`, used by the Studio at `#/studio`): `pick_project_folder()`
+  opens the native folder dialog and reads the folder in Rust with the upload rules from docs/GAME_FORMAT.md:
+  ≤ 2000 files and ≤ 200 MB (game.json included), allowed extensions only (others are skipped and listed),
+  dotfiles/dot-folders, `__MACOSX`, `Thumbs.db`, `desktop.ini` skipped silently, symlinks/junctions never
+  followed, every file re-checked to resolve inside the folder, ≤ 32 levels deep, `game.json` required at the
+  root (or inside a single wrapper folder) and parsed as a JSON object. It returns
+  `{ ticket, folder, manifest, files: [{ path, size, text? }], skipped, skippedCount }`: text files
+  (js/json/txt/css/svg) are inline strings; each binary file is fetched once as a raw `ArrayBuffer` with
+  `read_project_file(ticket, path)`. Tickets are single use per file, expire after 5 minutes, at most 2 pending
+  projects; `release_project(ticket)` drops the rest after a failure. In a plain browser `openLocalProject` is
+  left undefined, so the Studio uses `<input webkitdirectory>`.
+- **Native "Save as"** (`platform.saveFile`, used by the Studio's *Export .zip*): the bytes go to `save_file` as a
+  raw IPC body (no JSON number array) with the suggested name percent-encoded in the `x-file-name` header. Rust
+  sanitises the name, shows the save dialog filtered by its extension and writes only to the chosen path (≤ 100 MB).
+  Returns `true` (saved) / `false` (cancelled).
+- **Native menu** (`src-tauri/src/menu.rs`):
+  - File → Upload game (`#/upload`), Open local game folder… (Ctrl+O; on `#/studio` it dispatches the
+    `STUDIO_OPEN_FOLDER_EVENT` window event from @webgame/ui, otherwise it sets `window.__webgameStudioOpenPending`
+    and navigates to `#/studio`, so loading goes through the Studio's normal Open folder flow), Settings (`#/settings`), Quit
+  - View → Reload (Ctrl+R), Toggle Fullscreen (F11), Toggle Developer Tools (debug builds only)
+  - Help → Make a game (`#/docs`), About (name + version dialog)
+
+  Reload, fullscreen, devtools, about and quit run in Rust. Navigation items are emitted to the webview as the
+  `app-menu` event (payload = item id) and handled in `src/nativeMenu.ts`. F11 also has a webview key listener
+  (`toggle_fullscreen` command); Rust ignores a second toggle within 300 ms so the accelerator and the listener
+  never double-toggle.
 
 ## Prerequisites (Windows)
 
@@ -39,6 +65,7 @@ The backend's default `CORS_ORIGINS` already includes `http://localhost:1420`, `
 ```sh
 npm run build -w @webgame/desktop               # typecheck + Vite build → apps/desktop/dist
 cd apps/desktop/src-tauri && cargo build        # debug binary (target/debug/pixelforge-arcade.exe)
+cd apps/desktop/src-tauri && cargo test         # unit tests: picker tickets, folder validation (temp dirs), save names, F11 debounce
 npm run tauri -w @webgame/desktop -- build      # release bundles (MSI/NSIS) in src-tauri/target/release/bundle
 ```
 
@@ -47,13 +74,22 @@ npm run tauri -w @webgame/desktop -- build      # release bundles (MSI/NSIS) in 
 ```
 apps/desktop/
 ├─ index.html, vite.config.ts     Vite (port 1420, strictPort, envPrefix VITE_/TAURI_)
-├─ src/                           main.tsx, App.tsx, platform.ts (pickFile), server.ts (setting + health),
+├─ src/                           main.tsx, App.tsx, platform.ts (pickFile, openLocalProject, saveFile),
+│                                 nativeMenu.ts (menu events, F11), server.ts (setting + health),
 │                                 ServerForm.tsx (settings panel), OfflineBanner.tsx, desktop.css
 ├─ app-icon.png, scripts/gen-icon.mjs   icon source (regenerate all icons: npm run icons -w @webgame/desktop)
-└─ src-tauri/                     Rust crate: lib.rs (plugins + pick_file/read_picked), tauri.conf.json, capabilities/, icons/
+└─ src-tauri/                     Rust crate: lib.rs (plugins + pick_file/read_picked), project.rs (folder reading),
+                                  save.rs (save_file), menu.rs (native menu, fullscreen), tauri.conf.json,
+                                  capabilities/, icons/
 ```
 
 ## Security notes
+
+- Capabilities (`capabilities/default.json`) are least privilege: only `core:event:allow-listen` /
+  `core:event:allow-unlisten` (menu events). Dialogs, menu, fullscreen and window state are used from Rust only,
+  so no dialog/window/window-state permissions are granted to the webview.
+- The webview never passes filesystem paths: every read or write goes to a file/folder the user chose in a native
+  dialog that Rust opened.
 
 - CSP (`tauri.conf.json`): scripts only from the app itself; `connect-src`/`frame-src`/`img-src` allow any
   `http:`/`https:` origin because the API server is user-configurable. Games still run in the

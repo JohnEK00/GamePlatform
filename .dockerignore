@@ -1,0 +1,13 @@
+**/node_modules
+**/target
+**/dist
+**/data
+backend/data
+examples/dist
+.git
+.github
+.claude
+**/*.db
+**/*.db-shm
+**/*.db-wal
+.env

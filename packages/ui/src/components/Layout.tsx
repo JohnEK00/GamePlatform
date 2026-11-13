@@ -85,6 +85,17 @@ function UserMenu() {
           <Link role="menuitem" to="/dashboard">
             My games
           </Link>
+          <Link role="menuitem" to="/favorites">
+            Favorites
+          </Link>
+          <Link role="menuitem" to="/studio">
+            Studio
+          </Link>
+          {user.role === "admin" && (
+            <Link role="menuitem" to="/admin">
+              Moderation
+            </Link>
+          )}
           <Link role="menuitem" to="/upload">
             Upload a game
           </Link>
@@ -128,8 +139,11 @@ export function Header() {
             <NavLink to="/" end>
               Browse
             </NavLink>
+            <NavLink to="/studio">Studio</NavLink>
             <NavLink to="/docs">Make a game</NavLink>
             {user && <NavLink to="/dashboard">My games</NavLink>}
+            {user && <NavLink to="/favorites">Favorites</NavLink>}
+            {user?.role === "admin" && <NavLink to="/admin">Admin</NavLink>}
           </nav>
           <SearchBox onDone={() => setNavOpen(false)} />
           <div className="pf-header__actions">
@@ -171,6 +185,7 @@ export function Footer() {
         <nav aria-label="Footer">
           <Link to="/">Browse</Link>
           <Link to="/docs">Make a game</Link>
+          <Link to="/studio">Studio</Link>
           <Link to="/upload">Upload</Link>
         </nav>
       </div>

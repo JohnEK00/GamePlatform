@@ -10,6 +10,7 @@ const SORTS: { key: GameSort; label: string }[] = [
   { key: "new", label: "New" },
   { key: "popular", label: "Popular" },
   { key: "top", label: "Top rated" },
+  { key: "favorites", label: "Most favorited" },
 ];
 const PER_PAGE = 24;
 
@@ -71,7 +72,7 @@ export function HomePage() {
   const q = params.get("q") ?? "";
   const tag = params.get("tag") ?? "";
   const sortParam = params.get("sort");
-  const sort: GameSort = sortParam === "popular" || sortParam === "top" ? sortParam : "new";
+  const sort: GameSort = SORTS.some((s) => s.key === sortParam) ? (sortParam as GameSort) : "new";
   const page = Math.max(1, Number(params.get("page")) || 1);
   useDocumentTitle(q ? `Search: ${q}` : tag ? `#${tag}` : "");
 

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import type { Game, Score } from "../api/types";
+import { isApiError } from "../api/client";
+import type { Game, Score, UnlockAchievementResponse } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
 import { errorMessage } from "../util";
 import { Spinner } from "./common";
+import { AchievementIcon } from "./Achievements";
 
 export type GamePlayerGame = Pick<Game, "id" | "title" | "width" | "height"> &
   Partial<Pick<Game, "playUrl" | "version" | "published" | "isOwner">>;
@@ -16,7 +18,52 @@ export type GamePlayerProps = {
   onPlayRecorded?: (plays: number) => void;
   /** Called after a score was saved to the API (use it to refresh the leaderboard). */
   onScoreSubmitted?: (score: Score) => void;
+  /** Called after POST …/achievements/{id} succeeded (v2), whether or not it was new. */
+  onAchievementUnlocked?: (result: UnlockAchievementResponse) => void;
   className?: string;
+};
+
+/** How long `webgame:hello` waits for the cloud save prefetch before answering with local data (GAME_FORMAT v2). */
+export const CLOUD_LOAD_TIMEOUT_MS = 400;
+/** Minimum delay between a `webgame:save` and the cloud PUT (and between PUTs). */
+export const CLOUD_SAVE_DEBOUNCE_MS = 2000;
+
+const ACHIEVEMENT_ID_RE = /^[a-z0-9_-]{1,32}$/;
+const ACH_HINT_KEY = "webgame.achievementHintShown";
+let achHintShownFallback = false;
+
+/** True the first time per browser session (used for the "Log in to earn achievements" hint). */
+function takeAchievementHint(): boolean {
+  try {
+    if (sessionStorage.getItem(ACH_HINT_KEY)) return false;
+    sessionStorage.setItem(ACH_HINT_KEY, "1");
+    return true;
+  } catch {
+    if (achHintShownFallback) return false;
+    achHintShownFallback = true;
+    return true;
+  }
+}
+
+type CloudWriter = { discard: () => Promise<void> };
+const cloudWriters = new Map<string, Set<CloudWriter>>();
+
+/**
+ * Drops any not-yet-sent cloud save for a game and waits for an in-flight PUT to finish. Call this before
+ * DELETE …/save so a pending debounced write can't resurrect the data.
+ */
+export async function discardPendingCloudSave(gameId: string): Promise<void> {
+  const set = cloudWriters.get(gameId);
+  if (!set) return;
+  await Promise.all([...set].map((w) => w.discard()));
+}
+
+type CloudState = {
+  status: "off" | "pending" | "done" | "failed";
+  data: Record<string, unknown> | null;
+  /** A webgame:save arrived: local data is now newer than the prefetched server copy. */
+  savedSinceFetch: boolean;
+  listeners: Set<() => void>;
 };
 
 /** The exact sandbox for untrusted game code. NEVER add allow-same-origin. */
@@ -105,13 +152,14 @@ type GameMessage =
   | { type: "webgame:hello" }
   | { type: "webgame:save"; data: unknown }
   | { type: "webgame:fullscreen" }
+  | { type: "webgame:achievement"; id: string }
   | { type: string; [k: string]: unknown };
 
 /**
  * Sandboxed iframe player. Untrusted game code runs at an opaque origin and can only talk to us via
  * postMessage; messages are accepted ONLY when `event.source === iframe.contentWindow`.
  */
-export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, className = "" }: GamePlayerProps) {
+export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, className = "" }: GamePlayerProps) {
   const api = useApi();
   const { user, token } = useAuth();
   const toast = useToast();
@@ -127,8 +175,94 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, className =
   const pausedByVisibility = useRef(false);
 
   // Latest values for the message handler without re-subscribing.
-  const latest = useRef({ user, onPlayRecorded, onScoreSubmitted, game });
-  latest.current = { user, onPlayRecorded, onScoreSubmitted, game };
+  const latest = useRef({ user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game });
+  latest.current = { user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game };
+  /** Achievement ids already sent (or being sent) by this player instance. */
+  const unlocked = useRef(new Set<string>());
+
+  // ---- Cloud saves (GAME_FORMAT v2): prefetch as soon as the player mounts when logged in ----
+  const cloud = useRef<CloudState>({ status: "off", data: null, savedSinceFetch: false, listeners: new Set() });
+  useEffect(() => {
+    const st: CloudState = { status: token ? "pending" : "off", data: null, savedSinceFetch: false, listeners: new Set() };
+    cloud.current = st;
+    if (!token) return;
+    let alive = true;
+    const settle = (status: CloudState["status"], data: Record<string, unknown> | null) => {
+      if (!alive) return;
+      st.status = status;
+      st.data = data;
+      const ls = [...st.listeners];
+      st.listeners.clear();
+      ls.forEach((l) => l());
+    };
+    api.getSave(game.id).then(
+      (r) => settle("done", isPlainObject(r?.data) ? r.data : null),
+      () => settle("failed", null),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, game.id, token]);
+
+  // Debounced cloud writer: at most one PUT per CLOUD_SAVE_DEBOUNCE_MS, always sending the latest data;
+  // flushed on unmount / pagehide.
+  const cloudWrite = useRef<((data: Record<string, unknown>) => void) | null>(null);
+  useEffect(() => {
+    const gameId = game.id;
+    let pending: Record<string, unknown> | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let inflight: Promise<void> | null = null;
+    const arm = (ms: number) => {
+      if (timer === null) timer = setTimeout(flush, ms);
+    };
+    function flush() {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      const data = pending;
+      pending = null;
+      if (!data || !latest.current.token) return;
+      const p: Promise<void> = api.putSave(gameId, data).then(
+        () => {},
+        (e: unknown) => {
+          if (isApiError(e) && e.code === "rate_limited") {
+            if (!pending) pending = data;
+            arm(Math.max(CLOUD_SAVE_DEBOUNCE_MS, (e.retryAfter ?? 5) * 1000));
+          } else {
+            console.warn("[webgame] cloud save failed", e);
+          }
+        },
+      );
+      inflight = p;
+      void p.then(() => {
+        if (inflight === p) inflight = null;
+      });
+    }
+    const writer: CloudWriter = {
+      discard: async () => {
+        if (timer !== null) clearTimeout(timer);
+        timer = null;
+        pending = null;
+        if (inflight) await inflight;
+      },
+    };
+    let set = cloudWriters.get(gameId);
+    if (!set) cloudWriters.set(gameId, (set = new Set()));
+    const writers = set;
+    writers.add(writer);
+    cloudWrite.current = (data) => {
+      pending = data;
+      arm(CLOUD_SAVE_DEBOUNCE_MS);
+    };
+    const onPageHide = () => flush();
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      flush();
+      cloudWrite.current = null;
+      writers.delete(writer);
+      if (writers.size === 0 && cloudWriters.get(gameId) === writers) cloudWriters.delete(gameId);
+    };
+  }, [api, game.id]);
 
   // Owner preview of an unpublished game (see API.md /play/{id}): the iframe gets a short-lived,
   // preview-scoped token from POST /api/games/{id}/preview-token. The session JWT NEVER goes into
@@ -193,16 +327,92 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, className =
       if (!frame || !frame.contentWindow || event.source !== frame.contentWindow) return;
       const data = event.data as GameMessage | null;
       if (!data || typeof data !== "object" || typeof data.type !== "string") return;
-      const { user: u, onPlayRecorded: onPlay, onScoreSubmitted: onScore, game: g } = latest.current;
+      const { user: u, onPlayRecorded: onPlay, onScoreSubmitted: onScore, onAchievementUnlocked: onAch, game: g } = latest.current;
 
       switch (data.type) {
         case "webgame:hello": {
           // Reply directly to the verified source (the game frame); opaque origin => "*".
-          (event.source as Window).postMessage({ type: "webgame:load", data: readGameSave(g.id) }, "*");
+          const source = event.source as Window;
+          const reply = (d: Record<string, unknown> | null) => source.postMessage({ type: "webgame:load", data: d }, "*");
+          const st = cloud.current;
+          const best = (): Record<string, unknown> | null => {
+            if (st.status === "done" && st.data && !st.savedSinceFetch) {
+              writeGameSave(g.id, st.data); // keep the local fallback in sync with the server copy
+              return st.data;
+            }
+            return readGameSave(g.id);
+          };
+          if (st.status !== "pending") {
+            reply(best());
+            return;
+          }
+          // Wait briefly for the prefetch; fall back to local data after CLOUD_LOAD_TIMEOUT_MS.
+          let answered = false;
+          const timer = setTimeout(() => {
+            answered = true;
+            reply(readGameSave(g.id));
+          }, CLOUD_LOAD_TIMEOUT_MS);
+          st.listeners.add(() => {
+            if (!answered) {
+              answered = true;
+              clearTimeout(timer);
+              reply(best());
+              return;
+            }
+            // Late arrival: send the server copy as an extra webgame:load (the engine merges it) — only to the
+            // same, still-mounted frame, and only if the game hasn't saved newer data meanwhile.
+            if (st.status === "done" && st.data && !st.savedSinceFetch && iframeRef.current?.contentWindow === source) {
+              writeGameSave(g.id, st.data);
+              reply(st.data);
+            }
+          });
           return;
         }
         case "webgame:save": {
-          writeGameSave(g.id, (data as { data?: unknown }).data);
+          const saveData = (data as { data?: unknown }).data;
+          if (!writeGameSave(g.id, saveData)) return;
+          cloud.current.savedSinceFetch = true;
+          if (latest.current.token) cloudWrite.current?.(saveData as Record<string, unknown>);
+          return;
+        }
+        case "webgame:achievement": {
+          const achId = (data as { id?: unknown }).id;
+          if (typeof achId !== "string" || !ACHIEVEMENT_ID_RE.test(achId)) return;
+          if (!u) {
+            if (takeAchievementHint())
+              toast.show({
+                kind: "info",
+                title: "Log in to earn achievements",
+                message: "Achievements unlocked while logged out aren't saved.",
+                action: { label: "Log in", onClick: () => navigate(`/login?next=${encodeURIComponent(`/games/${g.id}`)}`) },
+                duration: 8000,
+              });
+            return;
+          }
+          if (unlocked.current.has(achId)) return;
+          unlocked.current.add(achId);
+          api.unlockAchievement(g.id, achId).then(
+            (r) => {
+              const a = r.achievement;
+              if (r.new)
+                toast.show({
+                  kind: "success",
+                  title: `Achievement unlocked: ${a.name}`,
+                  message: a.description || undefined,
+                  icon: <AchievementIcon iconUrl={a.iconUrl} seed={`${g.id}:${a.id}`} size={36} />,
+                  duration: 6000,
+                });
+              onAch?.(r);
+            },
+            (e: unknown) => {
+              if (isApiError(e) && e.status === 404) {
+                console.warn(`[webgame] achievement "${achId}" is not defined in game.json`);
+                return;
+              }
+              unlocked.current.delete(achId); // allow a retry on the next unlock
+              if (isApiError(e) && e.code === "rate_limited") toast.error("Couldn't save achievement", e.message);
+            },
+          );
           return;
         }
         case "webgame:fullscreen": {

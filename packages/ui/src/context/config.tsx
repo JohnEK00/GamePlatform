@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { ApiClient } from "../api/client";
+import type { StudioProject } from "../studio/project";
 
 export type PlatformConfig = {
   /** Shown in the footer, e.g. "Desktop". */
@@ -8,6 +9,16 @@ export type PlatformConfig = {
   pickFile?: (accept: string) => Promise<File | null>;
   /** Extra content rendered at the bottom of the Settings page. */
   extraSettings?: ReactNode;
+  /**
+   * v2: open a local game folder in the Studio (desktop). Resolve with the project, or null if cancelled.
+   * Without it the Studio falls back to <input webkitdirectory>.
+   */
+  openLocalProject?: () => Promise<StudioProject | null>;
+  /**
+   * v2: native "Save as" (desktop). Resolve true when saved, false when cancelled.
+   * Without it the Studio's Export .zip falls back to an <a download> link.
+   */
+  saveFile?: (suggestedName: string, data: Blob) => Promise<boolean>;
 };
 
 export type WebGameConfig = {

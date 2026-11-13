@@ -3,6 +3,12 @@
 //! File access is limited to files the user explicitly picks in a native dialog opened *by Rust*:
 //! `pick_file` shows the dialog, reads the chosen file and hands the frontend a one-time ticket;
 //! `read_picked` exchanges that ticket for the bytes. The webview never supplies a filesystem path.
+//! The same pattern is used for local game folders (`project`) and native "Save as" (`save`).
+//! `menu` builds the native application menu.
+
+mod menu;
+mod project;
+mod save;
 
 use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
@@ -75,7 +81,7 @@ impl PickedFiles {
 }
 
 /// Unpredictable 128-bit hex id (std's per-instance randomly keyed SipHash; no extra crates).
-fn new_ticket() -> String {
+pub(crate) fn new_ticket() -> String {
     let part = || RandomState::new().build_hasher().finish();
     format!("{:016x}{:016x}", part(), part())
 }
@@ -181,7 +187,19 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(PickedFiles::default())
-        .invoke_handler(tauri::generate_handler![pick_file, read_picked])
+        .manage(project::OpenProjects::default())
+        .manage(menu::FullscreenToggle::default())
+        .menu(|app| menu::build(app))
+        .on_menu_event(menu::handle)
+        .invoke_handler(tauri::generate_handler![
+            pick_file,
+            read_picked,
+            project::pick_project_folder,
+            project::read_project_file,
+            project::release_project,
+            save::save_file,
+            menu::toggle_fullscreen,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Pixelforge Arcade");
 }

@@ -17,12 +17,28 @@ pub const ALLOWED_EXTS: &[&str] = &[
     "woff2", "ttf",
 ];
 
+pub const MAX_ACHIEVEMENTS: usize = 50;
+pub const ACHIEVEMENT_ID_MAX: usize = 32;
+pub const ACHIEVEMENT_NAME_MAX: usize = 60;
+pub const ACHIEVEMENT_DESCRIPTION_MAX: usize = 200;
+pub const ICON_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "svg"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AchievementMeta {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Normalised bundle-relative path (verified to exist in the bundle).
+    pub icon: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleMeta {
     pub name: Option<String>,
     pub entry: String,
     pub width: i64,
     pub height: i64,
+    pub achievements: Vec<AchievementMeta>,
 }
 
 fn invalid(msg: impl Into<String>) -> AppError {
@@ -107,6 +123,106 @@ fn parse_dimension(v: &Value, key: &str) -> Result<i64, AppError> {
     Ok(n)
 }
 
+fn valid_achievement_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= ACHIEVEMENT_ID_MAX
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// Validate the optional `achievements` array (icon existence is checked by the caller).
+pub fn parse_achievements(v: &Value) -> Result<Vec<AchievementMeta>, AppError> {
+    let list = match v.get("achievements") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(a)) => a,
+        Some(_) => return Err(invalid("game.json: achievements must be an array")),
+    };
+    if list.len() > MAX_ACHIEVEMENTS {
+        return Err(invalid(format!(
+            "game.json: at most {MAX_ACHIEVEMENTS} achievements are allowed"
+        )));
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(list.len());
+    for (i, item) in list.iter().enumerate() {
+        let at = format!("game.json: achievements[{i}]");
+        let obj = item
+            .as_object()
+            .ok_or_else(|| invalid(format!("{at} must be an object")))?;
+        let id = obj
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid(format!("{at}.id is required")))?;
+        if !valid_achievement_id(id) {
+            return Err(invalid(format!(
+                "{at}.id must match ^[a-z0-9_-]{{1,{ACHIEVEMENT_ID_MAX}}}$"
+            )));
+        }
+        if !seen.insert(id.to_string()) {
+            return Err(invalid(format!(
+                "game.json: duplicate achievement id '{id}'"
+            )));
+        }
+        let name = obj
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .ok_or_else(|| invalid(format!("{at}.name is required")))?;
+        let n = name.chars().count();
+        if n == 0 || n > ACHIEVEMENT_NAME_MAX {
+            return Err(invalid(format!(
+                "{at}.name must be 1-{ACHIEVEMENT_NAME_MAX} characters"
+            )));
+        }
+        let description = match obj.get("description") {
+            None | Some(Value::Null) => "",
+            Some(Value::String(d)) => d.trim(),
+            Some(_) => return Err(invalid(format!("{at}.description must be a string"))),
+        };
+        if description.chars().count() > ACHIEVEMENT_DESCRIPTION_MAX {
+            return Err(invalid(format!(
+                "{at}.description must be at most {ACHIEVEMENT_DESCRIPTION_MAX} characters"
+            )));
+        }
+        let icon = match obj.get("icon") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(p)) if p.trim().is_empty() => None,
+            Some(Value::String(p)) => {
+                let parts = normalise(p.trim()).map_err(|_| {
+                    invalid(format!(
+                        "{at}.icon must be a relative path inside the bundle"
+                    ))
+                })?;
+                if parts.is_empty() {
+                    return Err(invalid(format!(
+                        "{at}.icon must be a relative path inside the bundle"
+                    )));
+                }
+                let joined = parts.join("/");
+                match extension(&joined) {
+                    Some(ext) if ICON_EXTS.contains(&ext.as_str()) => {}
+                    _ => {
+                        return Err(invalid(format!(
+                            "{at}.icon must be an image ({})",
+                            ICON_EXTS.join(", ")
+                        )));
+                    }
+                }
+                Some(joined)
+            }
+            Some(_) => return Err(invalid(format!("{at}.icon must be a string"))),
+        };
+        out.push(AchievementMeta {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
+            icon,
+        });
+    }
+    Ok(out)
+}
+
 pub fn parse_game_json(bytes: &[u8]) -> Result<BundleMeta, AppError> {
     let v: Value = serde_json::from_slice(bytes)
         .map_err(|e| invalid(format!("game.json is not valid JSON: {e}")))?;
@@ -125,11 +241,13 @@ pub fn parse_game_json(bytes: &[u8]) -> Result<BundleMeta, AppError> {
         .and_then(Value::as_str)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let achievements = parse_achievements(&v)?;
     Ok(BundleMeta {
         name,
         entry,
         width,
         height,
+        achievements,
     })
 }
 
@@ -268,6 +386,16 @@ fn scan(bytes: &[u8]) -> Result<(BundleMeta, Vec<Entry>), AppError> {
             "game.json: entry file '{}' is not in the bundle",
             meta.entry
         )));
+    }
+    for a in &meta.achievements {
+        if let Some(icon) = &a.icon
+            && !entries.iter().any(|e| &e.path == icon)
+        {
+            return Err(invalid(format!(
+                "game.json: icon '{icon}' of achievement '{}' is not in the bundle",
+                a.id
+            )));
+        }
     }
     Ok((meta, entries))
 }

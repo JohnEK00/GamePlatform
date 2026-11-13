@@ -5,6 +5,7 @@ import { AuthProvider } from "./context/auth";
 import { ConfigProvider, type WebGameConfig } from "./context/config";
 import { ToastProvider } from "./context/toast";
 import { Layout, RequireAuth } from "./components/Layout";
+import { FavoritesProvider } from "./components/Favorite";
 import { HomePage } from "./pages/HomePage";
 import { GamePage } from "./pages/GamePage";
 import { UploadPage } from "./pages/UploadPage";
@@ -15,13 +16,19 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { LoginPage, RegisterPage } from "./pages/AuthPages";
 import { DocsPage } from "./pages/DocsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
+import { FavoritesPage } from "./pages/FavoritesPage";
+import { GameStatsPage } from "./pages/GameStatsPage";
+import { AdminPage } from "./pages/AdminPage";
+import { StudioPage } from "./pages/StudioPage";
 
 /** Config + ApiClient + Auth + Toast providers, without a router. */
 export function WebGameProviders({ config, client, children }: { config: WebGameConfig; client?: ApiClient; children: ReactNode }) {
   return (
     <ConfigProvider config={config} client={client}>
       <AuthProvider>
-        <ToastProvider>{children}</ToastProvider>
+        <ToastProvider>
+          <FavoritesProvider>{children}</FavoritesProvider>
+        </ToastProvider>
       </AuthProvider>
     </ConfigProvider>
   );
@@ -58,6 +65,31 @@ export function WebGameRoutes({ extraRoutes }: { extraRoutes?: ReactNode }) {
             </RequireAuth>
           }
         />
+        <Route
+          path="games/:id/stats"
+          element={
+            <RequireAuth>
+              <GameStatsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="favorites"
+          element={
+            <RequireAuth>
+              <FavoritesPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="admin"
+          element={
+            <RequireAuth>
+              <AdminPage />
+            </RequireAuth>
+          }
+        />
+        <Route path="studio" element={<StudioPage />} />
         <Route path="u/:username" element={<ProfilePage />} />
         <Route
           path="settings"

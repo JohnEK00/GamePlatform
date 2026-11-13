@@ -54,17 +54,30 @@ async fn serve(config: Config) -> anyhow::Result<()> {
             tracing::info!(%origin, "PUBLIC_ORIGIN set; /play uses it as the page origin")
         }
         None => tracing::warn!(
-            "PUBLIC_ORIGIN is not set; /play derives its origin from the request Host and              X-Forwarded-Proto headers (set PUBLIC_ORIGIN in production)"
+            "PUBLIC_ORIGIN is not set; /play derives its origin from the request Host and \
+             X-Forwarded-Proto headers (set PUBLIC_ORIGIN in production)"
         ),
+    }
+    if !config.admin_usernames.is_empty() {
+        tracing::info!(
+            count = config.admin_usernames.len(),
+            "ADMIN_USERNAMES applied"
+        );
+    }
+    if !config.rate_limit {
+        tracing::warn!("rate limiting is disabled (RATE_LIMIT=off)");
     }
     let state = AppState::new(config).await?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("listening on http://{addr}");
-    axum::serve(listener, app(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("shutting down");
-        })
-        .await?;
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("shutting down");
+    })
+    .await?;
     Ok(())
 }

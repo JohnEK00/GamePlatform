@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pixelforge Studio Player</title>
+  <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{display:block;margin:auto}</style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <script type="module">
+    // Dev copy of the backend's studio player page (GET /play/studio, docs/GAME_FORMAT.md "Studio protocol"):
+    // 1. load the engine, post webgame:studio-ready to the parent;
+    // 2. on webgame:studio-load { manifest, files } import the entry from a blob: URL and
+    //    boot(canvas, mod.default, { width, height, baseUrl: "about:blank", files }).
+    // 3. errors at any stage are posted as webgame:error (with line/column when available).
+    import { boot } from '/src/index.ts';
+
+    const post = (msg) => { try { parent.postMessage(msg, '*'); } catch { /* detached */ } };
+    const errMsg = (e) => (e && e.message) || String(e);
+    let stage = 'idle';
+
+    // Runtime errors thrown while evaluating the entry module carry line/column here.
+    addEventListener('error', (e) => {
+      if (stage === 'import') post({ type: 'webgame:error', message: errMsg(e.error ?? e.message), line: e.lineno, column: e.colno });
+    });
+
+    addEventListener('message', async (e) => {
+      if (e.source !== parent) return;
+      const d = e.data;
+      if (!d || typeof d !== 'object' || d.type !== 'webgame:studio-load' || stage !== 'idle') return;
+      stage = 'validate';
+      try {
+        const manifest = d.manifest && typeof d.manifest === 'object' ? d.manifest : {};
+        const files = d.files && typeof d.files === 'object' ? d.files : {};
+        const entry = typeof manifest.entry === 'string' ? manifest.entry.replace(/^\.\//, '') : '';
+        if (!entry || !(entry in files)) throw new Error(`manifest.entry "${manifest.entry}" is missing from files`);
+        const width = Number(manifest.width) || 800;
+        const height = Number(manifest.height) || 600;
+        let src = files[entry];
+        if (typeof src !== 'string') src = new TextDecoder().decode(src);
+        stage = 'import';
+        const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+        let mod;
+        try {
+          mod = await import(/* @vite-ignore */ url);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+        stage = 'boot'; // boot() posts its own webgame:error on failure
+        window.engine = await boot(document.getElementById('game'), mod.default, { width, height, baseUrl: 'about:blank', files });
+        stage = 'running';
+      } catch (err) {
+        console.error('[studio]', err);
+        if (stage !== 'boot') post({ type: 'webgame:error', message: errMsg(err), line: err?.lineNumber, column: err?.columnNumber });
+        stage = 'failed';
+      }
+    });
+
+    post({ type: 'webgame:studio-ready' });
+  </script>
+</body>
+</html>

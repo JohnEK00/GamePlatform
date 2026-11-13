@@ -6,7 +6,8 @@ export type PlatformMessage =
   | { type: 'webgame:error'; message: string }
   | { type: 'webgame:save'; data: Record<string, unknown> }
   | { type: 'webgame:hello' }
-  | { type: 'webgame:fullscreen' };
+  | { type: 'webgame:fullscreen' }
+  | { type: 'webgame:achievement'; id: string };
 
 export type Poster = (msg: PlatformMessage) => void;
 
@@ -22,8 +23,12 @@ export function defaultPoster(): Poster {
   };
 }
 
+/** Achievement ids must match this (docs/GAME_FORMAT.md). */
+export const ACHIEVEMENT_ID_RE = /^[a-z0-9_-]{1,32}$/;
+
 export class Platform {
   private readySent = false;
+  private readonly unlocked = new Set<string>();
   /** Last score submitted. */
   lastScore: number | null = null;
 
@@ -35,6 +40,32 @@ export class Platform {
     if (!Number.isFinite(n)) return;
     this.lastScore = n;
     this.post({ type: 'webgame:score', score: n });
+  }
+
+  /**
+   * Unlock an achievement declared in game.json (`achievements[].id`). Posts
+   * `{ type: 'webgame:achievement', id }` once per session; repeated calls are ignored.
+   * Returns true if the message was posted, false for duplicates or invalid ids (warned).
+   */
+  unlockAchievement(id: string): boolean {
+    if (typeof id !== 'string' || !ACHIEVEMENT_ID_RE.test(id)) {
+      console.warn(`[pixelforge] unlockAchievement: invalid id ${JSON.stringify(id)} (expected ${ACHIEVEMENT_ID_RE})`);
+      return false;
+    }
+    if (this.unlocked.has(id)) return false;
+    this.unlocked.add(id);
+    this.post({ type: 'webgame:achievement', id });
+    return true;
+  }
+
+  /** Whether `unlockAchievement(id)` was already called this session. */
+  isUnlocked(id: string): boolean {
+    return this.unlocked.has(id);
+  }
+
+  /** Ids unlocked this session, in order. */
+  get achievements(): string[] {
+    return [...this.unlocked];
   }
 
   /** Tell the platform the game finished loading (the engine calls this after load()). */

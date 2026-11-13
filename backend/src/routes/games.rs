@@ -9,12 +9,14 @@ use sqlx::Row;
 
 use crate::AppState;
 use crate::auth::{AuthUser, MaybeAuthUser};
-use crate::bundle::{self, BundleMeta};
+use crate::bundle::{self, AchievementMeta, BundleMeta};
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiMultipart, ApiPath, ApiQuery};
 use crate::models::{
-    GAME_SELECT, Game, GameRow, GameSummary, Page, game_row_from_row, now_rfc3339, rating_avg,
+    AchievementDef, GAME_SELECT, Game, GameRow, GameSummary, Page, achievement_icon_url,
+    game_row_from_row, now_rfc3339, rating_avg,
 };
+use crate::ratelimit::Limit;
 use crate::storage::validate_image;
 
 pub const TITLE_MAX: usize = 80;
@@ -70,10 +72,85 @@ async fn my_rating(
     Ok(r.map(|(s,)| s))
 }
 
+/// Rate-limit an authenticated action by user id.
+pub fn limit_user(state: &AppState, limit: Limit, user_id: &str) -> AppResult<()> {
+    state.limiter.check(limit, &format!("user:{user_id}"))
+}
+
+async fn is_favorite(state: &AppState, game_id: &str, viewer: Option<&str>) -> AppResult<bool> {
+    let Some(uid) = viewer else { return Ok(false) };
+    let r: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM favorites WHERE game_id = ? AND user_id = ?")
+            .bind(game_id)
+            .bind(uid)
+            .fetch_optional(&state.db)
+            .await?;
+    Ok(r.is_some())
+}
+
+/// Achievement definitions of the current version, in game.json order.
+pub async fn achievement_defs(state: &AppState, game_id: &str) -> AppResult<Vec<AchievementDef>> {
+    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT ach_id, name, description, icon FROM achievements WHERE game_id = ? \
+         ORDER BY position",
+    )
+    .bind(game_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, description, icon)| AchievementDef {
+            icon_url: achievement_icon_url(game_id, icon.as_deref()),
+            id,
+            name,
+            description,
+        })
+        .collect())
+}
+
 pub async fn build_game(state: &AppState, id: &str, viewer: Option<&str>) -> AppResult<Game> {
     let row = fetch_visible_game(state, id, viewer).await?;
     let rating = my_rating(state, id, viewer).await?;
-    Ok(row.game(rating, viewer))
+    let fav = is_favorite(state, id, viewer).await?;
+    let achievements = achievement_defs(state, id).await?;
+    Ok(row.game(rating, viewer, fav, achievements))
+}
+
+/// Replace the achievement definitions of a game. Unlocks of ids that still exist are kept;
+/// unlocks of removed ids are deleted by the FK cascade.
+async fn sync_achievements(
+    tx: &mut sqlx::SqliteConnection,
+    game_id: &str,
+    defs: &[AchievementMeta],
+) -> AppResult<()> {
+    let ids: Vec<&str> = defs.iter().map(|d| d.id.as_str()).collect();
+    let ids_json =
+        serde_json::to_string(&ids).map_err(|e| AppError::Internal(format!("json: {e}")))?;
+    sqlx::query(
+        "DELETE FROM achievements WHERE game_id = ? \
+         AND ach_id NOT IN (SELECT value FROM json_each(?))",
+    )
+    .bind(game_id)
+    .bind(ids_json)
+    .execute(&mut *tx)
+    .await?;
+    for (i, d) in defs.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO achievements (game_id, ach_id, position, name, description, icon) \
+             VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (game_id, ach_id) DO UPDATE SET \
+             position = excluded.position, name = excluded.name, \
+             description = excluded.description, icon = excluded.icon",
+        )
+        .bind(game_id)
+        .bind(&d.id)
+        .bind(i as i64)
+        .bind(&d.name)
+        .bind(&d.description)
+        .bind(&d.icon)
+        .execute(&mut *tx)
+        .await?;
+    }
+    Ok(())
 }
 
 pub fn validate_title(title: &str) -> AppResult<String> {
@@ -221,6 +298,7 @@ pub async fn create_game_record(
         .execute(&mut *tx)
         .await?;
         replace_tags(&mut tx, &id, &new.tags).await?;
+        sync_achievements(&mut tx, &id, &meta.achievements).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -356,6 +434,7 @@ pub async fn list_games(
     let order = match query.sort.as_deref().map(str::trim).unwrap_or("") {
         "" | "new" => "g.created_at DESC, g.id",
         "popular" => "g.plays DESC, g.created_at DESC, g.id",
+        "favorites" => "favorites DESC, g.created_at DESC, g.id",
         // Bayesian-style average: pulls games with few ratings toward a prior of 3.0 (weight 2).
         "top" => {
             "((g.rating_sum + 6.0) / (g.rating_count + 2.0)) DESC, g.rating_count DESC, \
@@ -363,7 +442,7 @@ pub async fn list_games(
         }
         other => {
             return Err(AppError::BadRequest(format!(
-                "Unknown sort '{other}' (expected new, popular or top)"
+                "Unknown sort '{other}' (expected new, popular, top or favorites)"
             )));
         }
     };
@@ -414,6 +493,7 @@ pub async fn create_game(
     user: AuthUser,
     ApiMultipart(mut multipart): ApiMultipart,
 ) -> AppResult<(StatusCode, Json<Game>)> {
+    limit_user(&state, Limit::Upload, &user.id)?;
     let mut title: Option<String> = None;
     let mut description = String::new();
     let mut tags = Vec::new();
@@ -520,6 +600,7 @@ pub async fn upload_bundle(
     ApiMultipart(mut multipart): ApiMultipart,
 ) -> AppResult<Json<Game>> {
     let game = fetch_owned_game(&state, &id, &user.id).await?;
+    limit_user(&state, Limit::Upload, &user.id)?;
     let mut bundle_bytes = None;
     while let Some(field) = multipart.next_field().await? {
         if field.name() == Some("bundle") {
@@ -542,24 +623,34 @@ pub async fn upload_bundle(
         return Err(e.into());
     }
 
-    let res = sqlx::query(
-        "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, updated_at = ? \
-         WHERE id = ? AND version = ?",
-    )
-    .bind(new_version)
-    .bind(&meta.entry)
-    .bind(meta.width)
-    .bind(meta.height)
-    .bind(now_rfc3339())
-    .bind(&id)
-    .bind(old_version)
-    .execute(&state.db)
+    let res: AppResult<bool> = async {
+        let mut tx = state.db.begin().await?;
+        let r = sqlx::query(
+            "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, updated_at = ? \
+             WHERE id = ? AND version = ?",
+        )
+        .bind(new_version)
+        .bind(&meta.entry)
+        .bind(meta.width)
+        .bind(meta.height)
+        .bind(now_rfc3339())
+        .bind(&id)
+        .bind(old_version)
+        .execute(&mut *tx)
+        .await?;
+        if r.rows_affected() != 1 {
+            return Ok(false);
+        }
+        sync_achievements(&mut tx, &id, &meta.achievements).await?;
+        tx.commit().await?;
+        Ok(true)
+    }
     .await;
     match res {
-        Ok(r) if r.rows_affected() == 1 => {
+        Ok(true) => {
             let _ = tokio::fs::remove_dir_all(state.storage.version_dir(&id, old_version)).await;
         }
-        Ok(_) => {
+        Ok(false) => {
             let _ = tokio::fs::remove_dir_all(&new_dir).await;
             return Err(AppError::Conflict(
                 "The game was updated concurrently; please retry".into(),
@@ -567,7 +658,7 @@ pub async fn upload_bundle(
         }
         Err(e) => {
             let _ = tokio::fs::remove_dir_all(&new_dir).await;
-            return Err(e.into());
+            return Err(e);
         }
     }
 
@@ -601,14 +692,20 @@ pub async fn delete_game(
     ApiPath(id): ApiPath<String>,
 ) -> AppResult<StatusCode> {
     fetch_owned_game(&state, &id, &user.id).await?;
+    remove_game(&state, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete a game row (cascades) and its files.
+pub async fn remove_game(state: &AppState, id: &str) -> AppResult<()> {
     sqlx::query("DELETE FROM games WHERE id = ?")
-        .bind(&id)
+        .bind(id)
         .execute(&state.db)
         .await?;
-    let _ = tokio::fs::remove_dir_all(state.storage.game_dir(&id)).await;
+    let _ = tokio::fs::remove_dir_all(state.storage.game_dir(id)).await;
     let thumbs = state.storage.thumbnails_dir();
-    state.storage.remove_images(&thumbs, &id).await;
-    Ok(StatusCode::NO_CONTENT)
+    state.storage.remove_images(&thumbs, id).await;
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -622,12 +719,22 @@ pub async fn record_play(
     ApiPath(id): ApiPath<String>,
 ) -> AppResult<Json<PlaysResponse>> {
     fetch_visible_game(&state, &id, viewer.id()).await?;
+    let now = chrono::Utc::now();
+    let mut tx = state.db.begin().await?;
     let plays: i64 =
         sqlx::query_scalar("UPDATE games SET plays = plays + 1 WHERE id = ? RETURNING plays")
             .bind(&id)
-            .fetch_optional(&state.db)
+            .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| AppError::not_found("Game"))?;
+    sqlx::query("INSERT INTO play_events (game_id, user_id, day, created_at) VALUES (?, ?, ?, ?)")
+        .bind(&id)
+        .bind(viewer.id())
+        .bind(now.format("%Y-%m-%d").to_string())
+        .bind(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(Json(PlaysResponse { plays }))
 }
 

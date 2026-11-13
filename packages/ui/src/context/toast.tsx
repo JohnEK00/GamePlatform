@@ -8,6 +8,8 @@ export type ToastInput = {
   /** ms; default 4500 (errors 7000) */
   duration?: number;
   action?: { label: string; onClick: () => void };
+  /** Custom icon (e.g. an achievement image) replacing the default kind glyph. */
+  icon?: ReactNode;
 };
 type ToastItem = ToastInput & { id: number };
 
@@ -66,9 +68,15 @@ function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) 
   }, [item.id, item.duration, kind]);
   return (
     <div className={`pf-toast pf-toast--${kind}`} role={kind === "error" ? "alert" : "status"}>
-      <span className="pf-toast__icon" aria-hidden="true">
-        {kind === "success" ? "✓" : kind === "error" ? "!" : "i"}
-      </span>
+      {item.icon ? (
+        <span className="pf-toast__icon pf-toast__icon--custom" aria-hidden="true">
+          {item.icon}
+        </span>
+      ) : (
+        <span className="pf-toast__icon" aria-hidden="true">
+          {kind === "success" ? "✓" : kind === "error" ? "!" : "i"}
+        </span>
+      )}
       <div className="pf-toast__body">
         <strong>{item.title}</strong>
         {item.message && <p>{item.message}</p>}

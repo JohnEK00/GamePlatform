@@ -28,6 +28,22 @@ function serveExamples(): Plugin {
           res.end(JSON.stringify(names));
           return;
         }
+        // Studio mode (studio.html): list every file of one example, bundle-relative.
+        const list = /^\/([^/]+)\/files\.json$/.exec(url);
+        if (list) {
+          const dir = resolve(examplesDir, list[1]!);
+          if (!dir.startsWith(examplesDir + sep) || !existsSync(resolve(dir, 'game.json'))) return next();
+          const walk = (d: string, pre: string): string[] =>
+            readdirSync(d).flatMap((n) => {
+              if (n.startsWith('.')) return [];
+              const p = resolve(d, n);
+              return statSync(p).isDirectory() ? walk(p, `${pre}${n}/`) : [`${pre}${n}`];
+            });
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(JSON.stringify(walk(dir, '')));
+          return;
+        }
         const file = resolve(examplesDir, '.' + url);
         if (!file.startsWith(examplesDir + sep) || !existsSync(file) || !statSync(file).isFile()) return next();
         res.setHeader('Content-Type', MIME[extname(file).toLowerCase()] ?? 'application/octet-stream');

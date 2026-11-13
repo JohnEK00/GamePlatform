@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { WebGameApp, type WebGameConfig } from "@webgame/ui";
 import { OfflineBanner } from "./OfflineBanner";
-import { pickFile } from "./platform";
+import { installNativeIntegrations } from "./nativeMenu";
+import { isTauri, openLocalProject, pickFile, saveFile } from "./platform";
 import { DEFAULT_SERVER, readSavedServer, saveServer } from "./server";
 import { ServerContext, type ServerState } from "./ServerContext";
 import { ServerSettings } from "./ServerForm";
@@ -21,10 +22,19 @@ export function App() {
     () => ({
       apiBaseUrl: server,
       routerMode: "hash",
-      platform: { name: "Desktop", pickFile, extraSettings: <ServerSettings /> },
+      platform: {
+        name: "Desktop",
+        pickFile,
+        extraSettings: <ServerSettings />,
+        // Desktop only: in a plain browser the Studio uses <input webkitdirectory> and <a download>.
+        ...(isTauri() ? { openLocalProject, saveFile } : {}),
+      },
     }),
     [server],
   );
+
+  // Native menu events + F11 (no-op in a plain browser).
+  useEffect(() => installNativeIntegrations(), []);
 
   return (
     <ServerContext.Provider value={serverState}>

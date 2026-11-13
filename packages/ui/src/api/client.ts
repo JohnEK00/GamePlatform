@@ -1,9 +1,21 @@
 import type {
   ApiErrorCode,
   AuthResponse,
+  CloudSave,
   Comment,
   CreateGameInput,
+  CreateReportRequest,
+  CreatorStats,
+  FavoriteResponse,
   Game,
+  GameAchievement,
+  GameStats,
+  ListReportsQuery,
+  PutSaveResponse,
+  Report,
+  ReportAction,
+  UnlockAchievementResponse,
+  UserAchievement,
   GameSummary,
   HealthResponse,
   ListGamesQuery,
@@ -31,27 +43,52 @@ const STATUS_CODES: Record<number, ApiErrorCode> = {
   409: "conflict",
   413: "payload_too_large",
   422: "validation",
+  429: "rate_limited",
   500: "internal",
   503: "unavailable",
 };
+
+/** Parses a Retry-After header (delta-seconds or HTTP date) into whole seconds (>= 1), or undefined. */
+export function parseRetryAfter(value: string | null | undefined, now = Date.now()): number | undefined {
+  if (value == null) return undefined;
+  const v = value.trim();
+  if (!v) return undefined;
+  if (/^\d+(\.\d+)?$/.test(v)) return Math.max(1, Math.ceil(Number(v)));
+  const t = Date.parse(v);
+  if (Number.isNaN(t)) return undefined;
+  return Math.max(1, Math.ceil((t - now) / 1000));
+}
+
+/** Human message for a 429 response. */
+export function rateLimitMessage(retryAfter: number | undefined): string {
+  return retryAfter ? `Slow down, try again in ${retryAfter}s.` : "Slow down, try again in a moment.";
+}
 
 /** Error thrown by every ApiClient method on a non-2xx response or a network failure. */
 export class ApiError extends Error {
   readonly code: ApiErrorCode | (string & {});
   /** HTTP status; 0 for network errors. */
   readonly status: number;
+  /** Seconds to wait before retrying (429 `rate_limited` responses with a Retry-After header). */
+  readonly retryAfter?: number;
 
-  constructor(code: ApiErrorCode | (string & {}), message: string, status: number) {
+  constructor(code: ApiErrorCode | (string & {}), message: string, status: number, retryAfter?: number) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
+    if (retryAfter !== undefined) this.retryAfter = retryAfter;
   }
 
-  static fromResponse(status: number, body: unknown, statusText = ""): ApiError {
+  /** `retryAfterHeader` is the raw Retry-After header value, if any. */
+  static fromResponse(status: number, body: unknown, statusText = "", retryAfterHeader?: string | null): ApiError {
     const err = (body as { error?: { code?: unknown; message?: unknown } } | null)?.error;
     const code =
       err && typeof err.code === "string" ? err.code : STATUS_CODES[status] ?? (status >= 500 ? "internal" : "unknown");
+    if (status === 429 || code === "rate_limited") {
+      const retryAfter = parseRetryAfter(retryAfterHeader);
+      return new ApiError("rate_limited", rateLimitMessage(retryAfter), status, retryAfter);
+    }
     const message =
       err && typeof err.message === "string" && err.message
         ? err.message
@@ -157,7 +194,7 @@ export class ApiClient {
         if (res.ok) throw new ApiError("unknown", "The server sent an invalid response.", res.status);
       }
     }
-    if (!res.ok) throw ApiError.fromResponse(res.status, body, res.statusText);
+    if (!res.ok) throw ApiError.fromResponse(res.status, body, res.statusText, res.headers?.get?.("Retry-After"));
     return body as T;
   }
 
@@ -189,7 +226,13 @@ export class ApiClient {
           onProgress?.({ loaded: 1, total: 1, fraction: 1 });
           resolve(body as T);
         } else {
-          reject(ApiError.fromResponse(xhr.status, body, xhr.statusText));
+          let retryAfter: string | null = null;
+          try {
+            retryAfter = xhr.getResponseHeader("Retry-After");
+          } catch {
+            /* header not exposed */
+          }
+          reject(ApiError.fromResponse(xhr.status, body, xhr.statusText, retryAfter));
         }
       };
       xhr.send(form);
@@ -286,6 +329,62 @@ export class ApiClient {
   }
   health(): Promise<HealthResponse> {
     return this.request("/api/health");
+  }
+
+  // ---------- v2: Favorites ----------
+  favoriteGame(id: string): Promise<FavoriteResponse> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/favorite`, { method: "PUT" });
+  }
+  unfavoriteGame(id: string): Promise<FavoriteResponse> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/favorite`, { method: "DELETE" });
+  }
+  /** Convenience: PUT or DELETE depending on `favorite`. */
+  setFavorite(id: string, favorite: boolean): Promise<FavoriteResponse> {
+    return favorite ? this.favoriteGame(id) : this.unfavoriteGame(id);
+  }
+  listMyFavorites(query: PageQuery = {}): Promise<Page<GameSummary>> {
+    return this.request("/api/users/me/favorites", { query });
+  }
+
+  // ---------- v2: Achievements ----------
+  listGameAchievements(id: string): Promise<GameAchievement[]> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/achievements`);
+  }
+  unlockAchievement(id: string, achievementId: string): Promise<UnlockAchievementResponse> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/achievements/${encodeURIComponent(achievementId)}`, { method: "POST" });
+  }
+  listUserAchievements(username: string, limit?: number): Promise<UserAchievement[]> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/achievements`, { query: { limit } });
+  }
+
+  // ---------- v2: Cloud saves ----------
+  getSave(id: string, signal?: AbortSignal): Promise<CloudSave> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/save`, { signal });
+  }
+  putSave(id: string, data: Record<string, unknown>): Promise<PutSaveResponse> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/save`, { method: "PUT", json: { data } });
+  }
+  deleteSave(id: string): Promise<void> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/save`, { method: "DELETE" });
+  }
+
+  // ---------- v2: Analytics ----------
+  getMyStats(): Promise<CreatorStats> {
+    return this.request("/api/users/me/stats");
+  }
+  getGameStats(id: string): Promise<GameStats> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/stats`);
+  }
+
+  // ---------- v2: Moderation ----------
+  createReport(body: CreateReportRequest): Promise<Report> {
+    return this.request("/api/reports", { method: "POST", json: body });
+  }
+  listReports(query: ListReportsQuery = {}): Promise<Page<Report>> {
+    return this.request("/api/admin/reports", { query });
+  }
+  resolveReport(reportId: string, action: ReportAction): Promise<Report> {
+    return this.request(`/api/admin/reports/${encodeURIComponent(reportId)}/resolve`, { method: "POST", json: { action } });
   }
 }
 

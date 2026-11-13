@@ -33,6 +33,11 @@ const MAIN_JS = `export default {
   },
 };`;
 
+const ACH_JSON = `"achievements": [
+  { "id": "first_blood", "name": "First Blood",
+    "description": "Destroy your first asteroid", "icon": "assets/ach_first.png" }
+]`;
+
 function Code({ children, label }: { children: string; label: string }) {
   return (
     <figure className="pf-code">
@@ -66,9 +71,26 @@ export function DocsPage() {
           <li>The game module</li>
           <li>Engine API</li>
           <li>Scores &amp; platform</li>
+          <li>Achievements</li>
+          <li>Save data</li>
+          <li>Debug overlay</li>
+          <li>Game Studio</li>
           <li>Limits &amp; rules</li>
         </ol>
       </nav>
+
+      <div className="pf-panel pf-docs__cta">
+        <div>
+          <h2>Try it right now</h2>
+          <p className="pf-muted">
+            The <strong>Game Studio</strong> runs in your browser: pick a template, edit the code, see it live, and publish — no
+            setup.
+          </p>
+        </div>
+        <Link to="/studio" className="pf-btn pf-btn--primary pf-btn--lg">
+          Open the Studio
+        </Link>
+      </div>
 
       <section>
         <h2>1. Bundle layout</h2>
@@ -177,7 +199,60 @@ export function DocsPage() {
       </section>
 
       <section>
-        <h2>6. Limits &amp; rules</h2>
+        <h2>6. Achievements</h2>
+        <p>
+          Declare up to 50 achievements in <code>game.json</code>, then unlock them from code. Logged-in players earn them on
+          their profile, and every game page shows how many players unlocked each one.
+        </p>
+        <Code label="game.json">{ACH_JSON}</Code>
+        <Code label="main.js">{`if (this.kills === 1) engine.platform.unlockAchievement("first_blood");`}</Code>
+        <ul>
+          <li>
+            <code>id</code> — <code>a-z 0-9 _ -</code>, 1–32 chars, unique. <code>name</code> 1–60 chars, <code>description</code> up
+            to 200.
+          </li>
+          <li>
+            <code>icon</code> <em>(optional)</em> — an image path inside your bundle.
+          </li>
+          <li>Calling it again is harmless: the engine de-duplicates per session and the server ignores repeats.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>7. Save data</h2>
+        <p>
+          <code>engine.storage.get(key, fallback)</code> / <code>set(key, value)</code> persist JSON values (max 256 KB per game).
+          Logged-in players get <strong>cloud saves</strong> that follow them across devices and the desktop app; anonymous
+          players keep their data in their browser. Players can wipe it with “Clear save data” under the game.
+        </p>
+      </section>
+
+      <section>
+        <h2>8. Debug overlay</h2>
+        <p>
+          Press <kbd>F3</kbd> while your game has focus (or set <code>engine.debug = true</code>) to toggle an overlay with FPS,
+          frame time, draw calls, sprite count and active tweens, particles and physics bodies.
+        </p>
+      </section>
+
+      <section>
+        <h2>9. Game Studio</h2>
+        <p>
+          The <Link to="/studio">Studio</Link> is a small IDE in the arcade: a file list, a code editor (<kbd>Tab</kbd> indents,{" "}
+          <kbd>Ctrl/⌘ S</kbd> runs), a <code>game.json</code> form with an achievements editor, starter templates and a live preview
+          with a console that shows errors with line numbers. Scores and achievements in the preview are only simulated.
+        </p>
+        <ul>
+          <li>Your project autosaves in this browser. Import images and sounds, or open a whole game folder.</li>
+          <li>
+            <strong>Export .zip</strong> downloads a ready-to-upload bundle; <strong>Publish</strong> uploads it straight to the
+            arcade (requires an account).
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>10. Limits &amp; rules</h2>
         <ul>
           <li>≤ 50 MB compressed, ≤ 200 MB uncompressed, ≤ 2000 files.</li>
           <li>No absolute paths, no <code>..</code>, no symlinks; only the file types listed above.</li>

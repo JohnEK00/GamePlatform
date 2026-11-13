@@ -1,10 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions for the main window (local app content only; remote pages and game iframes get none).",
+  "description": "Least privilege for the main window (local app content only; remote pages and game iframes get none). The webview only calls the app's own commands (file/folder pickers, save, fullscreen) and listens for native menu events; dialogs, menus, window state and fullscreen are handled in Rust.",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "window-state:default"
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
   ]
 }

@@ -17,6 +17,41 @@ pub struct Config {
     pub cors_origins: Vec<String>,
     /// Canonical public origin for `/play` (`PUBLIC_ORIGIN`); `None` = derive from `Host`.
     pub public_origin: Option<String>,
+    /// Lowercased usernames that get the `admin` role (`ADMIN_USERNAMES`).
+    pub admin_usernames: Vec<String>,
+    /// Rate limiting on/off (`RATE_LIMIT=off` disables).
+    pub rate_limit: bool,
+    /// Number of trusted reverse-proxy hops in front of the server (`TRUST_PROXY`; `true` = 1,
+    /// off = 0). When > 0 the client IP is the n-th `X-Forwarded-For` entry from the right.
+    pub trust_proxy: usize,
+}
+
+pub fn parse_admin_usernames(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn env_flag(key: &str, default: bool) -> bool {
+    match env_nonempty(key).map(|v| v.to_ascii_lowercase()) {
+        None => default,
+        Some(v) => !matches!(v.as_str(), "off" | "0" | "false" | "no" | "disabled"),
+    }
+}
+
+/// `TRUST_PROXY`: unset/off/0/false/no/disabled → 0, true/on/yes → 1, or a hop count.
+pub fn parse_trust_proxy(value: Option<&str>) -> Result<usize, String> {
+    let Some(v) = value.map(|v| v.trim().to_ascii_lowercase()) else {
+        return Ok(0);
+    };
+    match v.as_str() {
+        "" | "off" | "0" | "false" | "no" | "disabled" => Ok(0),
+        "true" | "on" | "yes" | "enabled" => Ok(1),
+        n => n.parse::<usize>().ok().filter(|n| *n <= 32).ok_or_else(|| {
+            format!("TRUST_PROXY must be off, true or a number of proxy hops (0-32), got {v:?}")
+        }),
+    }
 }
 
 fn env_nonempty(key: &str) -> Option<String> {
@@ -145,6 +180,11 @@ impl Config {
             web_dist,
             cors_origins,
             public_origin,
+            admin_usernames: parse_admin_usernames(
+                &env_nonempty("ADMIN_USERNAMES").unwrap_or_default(),
+            ),
+            rate_limit: env_flag("RATE_LIMIT", true),
+            trust_proxy: parse_trust_proxy(env_nonempty("TRUST_PROXY").as_deref())?,
         })
     }
 
@@ -165,13 +205,35 @@ impl Config {
             web_dist: None,
             cors_origins: parse_origins(DEFAULT_CORS_ORIGINS),
             public_origin: None,
+            admin_usernames: Vec::new(),
+            rate_limit: false,
+            trust_proxy: 0,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_public_origin;
+    use super::{parse_public_origin, parse_trust_proxy};
+
+    #[test]
+    fn trust_proxy_values() {
+        for (input, want) in [
+            (None, 0),
+            (Some("off"), 0),
+            (Some("0"), 0),
+            (Some("false"), 0),
+            (Some("true"), 1),
+            (Some(" TRUE "), 1),
+            (Some("1"), 1),
+            (Some("2"), 2),
+        ] {
+            assert_eq!(parse_trust_proxy(input), Ok(want), "{input:?}");
+        }
+        for bad in ["maybe", "-1", "1.5", "100"] {
+            assert!(parse_trust_proxy(Some(bad)).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn accepts_valid_origins() {

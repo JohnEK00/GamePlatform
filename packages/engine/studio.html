@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pixelforge Studio Mode</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    #player { display: block; width: 100%; height: 100%; border: 0; background: #000; }
+    #bar {
+      position: fixed; bottom: 8px; left: 8px; z-index: 10; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+      font: 12px/1.2 system-ui, sans-serif; color: #cfd6ee; background: rgba(15, 18, 32, 0.82);
+      border: 1px solid #2c3554; border-radius: 8px; padding: 6px 8px; max-width: calc(100vw - 32px);
+    }
+    #bar select, #bar button {
+      font: inherit; color: #e8ecf4; background: #1e2540; border: 1px solid #36406a; border-radius: 5px; padding: 3px 8px; cursor: pointer;
+    }
+    #bar a { color: #8ea2ff; }
+    #log { color: #8ea2ff; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #toasts { position: fixed; top: 12px; right: 12px; z-index: 20; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+    .toast { min-width: 220px; max-width: min(360px, calc(100vw - 24px)); padding: 9px 12px; font: 13px/1.3 system-ui, sans-serif; color: #e8ecf4;
+      background: rgba(20, 22, 44, 0.95); border: 1px dashed #ffd93d; border-radius: 10px; transition: opacity .5s; }
+    .toast.err { border-color: #ff6b6b; color: #ffd0d0; }
+    .toast.out { opacity: 0; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <strong>Studio mode</strong>
+    <select id="game"></select>
+    <button id="reload" title="Re-fetch the files and restart">Reload</button>
+    <a id="back" href="/">Playground</a>
+    <span id="log">fetching files…</span>
+  </div>
+  <div id="toasts"></div>
+  <iframe id="player" sandbox="allow-scripts" allow="autoplay; fullscreen; gamepad" title="game"></iframe>
+  <script type="module">
+    // Mimics the platform's studio host for GET /play/studio: the parent fetches the bundle files itself
+    // and sends them in-memory via webgame:studio-load. The game never touches /examples over HTTP for
+    // its assets, so this exercises boot({ files }). Score/achievement messages are NOT persisted —
+    // they show "would submit / would unlock" toasts, as the contract requires for studio sessions.
+    const params = new URLSearchParams(location.search);
+    const select = document.getElementById('game');
+    const log = document.getElementById('log');
+    const frame = document.getElementById('player');
+    const names = await fetch('/examples/index.json').then((r) => r.json()).catch(() => []);
+    const name = params.get('game') || names[0] || 'brick-breaker';
+    for (const n of names) select.add(new Option(n, n, false, n === name));
+    select.onchange = () => { location.search = '?game=' + encodeURIComponent(select.value); };
+    document.getElementById('back').href = '/?game=' + encodeURIComponent(name);
+    document.getElementById('reload').onclick = () => start();
+    for (const b of document.querySelectorAll('#bar button, #bar select')) b.addEventListener('keydown', (e) => e.preventDefault());
+
+    const TEXT = /\.(js|mjs|json|txt|css|svg)$/i;
+    let bundle = null;
+
+    function toast(text, err = false) {
+      const el = document.createElement('div');
+      el.className = 'toast' + (err ? ' err' : '');
+      el.textContent = text;
+      document.getElementById('toasts').append(el);
+      setTimeout(() => el.classList.add('out'), 3500);
+      setTimeout(() => el.remove(), 4100);
+    }
+
+    async function fetchBundle() {
+      const base = `/examples/${encodeURIComponent(name)}/`;
+      const list = await fetch(base + 'files.json').then((r) => { if (!r.ok) throw new Error(`files.json: HTTP ${r.status}`); return r.json(); });
+      const files = {};
+      let bytes = 0;
+      await Promise.all(list.map(async (path) => {
+        const res = await fetch(base + path.split('/').map(encodeURIComponent).join('/'), { cache: 'no-store' });
+        if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+        files[path] = TEXT.test(path) ? await res.text() : await res.arrayBuffer();
+        bytes += typeof files[path] === 'string' ? files[path].length : files[path].byteLength;
+      }));
+      const manifest = JSON.parse(files['game.json']);
+      return { manifest, files, bytes };
+    }
+
+    async function start() {
+      try {
+        log.textContent = 'fetching files…';
+        bundle = await fetchBundle();
+        document.title = `${bundle.manifest.name} · Studio Mode`;
+        log.textContent = `${Object.keys(bundle.files).length} files, ${(bundle.bytes / 1024).toFixed(1)} KB in memory`;
+        frame.src = '/studio-player.html?t=' + Date.now();
+        frame.onload = () => frame.focus();
+      } catch (e) {
+        log.textContent = 'error: ' + e.message;
+        toast(e.message, true);
+      }
+    }
+
+    const toGame = (msg) => frame.contentWindow?.postMessage(msg, '*');
+    window.addEventListener('message', (e) => {
+      if (e.source !== frame.contentWindow) return;
+      const d = e.data;
+      if (!d || typeof d.type !== 'string' || !d.type.startsWith('webgame:')) return;
+      console.info('[studio host] received', d);
+      switch (d.type) {
+        case 'webgame:studio-ready':
+          if (bundle) toGame({ type: 'webgame:studio-load', manifest: bundle.manifest, files: bundle.files });
+          log.textContent = 'studio-ready -> studio-load';
+          return;
+        case 'webgame:hello': toGame({ type: 'webgame:load', data: null }); return; // studio sessions start fresh
+        case 'webgame:ready': log.textContent = 'running from in-memory files'; return;
+        case 'webgame:save': log.textContent = 'save (not persisted in studio)'; return;
+        case 'webgame:score': toast(`Would submit score: ${d.score}`); return;
+        case 'webgame:achievement': {
+          const a = (bundle?.manifest.achievements || []).find((x) => x.id === d.id);
+          toast(a ? `Would unlock: ${a.name}` : `Would unlock "${d.id}" — not declared in game.json!`, !a);
+          return;
+        }
+        case 'webgame:fullscreen':
+          if (document.fullscreenElement) document.exitFullscreen?.();
+          else frame.requestFullscreen?.().catch(() => {});
+          return;
+        case 'webgame:error': {
+          const where = d.line ? ` (line ${d.line}${d.column ? ':' + d.column : ''})` : '';
+          log.textContent = `error: ${d.message}${where}`;
+          toast(`Error: ${d.message}${where}`, true);
+          return;
+        }
+        default: log.textContent = d.type;
+      }
+    });
+
+    start();
+  </script>
+</body>
+</html>

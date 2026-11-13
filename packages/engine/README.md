@@ -19,6 +19,14 @@ page) in a `sandbox="allow-scripts"` iframe, which runs `examples/<name>/`. As t
 `webgame:save`, fullscreens the iframe on `webgame:fullscreen`, sends `webgame:pause`/`resume`/`mute`
 from its toolbar ("Clear save" wipes the stored data) and shows the messages the game posts.
 `window.engine` is set inside the iframe; pick the iframe context in devtools to poke around.
+`webgame:achievement` messages show a toast with the achievement's name and icon from game.json.
+
+**Studio mode** (`studio.html`, linked from the toolbar) mimics the platform's `/play/studio` protocol. The
+host fetches every file of the example itself (via `/examples/<name>/files.json`), loads `studio-player.html`
+(a copy of the backend's studio player page) in a sandboxed iframe, waits for `webgame:studio-ready` and
+posts `webgame:studio-load { manifest, files }`. The player imports the entry from a `blob:` URL and boots
+with `baseUrl: "about:blank"` and the in-memory `files`, so every asset load goes through the files path.
+Scores and achievements show "would submit / would unlock" toasts instead of being recorded.
 
 ---
 
@@ -72,8 +80,20 @@ missing or `load()` throws. In that case it shows an overlay and posts `webgame:
 | `maxPixelRatio` | `3` | cap on devicePixelRatio for the HiDPI backing store |
 | `smooth` | `false` | default texture filtering (`false` = crisp pixel art) |
 | `background` | `#000` | auto-clear color each frame (`renderer.background = null` disables) |
-| `storageKey` | baseUrl | namespace for `engine.storage` |
+| `storageKey` | baseUrl | namespace for `engine.storage`. Studio boots (`baseUrl` "about:blank" or `files` given) without it derive `studio:id:<hash of game.json id/title>`, else `studio:paths:<hash of file paths>`, so projects do not share saves (`deriveStorageKey()` is exported) |
 | `pauseOverlay` | `true` | draw "PAUSED" while the host has paused the game |
+| `files` | — | in-memory bundle: `{ [bundlePath]: Blob \| ArrayBuffer \| ArrayBufferView \| string }` (see below) |
+| `debug` | `false` | start with the debug overlay visible |
+
+### In-memory files (`files`)
+
+The studio player uses this option because there the bundle is not served over HTTP. Keys are bundle-relative
+paths such as `"assets/ship.png"`; `./`, a leading `/`, `..` segments and query strings are normalized.
+**Every** loader (`loadTexture`, `loadSpriteSheet`, `loadSound`, `loadJSON`, `loadText`, `loadBinary`,
+`loadFont`) looks the path up there first and only falls back to fetching `baseUrl + path`.
+* **Values:** a `Blob`, an `ArrayBuffer` (or typed array), or a string (text content, or a `data:` URL). They are decoded inside the iframe with the MIME type of the file extension.
+* **URLs:** `assets.url(path)` returns a `blob:` object URL for an in-memory file (handy for `new Image()` or CSS). `engine.destroy()` revokes these URLs.
+* **Access:** `engine.files` (`BundleFiles`: `has(path)`, `paths()`, `blob(path)`, `objectUrl(path)`) exposes the map.
 
 ## Engine instance
 
@@ -88,6 +108,9 @@ missing or `load()` throws. In that case it shows an overlay and posts `webgame:
 | `after(sec, fn)`, `every(sec, fn)` | game-time timers → `{ cancel() }` |
 | `camera` | shortcut for `renderer.camera` |
 | `game` | your (instantiated) game object |
+| `debug` | show the debug overlay (**F3** also toggles it) |
+| `debugStats` | `{ fps, frameMs, workMs, drawCalls, sprites, tweens, particles, bodies }`, updated every frame |
+| `files` | the in-memory bundle files (`boot` option `files`) |
 | `renderer`, `assets`, `input`, `audio`, `scenes`, `tweens`, `storage`, `platform`, `random` | systems (below) |
 | `Vec2`, `Rect`, `Color`, `Random`, `Tilemap`, `Physics`, `Body`, `ParticleEmitter`, `Tween`, `Easing`, `SpriteSheet`, `Animation`, `Texture`, `Sound`, `Camera`, `GamepadButtons` | classes and constants |
 | `math` | `clamp, lerp, invLerp, remap, approach, wrap, degToRad, radToDeg, damp, circlesOverlap, circleRectOverlap` |
@@ -100,6 +123,19 @@ camera shake. Then a render pass clears to `background` and runs `game.render` �
 * **Audio unlock:** audio is unlocked on the first pointer or key gesture.
 * **Host messages:** the engine handles `webgame:pause`, `webgame:resume` and `webgame:mute {muted}` from the parent window.
 * **Crashes:** if `update` or `render` throws, the loop stops, an error overlay appears, and `webgame:error` is posted. Uncaught errors and rejections are also posted.
+
+## Debug overlay
+
+Press **F3** (or set `engine.debug = true`) to toggle the overlay. The engine draws it in screen space, at the
+top left, with its own text renderer (the `mono` font). It shows:
+* FPS and the smoothed frame time, plus the CPU time spent in update and render
+* draw calls and sprites in the current frame
+* active tweens, particles and physics bodies
+
+Where the numbers come from:
+* The renderer counts draw calls and `drawSprite` calls per frame. The running counts are in `renderer.counter`, and the last frame's totals are in `renderer.stats`.
+* Particles and bodies are summed over every `ParticleEmitter` updated or drawn, and every `Physics` world stepped, since the previous frame. You don't need to register anything.
+* The overlay's own geometry is not counted.
 
 ## `engine.renderer`
 
@@ -256,6 +292,7 @@ Arcade AABB physics.
 | `ready()` | `{ type: 'webgame:ready' }` (called automatically after `load`) |
 | `error(message)` | `{ type: 'webgame:error', message }` (also posted automatically on crashes) |
 | `requestFullscreen()` | `{ type: 'webgame:fullscreen' }` (the parent fullscreens its player wrapper) |
+| `unlockAchievement(id)` | `{ type: 'webgame:achievement', id }`, posted once per id per session; returns `true` if posted. Ids must match `/^[a-z0-9_-]{1,32}$/`; invalid ids are warned about and ignored. Related: `isUnlocked(id)`, and `achievements` (ids unlocked this session) |
 | *(boot)* | `{ type: 'webgame:hello' }`, the storage handshake |
 | `storage.set/remove` | `{ type: 'webgame:save', data }`, debounced |
 
@@ -265,9 +302,34 @@ Messages accepted from the parent (only when `event.source === window.parent`):
 * `webgame:mute { muted }`
 * `webgame:load { data }`, the handshake reply (a later one is merged in)
 
+## Achievements
+
+Declare them in `game.json` and unlock them from the game:
+
+```json
+"achievements": [
+  { "id": "first_blood", "name": "First Blood", "description": "Destroy your first asteroid", "icon": "assets/ach_first.png" }
+]
+```
+```js
+engine.platform.unlockAchievement('first_blood'); // safe to call every frame: posted once per session
+```
+The backend checks these rules on upload, and so does `scripts/pack-examples.mjs`:
+* at most 50 achievements
+* `id` matches `^[a-z0-9_-]{1,32}$` and is unique
+* `name` is 1–60 characters
+* `description` is at most 200 characters
+* `icon` is optional; if given, it must be a bundle-relative image that exists in the bundle
+
+The platform records the unlock for logged-in players and shows a toast. To stay compatible with v1 engines,
+guard the call: `engine.platform.unlockAchievement?.(id)`.
+
 ## Examples
 
 * `examples/space-dodge`: a neon arcade shooter. It uses procedural textures, additive particles, screen shake, power-ups, the synth SFX and a stored high score.
 * `examples/pixel-peaks`: a 3-level pixel-art platformer. It uses `Tilemap` and `Physics` (one-way and moving platforms), scenes, a sprite sheet, tweens, touch buttons, and levels loaded from `assets/levels.json`.
 
-Both games call `engine.platform.submitScore` on game over.
+* `examples/brick-breaker`: a six-level neon brick breaker with levels loaded from `assets/levels.json`. It has tough, steel and explosive bricks; six power-ups (wide paddle, multi-ball, slow ball, lasers, catch, extra life); combo multipliers; tweened level intros; and achievement badge icons in `assets/`.
+
+All three games call `engine.platform.submitScore` on game over and keep their best score in `engine.storage`.
+Each declares achievements in game.json: brick-breaker has 6 (with icons), the other two have 3 each.

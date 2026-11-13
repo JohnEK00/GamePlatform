@@ -1,6 +1,7 @@
-/** Asset loading relative to the game bundle's baseUrl. */
+/** Asset loading: in-memory bundle files first (boot option `files`), then relative to the bundle's baseUrl. */
 import type { AudioManager, Sound } from './audio';
 import type { Renderer, TextureOptions } from './renderer';
+import { BundleFiles } from './files';
 import { SpriteSheet, Texture } from './texture';
 
 export class Assets {
@@ -13,6 +14,8 @@ export class Assets {
     readonly baseUrl: string,
     private readonly renderer: Renderer,
     private readonly audio: AudioManager,
+    /** In-memory bundle files (boot option `files`); empty when the bundle is served over HTTP. */
+    readonly files: BundleFiles = new BundleFiles(null, baseUrl),
   ) {}
 
   /** 0..1 progress of all loads started so far. */
@@ -20,8 +23,13 @@ export class Assets {
     return this.total === 0 ? 1 : this.loaded / this.total;
   }
 
-  /** Absolute URL of a bundle-relative path. */
+  /**
+   * URL of a bundle-relative path: a `blob:` object URL for in-memory files (revoked on destroy),
+   * otherwise resolved against baseUrl.
+   */
   url(path: string): string {
+    const mem = this.files.objectUrl(path);
+    if (mem) return mem;
     try {
       return new URL(path, this.baseUrl || (typeof location !== 'undefined' ? location.href : undefined)).href;
     } catch {
@@ -49,6 +57,8 @@ export class Assets {
   }
 
   private async fetchOk(path: string): Promise<Response> {
+    const mem = this.files.response(path);
+    if (mem) return mem;
     const url = this.url(path);
     let res: Response;
     try {

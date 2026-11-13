@@ -6,7 +6,11 @@ import { useApi, usePlatform } from "../context/config";
 import { useToast } from "../context/toast";
 import { Comments } from "../components/Comments";
 import { ConfirmDialog, ErrorState, ProgressBar, Skeleton, TagChip, UserLink } from "../components/common";
-import { clearGameSave, GamePlayer, hasGameSave } from "../components/GamePlayer";
+import { clearGameSave, discardPendingCloudSave, GamePlayer, hasGameSave } from "../components/GamePlayer";
+import { GameAchievements } from "../components/Achievements";
+import { FavoriteButton } from "../components/Favorite";
+import { ReportButton } from "../components/Report";
+import { useAuth } from "../context/auth";
 import { Leaderboard } from "../components/Leaderboard";
 import { StarRating } from "../components/StarRating";
 import { errorMessage, formatCount, formatDate, looksLikeZip, useAsync, useDocumentTitle } from "../util";
@@ -77,6 +81,9 @@ function OwnerActions({ game, onUpdated }: { game: Game; onUpdated: (g: Game) =>
         <Link to={`/games/${game.id}/edit`} className="pf-btn pf-btn--sm">
           ✎ Edit details
         </Link>
+        <Link to={`/games/${game.id}/stats`} className="pf-btn pf-btn--sm">
+          📈 Stats
+        </Link>
         <button type="button" className="pf-btn pf-btn--sm" onClick={pick} disabled={progress !== null}>
           ⬆ Replace bundle
         </button>
@@ -108,7 +115,30 @@ function OwnerActions({ game, onUpdated }: { game: Game; onUpdated: (g: Game) =>
 /** "Clear save data" for the game's locally persisted storage (webgame.save.{id}). */
 function ClearSaveData({ gameId, onCleared }: { gameId: string; onCleared: () => void }) {
   const toast = useToast();
+  const api = useApi();
+  const { user } = useAuth();
   const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const clear = async () => {
+    const had = hasGameSave(gameId);
+    setBusy(true);
+    // Drop any pending debounced cloud write first so it can't resurrect the data.
+    await discardPendingCloudSave(gameId);
+    clearGameSave(gameId);
+    let cloudError: unknown = null;
+    if (user) {
+      try {
+        await api.deleteSave(gameId);
+      } catch (e) {
+        if (!(isApiError(e) && e.status === 404)) cloudError = e;
+      }
+    }
+    setBusy(false);
+    setConfirm(false);
+    onCleared();
+    if (cloudError) toast.error("Local save cleared, but the cloud save couldn't be deleted", errorMessage(cloudError));
+    else toast.success(had || user ? "Save data cleared" : "No save data to clear");
+  };
   return (
     <div className="pf-gamepage__savebar">
       <button type="button" className="pf-linkbtn pf-linkbtn--danger" onClick={() => setConfirm(true)}>
@@ -119,16 +149,13 @@ function ClearSaveData({ gameId, onCleared }: { gameId: string; onCleared: () =>
         title="Clear save data?"
         confirmLabel="Clear and restart"
         danger
+        busy={busy}
         onCancel={() => setConfirm(false)}
-        onConfirm={() => {
-          const had = hasGameSave(gameId);
-          clearGameSave(gameId);
-          setConfirm(false);
-          onCleared();
-          toast.success(had ? "Save data cleared" : "No save data to clear");
-        }}
+        onConfirm={() => void clear()}
       >
-        This deletes this game's progress stored in this browser and restarts the game.
+        {user
+          ? "This deletes your progress for this game — in this browser and your cloud save — and restarts the game."
+          : "This deletes this game's progress stored in this browser and restarts the game."}
       </ConfirmDialog>
     </div>
   );
@@ -140,6 +167,7 @@ export function GamePage() {
   const { data: game, loading, error, reload, setData } = useAsync(() => api.getGame(id), [api, id]);
   const [lbKey, setLbKey] = useState(0);
   const [playerKey, setPlayerKey] = useState(0);
+  const [achKey, setAchKey] = useState(0);
   useDocumentTitle(game?.title);
 
   if (error && isApiError(error) && error.status === 404) return <NotFoundPage what="game" />;
@@ -174,6 +202,7 @@ export function GamePage() {
           game={game}
           onPlayRecorded={(plays) => setData((g) => ({ ...(g ?? game), plays }))}
           onScoreSubmitted={() => setLbKey((k) => k + 1)}
+          onAchievementUnlocked={(r) => r.new && setAchKey((k) => k + 1)}
         />
         <ClearSaveData gameId={game.id} onCleared={() => setPlayerKey((k) => k + 1)} />
         <div className="pf-gamepage__header">
@@ -186,6 +215,14 @@ export function GamePage() {
               <span className="pf-muted">·</span>
               <span className="pf-muted">Updated {formatDate(game.updatedAt)}</span>
             </div>
+          </div>
+          <div className="pf-gamepage__actions">
+            <FavoriteButton gameId={game.id} gameTitle={game.title} favorites={game.favorites ?? 0} isFavorite={!!game.isFavorite} variant="full" />
+            {!game.isOwner && (
+              <ReportButton targetType="game" targetId={game.id} targetLabel={game.title} className="pf-btn pf-btn--ghost pf-btn--sm">
+                ⚑ Report
+              </ReportButton>
+            )}
           </div>
         </div>
         {game.tags.length > 0 && (
@@ -200,6 +237,7 @@ export function GamePage() {
         ) : (
           <p className="pf-muted">No description provided.</p>
         )}
+        {(!game.achievements || game.achievements.length > 0) && <GameAchievements gameId={game.id} refreshKey={achKey} />}
         <Comments gameId={game.id} isGameOwner={game.isOwner} />
       </div>
       <aside className="pf-gamepage__side">

@@ -1,4 +1,5 @@
 /** Pooled particle emitter. Update with emitter.update(dt), draw with emitter.draw(renderer). */
+import { activity } from './debug';
 import { Color, lerp, type ColorLike } from './math';
 import type { BlendMode, Renderer } from './renderer';
 import type { SpriteSheet, Texture } from './texture';
@@ -120,6 +121,7 @@ export class ParticleEmitter {
   }
 
   update(dt: number): void {
+    activity.emitter(this);
     const cfg = this.config;
     if (this.emitting && (cfg.rate ?? 0) > 0) {
       this.acc += dt * cfg.rate!;
@@ -149,6 +151,7 @@ export class ParticleEmitter {
   }
 
   draw(r: Renderer): void {
+    activity.emitter(this);
     if (this.live.length === 0) return;
     const cfg = this.config;
     const prevBlend = cfg.blend;

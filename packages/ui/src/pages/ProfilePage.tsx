@@ -4,6 +4,7 @@ import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
 import { Avatar, EmptyState, ErrorState, Skeleton } from "../components/common";
 import { GameGrid } from "../components/GameCard";
+import { RecentAchievements } from "../components/Achievements";
 import { formatCount, formatDate, useAsync, useDocumentTitle } from "../util";
 import { NotFoundPage } from "./NotFoundPage";
 
@@ -63,6 +64,8 @@ export function ProfilePage() {
           </>
         )}
       </section>
+
+      {data && <RecentAchievements username={data.user.username} />}
 
       <h2 className="pf-section-title">Games</h2>
       {data && data.games.length === 0 ? (

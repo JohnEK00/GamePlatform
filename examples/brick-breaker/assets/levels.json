@@ -1,0 +1,80 @@
+{
+  "legend": {
+    ".": "empty",
+    "r": "red", "o": "orange", "y": "yellow", "g": "green", "c": "cyan", "b": "blue", "p": "purple",
+    "T": "tough (2 hits)", "H": "hard (3 hits)", "X": "steel (indestructible)", "*": "explosive"
+  },
+  "levels": [
+    {
+      "name": "Warm Up",
+      "rows": [
+        "............",
+        "rrrrrrrrrrrr",
+        "oooooooooooo",
+        "yyyyyyyyyyyy",
+        "gggggggggggg",
+        "cccccccccccc"
+      ]
+    },
+    {
+      "name": "Pyramid",
+      "rows": [
+        ".....TT.....",
+        "....pppp....",
+        "...bbbbbb...",
+        "..cccccccc..",
+        ".gggg**gggg.",
+        "yyyyyyyyyyyy",
+        "oo..oooo..oo"
+      ]
+    },
+    {
+      "name": "Checkers",
+      "rows": [
+        "r.o.y.g.c.b.",
+        ".p.r.o.y.g.c",
+        "b.p.*.o.y.g.",
+        ".c.b.p.r.*.y",
+        "g.c.b.p.r.o.",
+        ".T.T.T.T.T.T"
+      ]
+    },
+    {
+      "name": "Fortress",
+      "rows": [
+        "X..........X",
+        "XTTTTTTTTTTX",
+        "XrrrrrrrrrrX",
+        "Xoo*oooo*ooX",
+        "XyyyyyyyyyyX",
+        "............",
+        "XXXX....XXXX"
+      ]
+    },
+    {
+      "name": "Invaders",
+      "rows": [
+        "..g......g..",
+        "...g....g...",
+        "..gTggggTg..",
+        ".gg*gggg*gg.",
+        "gggggggggggg",
+        "g.gggggggg.g",
+        "g.g......g.g",
+        "...gg..gg..."
+      ]
+    },
+    {
+      "name": "Gauntlet",
+      "rows": [
+        "HHHHHHHHHHHH",
+        "X.X.X..X.X.X",
+        "pppp*pp*pppp",
+        "bbbbbbbbbbbb",
+        "TTT.TTTT.TTT",
+        "cc*cccccc*cc",
+        "XXX......XXX"
+      ]
+    }
+  ]
+}

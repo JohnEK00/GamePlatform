@@ -86,6 +86,7 @@ pub async fn submit_score(
     ApiJson(body): ApiJson<ScoreBody>,
 ) -> AppResult<(StatusCode, Json<Score>)> {
     fetch_visible_game(&state, &game_id, Some(&user.id)).await?;
+    crate::routes::games::limit_user(&state, crate::ratelimit::Limit::Score, &user.id)?;
     let s = body.score;
     // ±2^53: the range where f64 represents integers exactly.
     const LIMIT: f64 = 9_007_199_254_740_992.0;

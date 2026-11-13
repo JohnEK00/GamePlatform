@@ -195,3 +195,29 @@ impl FromRequestParts<AppState> for MaybeAuthUser {
         }
     }
 }
+
+/// Required authentication with the `admin` role: 401 without a valid token, 403 otherwise.
+#[derive(Debug, Clone)]
+pub struct AdminUser {
+    pub id: String,
+}
+
+impl FromRequestParts<AppState> for AdminUser {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let user = AuthUser::from_request_parts(parts, state).await?;
+        let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+            .bind(&user.id)
+            .fetch_optional(&state.db)
+            .await?;
+        if role.as_deref() == Some("admin") {
+            Ok(AdminUser { id: user.id })
+        } else {
+            Err(AppError::Forbidden("Administrator access required".into()))
+        }
+    }
+}

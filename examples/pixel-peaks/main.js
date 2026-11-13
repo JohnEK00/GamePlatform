@@ -155,6 +155,11 @@ const run = { score: 0, lives: 3, coins: 0, level: 0, best: 0 };
 let art = null;
 let levels = null;
 
+// Achievements are declared in game.json. unlockAchievement is v2; guard so older engines still run.
+function unlock(engine, id) {
+  if (typeof engine.platform.unlockAchievement === 'function') engine.platform.unlockAchievement(id);
+}
+
 function jumpPressed(input) {
   const pad = input.gamepad(0);
   return input.wasPressed('Space') || input.wasPressed('ArrowUp') || input.wasPressed('KeyW') || input.wasPressed('KeyZ') || pad.wasPressed('A');
@@ -273,6 +278,7 @@ function finishRun(engine, won) {
     engine.storage.set('best', run.best);
   }
   engine.platform.submitScore(run.score);
+  if (won) unlock(engine, 'summit');
   const title = won ? 'YOU WIN!' : 'GAME OVER';
   const sub = `Score ${run.score}   ·   Coins ${run.coins}${isBest ? '\nNEW BEST!' : ''}`;
   engine.scenes.push(new MessageScene(title, sub, (e) => {
@@ -476,6 +482,7 @@ class PlayScene {
         b.enabled = false;
         p.vy = jumpHeld(engine.input) ? -330 : -220;
         this.addScore(engine, 200, b.centerX, b.y);
+        unlock(engine, 'slime_stomper');
         this.gore.burst(12, b.centerX, b.centerY);
         engine.camera.shake(2, 0.15);
         engine.audio.tone({ freq: 180, freqEnd: 90, duration: 0.15, type: 'square', volume: 0.2 });
@@ -492,6 +499,7 @@ class PlayScene {
       if (Math.abs(p.centerX - c.x) < 10 && Math.abs(p.centerY - c.y) < 12) {
         c.taken = true;
         run.coins++;
+        if (run.coins >= 25) unlock(engine, 'coin_collector');
         this.addScore(engine, 100, c.x, c.y - 6);
         this.sparkle.burst(10, c.x, c.y);
         engine.audio.tone({ freq: 988, duration: 0.06, type: 'square', volume: 0.12 });
