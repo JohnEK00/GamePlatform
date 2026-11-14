@@ -10,7 +10,7 @@ A full-stack platform for making, uploading and playing browser games. It has fi
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/API.md](docs/API.md) and [docs/GAME_FORMAT.md](docs/GAME_FORMAT.md).
 
 ## Prerequisites
-Node 20+ (tested on 24), Rust stable (tested on 1.96), and on Windows the WebView2 runtime plus MSVC build tools for Tauri.
+Node 22.12+ (tested on 24; vitest and jsdom need 22.12+), Rust stable (tested on 1.96), and on Windows the WebView2 runtime plus MSVC build tools for Tauri.
 
 ## Quick start (dev)
 ```sh

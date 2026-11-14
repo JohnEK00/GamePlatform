@@ -84,7 +84,7 @@ When `WEB_DIST` is set, any GET not matched above (including `/games/{id}` and `
 `/api/*`: allow any origin listed in env `CORS_ORIGINS` (comma list; default `http://localhost:5173,http://localhost:1420,http://tauri.localhost,tauri://localhost`), methods GET/POST/PUT/PATCH/DELETE, headers Authorization + Content-Type.
 
 ## Backend env
-`PORT` (8080), `DATABASE_URL` (`sqlite://data/webgame.db?mode=rwc`), `DATA_DIR` (`data`), `JWT_SECRET` (dev default with a warning), `ENGINE_DIST` (`../packages/engine/dist`), `WEB_DIST` (optional; serve SPA), `CORS_ORIGINS`, `PUBLIC_ORIGIN` (optional, e.g. `https://arcade.example.com`; when set, `/play` uses it as `{ORIGIN}` instead of the request `Host` header — recommended in production).
+`PORT` (8080), `DATABASE_URL` (`sqlite://data/webgame.db?mode=rwc`), `DATA_DIR` (`data`), `JWT_SECRET` (dev default with a warning), `ENGINE_DIST` (`../packages/engine/dist`), `WEB_DIST` (optional; serve SPA), `CORS_ORIGINS`, `ADMIN_USERNAMES` (comma list; register those accounts BEFORE listing them, or anyone can claim an unregistered name), `RATE_LIMIT` (`off` disables), `TRUST_PROXY` (number of trusted reverse-proxy hops; `true` = 1; client IP = n-th X-Forwarded-For entry from the right), `PUBLIC_ORIGIN` (optional, e.g. `https://arcade.example.com`; when set, `/play` uses it as `{ORIGIN}` instead of the request `Host` header — recommended in production).
 
 
 ---
@@ -166,3 +166,149 @@ Exceeding → 429 `rate_limited` + `Retry-After`. Disable with `RATE_LIMIT=off` 
 
 ## Studio player
 `GET /play/studio`: player HTML for unsaved projects (same CSP/sandbox headers as /play/{id}, `Access-Control-Allow-Origin: *`). See GAME_FORMAT.md "Studio protocol".
+
+
+---
+
+## F001 additions
+
+Leaderboards 2.0 (spec: `docs/features/F001-leaderboards-2.md`). All earlier rules apply.
+
+### Types
+```ts
+type LeaderboardPeriod = "day" | "week" | "all"
+type LeaderboardConfig = {
+  order: "desc" | "asc";        // "desc": higher is better (default); "asc": lower is better
+  format: "number" | "time";    // "time": score is milliseconds (default "number")
+  label: string;                // column label, "" = UI default; max 24 chars
+}
+type Game = { ...v2, leaderboard: LeaderboardConfig }   // + leaderboard (from game.json; defaults when absent)
+
+type Leaderboard = {
+  period: LeaderboardPeriod;
+  periodStart: string | null;   // RFC3339 UTC (ms, "Z"), inclusive; null for "all"
+  periodEnd: string | null;     // RFC3339 UTC, exclusive; null for "all"
+  config: LeaderboardConfig;
+  entries: Score[];             // each user's best score inside the window, best first; Score.rank = rank in this window
+  totalPlayers: number;         // distinct users with >= 1 score in the window
+  me: Score | null;             // 🔓 the viewer's best in the window with its rank; null if anonymous or no score
+}
+
+type ScoreSubmitResult = Score & {   // superset of v1 Score; `rank` keeps its v1 meaning (all-time rank of THIS score among other users' bests)
+  personalBest: boolean;             // true if this is the user's first score, or strictly better than their previous all-time best (per order)
+  ranks: { day: number; week: number; all: number };   // rank of the user's best score in each window, after this submit
+}
+```
+
+### Periods and ranking
+- `day` = [today 00:00:00.000Z, tomorrow 00:00:00.000Z).
+- `week` = ISO week: [Monday 00:00:00.000Z, next Monday 00:00:00.000Z).
+- `all` has no bounds.
+- A score belongs to the window that contains its `createdAt`. Server time is the source of truth.
+- "Best" is `MAX(score)` for `desc` and `MIN(score)` for `asc`. On equal scores the earlier `createdAt` is listed first.
+- Ranks use competition ranking (1, 2, 2, 4).
+
+### Endpoints
+| Method | Path | Query / Body | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/leaderboard | `?period=day\|week\|all` (default `all`) `&limit=10` (1–100, clamped) | `Leaderboard` |
+| GET 🔓 | /api/games/{id}/scores | v1 query + `period` (default `all`) | `Score[]`, now honours `order` and `period` (same as `Leaderboard.entries`) |
+| POST 🔒 | /api/games/{id}/scores | `{ score }` (v1 rules) | 201 `ScoreSubmitResult` |
+
+- An invalid `period` → 400 `bad_request`, and a non-integer `limit` → 400 (same as v1 `/scores`).
+- Visibility follows `GET /api/games/{id}`: an unpublished game → 404 unless the viewer is the owner.
+- `POST …/scores` on a `format: "time"` game: the score must satisfy 0 ≤ score ≤ 86400000 (24h in ms), else 422 `validation`.
+
+### Rate limits
+- Leaderboard reads (`GET …/leaderboard`): 120/min, per user when authenticated and per IP otherwise.
+- `GET …/scores` is unchanged (unlimited).
+- Score submits keep the existing 60/min.
+
+
+---
+
+## F002 additions
+
+Follow creators and an activity feed (spec: `docs/features/F002-follow-and-feed.md`). All earlier rules apply, including F001.
+
+### Types
+```ts
+type FollowResponse = { following: boolean; followers: number /* the target's follower count after the change */ }
+
+type UserProfileResponse = {      // GET /api/users/{username}; v1 { user, games } + three fields
+  user: User; games: GameSummary[];
+  followers: number;              // users following this user
+  following: number;              // users this user follows
+  isFollowing: boolean;           // 🔓 the viewer follows this user; false when anonymous or viewing yourself
+}
+
+type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked"
+type FeedItem = {
+  id: string;                     // opaque cursor value (decimal string)
+  kind: FeedItemKind;
+  actor: UserRef;                 // the game owner for gamePublished/gameUpdated; the player otherwise
+  game: GameSummary;
+  reason: "following" | "favorite";   // "favorite": shown only because the viewer favorited the game (gamePublished/gameUpdated only)
+  createdAt: string;              // RFC3339 UTC; for coalesced items, the latest occurrence
+  version: number | null;         // gamePublished/gameUpdated: the game version at event time; else null
+  score: {                        // personalBest only; else null
+    value: number;                // the new best
+    first: boolean;               // true when it was the actor's first score on this game
+    leaderboard: LeaderboardConfig;   // the game's CURRENT config (F001), for formatting
+  } | null;
+  achievement: (AchievementDef & { count: number /* unlocks by the actor in this game that UTC day, >= 1; this def is the latest */ }) | null;   // achievementUnlocked only
+}
+type FeedPage = { items: FeedItem[]; nextCursor: string | null }
+
+type SuggestedCreator = {
+  user: UserRef;
+  reason: "favorited" | "popular";   // "favorited": owns games the viewer favorited
+  games: number;                     // their published game count (>= 1)
+}
+```
+Clients must ignore feed items with an unknown `kind` (more kinds may be added later).
+
+### Endpoints
+| Method | Path | Query / Body | Response |
+|---|---|---|---|
+| PUT 🔒 | /api/users/{username}/follow | – | `FollowResponse` `{ following: true }` (idempotent) |
+| DELETE 🔒 | /api/users/{username}/follow | – | `FollowResponse` `{ following: false }` (idempotent; 200 even if not following) |
+| GET | /api/users/{username}/followers | `?page=1&perPage=24` (max 100) | `Page<UserRef>`, newest follow first |
+| GET | /api/users/{username}/following | `?page=1&perPage=24` (max 100) | `Page<UserRef>`, newest follow first |
+| GET 🔓 | /api/users/{username} | – | `UserProfileResponse` (now with `followers`, `following`, `isFollowing`) |
+| GET 🔒 | /api/feed | `?cursor=&limit=20&kinds=` | `FeedPage`, newest first |
+| GET 🔒 | /api/feed/suggestions | – | `SuggestedCreator[]` (0–6 entries) |
+
+- `{username}` is matched case-insensitively; an unknown user → 404 `not_found`.
+- Follow yourself → 422 `validation`. Following more than **2000** users → 422 `validation` (only a PUT that would create a new row is refused).
+- `/api/feed`:
+  - `cursor`: optional, a `FeedItem.id` from a previous page. Returns items strictly older (lower id). Not a positive integer string → 400 `bad_request`.
+  - `limit`: 1–50, clamped, default 20. Non-integer → 400.
+  - `kinds`: optional comma list of `FeedItemKind`. Empty or absent = all. Any unknown value → 400.
+  - `nextCursor` is the last item's `id` when more items exist, else `null`.
+- Feed sources (an event is included when **all** apply):
+  1. Its actor is a user the viewer follows, **or** its kind is `gamePublished`/`gameUpdated` and the viewer has favorited the game.
+  2. The actor is not the viewer.
+  3. The game is currently published.
+  4. For `achievementUnlocked`, the achievement is still defined by the game's current version.
+  When both (1) conditions hold, `reason` is `"following"`.
+- `/api/feed/suggestions` returns up to 6 users. It never includes the viewer, users the viewer already follows, or users without a published game:
+  1. Owners of games the viewer favorited (`reason: "favorited"`), ranked by the number of their games the viewer favorited, then by most recent favorite.
+  2. Filled up with owners ranked by total plays across their published games (`reason: "popular"`).
+
+### Event production (server side; no new client calls)
+| Kind | Written when | Coalescing |
+|---|---|---|
+| `gamePublished` | a game becomes published for the **first time**: `POST /api/games` with `published` true, or `PATCH` unpublished → published while `first_published_at` is null | at most one per game, ever |
+| `gameUpdated` | `PUT /api/games/{id}/bundle` succeeds while the game is published | replaces any `gameUpdated` row for the same game from the last 24h |
+| `personalBest` | `POST /api/games/{id}/scores` returns `personalBest: true` (F001) on a published game, and the submitter is not the owner | one per (actor, game, UTC day); the latest replaces earlier ones |
+| `achievementUnlocked` | `POST /api/games/{id}/achievements/{achId}` returns `new: true` on a published game, and the user is not the owner | one per (actor, game, UTC day); `count` increments, the latest achievement is shown |
+
+- "Replaces" means the old row is deleted and a new one inserted, so the item moves to the top of the feed with a new `id`.
+- Writing an event is best effort: a failure is logged and never changes the response of the triggering request.
+- Studio sessions make no API calls, so they produce no events.
+
+### Rate limits
+- Follow + unfollow (`PUT`/`DELETE …/follow`, shared bucket): 60 per 10 min, per user.
+- Feed reads (`GET /api/feed` and `/api/feed/suggestions`, shared bucket): 60/min, per user.
+- Follower/following lists and profiles: unlimited (as other public reads).

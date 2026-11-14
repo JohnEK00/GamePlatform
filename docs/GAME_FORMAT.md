@@ -57,7 +57,7 @@ Backend renders this HTML (engine-dev owns nothing here; backend-dev owns it, bu
   await boot(document.getElementById("game"), mod.default, { width: {W}, height: {H}, baseUrl: base });
 </script></body></html>
 ```
-`{ORIGIN}` is the backend's absolute origin derived from the request `Host` header (absolute URLs are needed because the sandboxed iframe has an opaque origin).
+`{ORIGIN}` is `PUBLIC_ORIGIN` when set, otherwise the backend's absolute origin derived from the request `Host` header (+ `X-Forwarded-Proto`) (absolute URLs are needed because the sandboxed iframe has an opaque origin).
 
 
 ---
@@ -93,3 +93,93 @@ F3 (or `engine.debug = true`) toggles an overlay: FPS, frame ms, draw calls, spr
 4. Errors at any stage are posted as `webgame:error` (with line/column when available).
 
 All other `webgame:*` messages behave as on /play/{id}. The parent must NOT call score/achievement/play APIs for studio sessions; it shows "would unlock / would submit" toasts instead.
+
+
+---
+
+## F001 additions
+
+Leaderboards 2.0 (spec: `docs/features/F001-leaderboards-2.md`).
+
+### `leaderboard` in game.json (optional)
+```json
+"leaderboard": { "order": "asc", "format": "time", "label": "Best time" }
+```
+- `order`: `"desc"` (higher is better, default) or `"asc"` (lower is better).
+- `format`: `"number"` (default) or `"time"`, where the score is an integer number of milliseconds, displayed as `m:ss.mmm` (or `h:mm:ss.mmm` from 1h).
+- `label`: optional string, trimmed, 0–24 chars. `""` means the UI default.
+- Every key is optional, and unknown keys are ignored. If `leaderboard` is present but is not an object, or any key has a wrong type or value → 422 `validation` on upload or bundle replace.
+- The values are stored per game version (a bundle replace updates them) and exposed as `Game.leaderboard`.
+
+### Engine API
+```ts
+type LeaderboardPeriod = "day" | "week" | "all";
+type LeaderboardView = {
+  period: LeaderboardPeriod;
+  order: "desc" | "asc"; format: "number" | "time"; label: string;
+  totalPlayers: number;
+  entries: { rank: number; name: string /* displayName, or username if empty */; score: number; display: string /* formatted per format */; isMe: boolean }[];
+  me: { rank: number; score: number; display: string } | null;   // null when anonymous or no score in the period
+  sample?: true;                                                   // set by the Studio preview
+};
+type ScoreResultView = {
+  score: number; display: string;
+  rank: number;                                       // ScoreSubmitResult.rank
+  personalBest: boolean;
+  ranks: { day: number; week: number; all: number };
+};
+```
+- `engine.platform.getLeaderboard(opts?: { period?: LeaderboardPeriod; limit?: number }): Promise<LeaderboardView | null>`
+  - Defaults: `period` `"all"`, `limit` 10, clamped to 1–25.
+  - Resolves `null` on timeout (5000ms), when there is no parent window, on a reply carrying `error`, or on an invalid period (with a warning).
+  - At most 4 requests may be pending; extra calls resolve `null` immediately (with a warning).
+- `engine.platform.submitScore(n): Promise<ScoreResultView | null>` (previously `void`)
+  - It posts synchronously as before.
+  - The promise resolves on the matching `webgame:score-result`, or `null` on timeout (8000ms), on `error`, or for non-finite `n` (which is not posted).
+  - Existing callers that ignore the return value are unaffected.
+- On engine destroy, all pending promises resolve `null`.
+
+### Messages
+| Direction | Message |
+|---|---|
+| game → parent | `{ type: "webgame:leaderboard-get", requestId: string, period: LeaderboardPeriod, limit: number }` |
+| parent → game | `{ type: "webgame:leaderboard", requestId: string, leaderboard: LeaderboardView \| null, error?: "unavailable" \| "rate_limited" }` |
+| game → parent | `{ type: "webgame:score", score: number, requestId?: string }` (`requestId` is new and optional) |
+| parent → game | `{ type: "webgame:score-result", requestId: string, result: ScoreResultView \| null, error?: "anonymous" \| "rate_limited" \| "failed" \| "studio" }` |
+
+- `requestId` is 1–64 chars. The engine uses `"lb-<n>"` / `"sc-<n>"`, and replies with an unknown `requestId` are ignored.
+- The engine accepts replies only from `window.parent`. The parent accepts requests only from its iframe's `contentWindow`.
+
+### Parent behaviour (GamePlayer on /play/{id})
+- Ignore malformed requests: a bad `requestId`, a `period` outside the three values, or a non-numeric `limit`. A numeric `limit` is rounded and clamped to 1–25.
+- `webgame:leaderboard-get`:
+  - Call `GET /api/games/{id}/leaderboard?period=&limit=` with the viewer's session (anonymous allowed).
+  - Cache each `(period, limit)` pair for 10s, with at most one in-flight request per pair; concurrent requests share the result.
+  - Reply with a **sanitised** `LeaderboardView` built from `Leaderboard`: name, rank, score, display, `isMe` (`entry.user.id === viewer.id`), and `me`. Never include user ids, usernames distinct from the shown name, avatar URLs or any token.
+  - On a 429, reply `error: "rate_limited"`; on any other failure, reply `error: "unavailable"`.
+- `webgame:score` with `requestId`:
+  - Anonymous → reply `error: "anonymous"` at once.
+  - Otherwise submit as before. On success, reply with a `result` built from `ScoreSubmitResult`. On a 429, reply `error: "rate_limited"`; on other errors, reply `error: "failed"`.
+  - Without `requestId`, behaviour is unchanged.
+
+### Studio preview (/play/studio)
+- `webgame:leaderboard-get` → `sample: true` with 5 entries "Player 1"…"Player 5" and deterministic scores that respect the manifest's `order`/`format` (defaults if absent), `me: null`, `totalPlayers: 5`.
+- `webgame:score` with `requestId` → `error: "studio"` (the "would submit" toast is kept).
+- No API calls are made.
+
+
+---
+
+## F002 additions
+
+Follow creators and an activity feed (spec: `docs/features/F002-follow-and-feed.md`).
+
+**No engine, bundle or message changes.** The `game.json` format, the engine API and the `webgame:*` protocol are unchanged. This section tells creators which existing calls now also produce feed items for the player's followers (rules in API.md § F002 "Event production"):
+- `engine.platform.submitScore(n)`: when the result has `personalBest: true` (F001), followers of the player see "set a new personal best in {game}". It's limited to one item per player, game and UTC day, keeping the best. Calling `submitScore` more often does not create more items.
+- `engine.platform.unlockAchievement(id)`: on a first unlock, followers see "unlocked {name}". Several unlocks in one UTC day are grouped ("…and 2 more").
+- A published bundle replace shows as "updated {game} to v{version}" to the creator's followers and to everyone who favorited the game, at most once per 24h.
+- The owner's own scores and unlocks on their own game never produce feed items. Neither do Studio previews (`/play/studio`), since they make no API calls.
+
+## Review-fix additions (REVIEW-2026-11-14-1)
+
+- **Studio multi-file modules (R3):** on `studio-load`, the /play/studio page creates a `blob:` URL for every `.js` file in `files`. It rewrites relative module specifiers (`./` or `../`) in static `import ... from`, `export ... from`, bare `import "..."` and dynamic `import("...")` with string literals, so each one points at the dependency's blob URL. Dependencies are processed first, in topological order. Cycles, missing files and specifiers that escape the bundle are reported as `webgame:error` with a clear message. Non-relative specifiers are left unchanged. Errors carry `file` (the bundle-relative path, mapped back from the blob URL) next to `line`/`column`, so the Studio can attribute errors to the right file.

@@ -23,4 +23,11 @@ Read docs/ARCHITECTURE.md, docs/API.md and docs/GAME_FORMAT.md first. They are t
 6. After the agents report back, verify their claims yourself: run the builds and tests, start the backend, and curl /api/health. Then send fixes back to the owning agent, or dispatch qa-reviewer.
 7. Shared node_modules: only you run `npm install` (to avoid concurrent installs). Agents request new dependencies in their reports.
 
+## Continuous feature loop
+1. Ask `product-planner` to spec the next feature. It updates docs/ROADMAP.md, writes docs/features/NNN-*.md and appends any contract changes.
+2. Review the spec, then dispatch the per-area tasks to the specialists, in parallel where the areas are independent.
+3. Verify all builds and tests yourself. Then commit with the message `feat(NNN): <title>` and push to origin/main.
+4. Run `project-reviewer` periodically. It writes docs/reviews/REVIEW-*.md. Route its findings to the owning specialists, then verify, commit as `fix: …` and push.
+5. Repeat. Before each Rust build, check disk space (C: is small) and use CARGO_INCREMENTAL=0.
+
 Note: subagents cannot spawn their own subagents, so the team is flat (you → specialists). Split large areas into several focused tasks for the same specialist instead of nesting.
