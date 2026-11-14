@@ -19,7 +19,7 @@ pub mod users;
 pub mod versions;
 
 use axum::extract::{DefaultBodyLimit, Request};
-use axum::http::{HeaderValue, Method, header};
+use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
@@ -32,6 +32,8 @@ use crate::error::AppError;
 
 pub const UPLOAD_BODY_LIMIT: usize = 60 * 1024 * 1024;
 pub const IMAGE_BODY_LIMIT: usize = 3 * 1024 * 1024;
+/// F013: the version a downloaded bundle belongs to (lowercase for `HeaderName::from_static`).
+pub const GAME_VERSION_HEADER: &str = "x-game-version";
 
 async fn health() -> Json<serde_json::Value> {
     Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
@@ -87,7 +89,9 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/games/{id}/bundle",
-            put(games::upload_bundle).layer(upload_limit),
+            get(games::download_bundle)
+                .put(games::upload_bundle)
+                .layer(upload_limit),
         )
         .route(
             "/games/{id}/thumbnail",
@@ -172,7 +176,12 @@ fn api_cors(origins: &[String]) -> CorsLayer {
             Method::DELETE,
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
-        .expose_headers([header::RETRY_AFTER])
+        // F013: the bundle download's version and file name are read cross-origin.
+        .expose_headers([
+            HeaderName::from_static(GAME_VERSION_HEADER),
+            header::CONTENT_DISPOSITION,
+            header::RETRY_AFTER,
+        ])
         .max_age(std::time::Duration::from_secs(3600))
 }
 

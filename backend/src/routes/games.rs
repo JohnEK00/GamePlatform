@@ -2,7 +2,8 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::Row;
@@ -12,12 +13,14 @@ use crate::activity;
 use crate::auth::{AuthUser, MaybeAuthUser};
 use crate::bundle::{self, AchievementMeta, BundleMeta};
 use crate::error::{AppError, AppResult};
+use crate::export::{self, ExportError};
 use crate::extract::{ApiJson, ApiMultipart, ApiPath, ApiQuery};
 use crate::models::{
     AchievementDef, GAME_SELECT, Game, GameRow, GameSummary, GameVersion, Page,
     achievement_icon_url, game_row_from_row, now_rfc3339, rating_avg,
 };
 use crate::ratelimit::{ClientIp, Limit, key_for};
+use crate::routes::GAME_VERSION_HEADER;
 use crate::storage::validate_image;
 use crate::trending;
 use crate::versions;
@@ -493,7 +496,8 @@ pub fn list_filter(query: &ListQuery, viewer: Option<&str>) -> AppResult<(String
 }
 
 /// F003 `sort=trending` order (needs `GAME_SELECT`'s `plays_week` alias).
-pub const TRENDING_ORDER: &str = "COALESCE((SELECT tr.score FROM game_trending tr WHERE tr.game_id = g.id), 0) DESC,      plays_week DESC, g.plays DESC, g.created_at DESC, g.id";
+pub const TRENDING_ORDER: &str = "COALESCE((SELECT tr.score FROM game_trending tr WHERE tr.game_id = g.id), 0) DESC, \
+     plays_week DESC, g.plays DESC, g.created_at DESC, g.id";
 
 /// `ORDER BY` for `sort`; each matches an index of migration 0004 column for column.
 pub fn list_order(sort: Option<&str>) -> AppResult<&'static str> {
@@ -759,7 +763,8 @@ pub async fn upload_bundle(
         let now = now_rfc3339();
         let mut tx = state.db.begin().await?;
         let r = sqlx::query(
-            "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, score_order = ?,              score_format = ?, score_label = ?, updated_at = ? WHERE id = ? AND version = ?",
+            "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, score_order = ?, \
+             score_format = ?, score_label = ?, updated_at = ? WHERE id = ? AND version = ?",
         )
         .bind(new_version)
         .bind(&meta.entry)
@@ -806,6 +811,96 @@ pub async fn upload_bundle(
     }
 
     Ok(Json(build_game(&state, &id, Some(&user.id)).await?))
+}
+
+/// F013 `GET /api/games/{id}/bundle` (owner only): the current version's stored files as a
+/// zip. Never takes the R1 `bundle_locks` claim, so it can't make a replace fail; a replace
+/// that lands during the build turns into a 409 here instead.
+pub async fn download_bundle(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Response> {
+    let game = fetch_owned_game(&state, &id, &user.id).await?;
+    limit_user(&state, Limit::BundleDownload, &user.id)?;
+    let Ok(permit) = state.export_slots.clone().try_acquire_owned() else {
+        let mut res = AppError::ServiceUnavailable(
+            "The server is busy preparing downloads; try again shortly".into(),
+        )
+        .into_response();
+        res.headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(5u32));
+        return Ok(res);
+    };
+
+    let version = game.version;
+    let created_at: Option<String> = sqlx::query_scalar(
+        "SELECT created_at FROM game_versions WHERE game_id = ? AND version = ?",
+    )
+    .bind(&id)
+    .bind(version)
+    .fetch_optional(&state.db)
+    .await?;
+    let date = created_at
+        .as_deref()
+        .and_then(export::zip_date)
+        .or_else(|| export::zip_date(&game.updated_at))
+        .unwrap_or_default();
+    let dir = state.storage.version_dir(&id, version);
+    let built = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        export::build_bundle_zip(&dir, date)
+    })
+    .await?;
+
+    let now: Option<i64> = sqlx::query_scalar("SELECT version FROM games WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await?;
+    let conflict =
+        || AppError::Conflict("The game was updated while preparing the download; retry".into());
+    match now {
+        None => return Err(AppError::not_found("Game")),
+        Some(v) if v != version => return Err(conflict()),
+        Some(_) => {}
+    }
+    let bytes = match built {
+        Ok(b) => b,
+        Err(ExportError::Vanished) => return Err(conflict()),
+        Err(ExportError::TooLarge) => {
+            return Err(AppError::PayloadTooLarge(
+                "The bundle is too large to download".into(),
+            ));
+        }
+        Err(e) => return Err(AppError::Internal(format!("export: {e}"))),
+    };
+
+    let disposition = format!(
+        "attachment; filename=\"{}-v{version}.zip\"",
+        export::download_slug(&game.title)
+    );
+    let headers = [
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/zip"),
+        ),
+        (
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(&disposition)
+                .map_err(|e| AppError::Internal(format!("header: {e}")))?,
+        ),
+        (
+            HeaderName::from_static(GAME_VERSION_HEADER),
+            HeaderValue::from(version),
+        ),
+        (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        (
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ),
+        (header::CONTENT_LENGTH, HeaderValue::from(bytes.len())),
+    ];
+    Ok((headers, bytes).into_response())
 }
 
 pub async fn upload_thumbnail(
@@ -886,7 +981,8 @@ pub async fn record_play(
                 .await?
                 .ok_or_else(|| AppError::not_found("Game"))?;
         sqlx::query(
-            "INSERT INTO play_events (game_id, user_id, day, created_at, viewer_key)              VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO play_events (game_id, user_id, day, created_at, viewer_key) \
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(viewer.id())

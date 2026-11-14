@@ -6,6 +6,7 @@ pub mod bundle;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod export;
 pub mod extract;
 pub mod locks;
 pub mod models;
@@ -37,7 +38,12 @@ pub struct AppState {
     pub play_dedupe: ratelimit::PlayDedupe,
     /// F003 trending snapshot freshness + single flight.
     pub trending: trending::TrendingCache,
+    /// F013: concurrent bundle-download builds (`EXPORT_SLOTS` permits, `try_acquire`).
+    pub export_slots: Arc<tokio::sync::Semaphore>,
 }
+
+/// F013: at most this many `GET /api/games/{id}/bundle` archives are built at once.
+pub const EXPORT_SLOTS: usize = 2;
 
 impl AppState {
     /// Create the data directories, open the database and run migrations.
@@ -52,6 +58,7 @@ impl AppState {
             bundle_locks: locks::KeyLocks::new(),
             play_dedupe: ratelimit::PlayDedupe::new(),
             trending: trending::TrendingCache::new(),
+            export_slots: Arc::new(tokio::sync::Semaphore::new(EXPORT_SLOTS)),
             config: Arc::new(config),
             storage,
         };

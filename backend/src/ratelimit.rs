@@ -40,6 +40,8 @@ pub enum Limit {
     Feed,
     /// F004 release-notes edits (`PATCH …/versions/{version}`): 30 per 10 min, per user
     VersionNotes,
+    /// F013 bundle downloads (`GET …/bundle`): 30/hour, per user
+    BundleDownload,
 }
 
 impl Limit {
@@ -57,6 +59,7 @@ impl Limit {
             Limit::Follow => (60, Duration::from_secs(600)),
             Limit::Feed => (60, Duration::from_secs(60)),
             Limit::VersionNotes => (30, Duration::from_secs(600)),
+            Limit::BundleDownload => (30, Duration::from_secs(3600)),
         }
     }
 }

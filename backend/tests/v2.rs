@@ -1052,10 +1052,12 @@ async fn rate_limit_429_exposes_retry_after_to_cors() {
         r.header("access-control-allow-origin"),
         "http://localhost:5173"
     );
-    assert_eq!(
+    // F013 exposes more headers (X-Game-Version, Content-Disposition) next to Retry-After.
+    assert!(
         r.header("access-control-expose-headers")
-            .to_ascii_lowercase(),
-        "retry-after"
+            .to_ascii_lowercase()
+            .split(',')
+            .any(|h| h.trim() == "retry-after")
     );
 }
 
