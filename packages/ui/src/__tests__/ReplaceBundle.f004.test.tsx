@@ -83,7 +83,8 @@ describe("EditGamePage F004: replace with notes + expectedVersion", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "New bundle (.zip)" })));
     expect(upload.disabled).toBe(false);
     const notes = screen.getByLabelText("What's new in this version (optional)") as HTMLTextAreaElement;
-    expect(notes.maxLength).toBe(1000);
+    // N8: the limit is enforced in code points by the field, not by the UTF-16 `maxlength` attribute.
+    expect(notes.hasAttribute("maxlength")).toBe(false);
     expect(notes.rows).toBe(4);
     fireEvent.change(notes, { target: { value: "New levels" } });
     await act(async () => fireEvent.click(upload));

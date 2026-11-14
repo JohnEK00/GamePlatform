@@ -1109,6 +1109,12 @@ textarea.pf-input {
   background: var(--pf-surface-3);
   color: var(--pf-text);
 }
+.pf-tabpanel {
+  border-radius: var(--pf-radius-sm, 6px);
+}
+.pf-tabpanel:focus:not(:focus-visible) {
+  outline: none;
+}
 
 .pf-grid {
   display: grid;

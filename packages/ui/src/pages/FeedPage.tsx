@@ -5,6 +5,7 @@ import { useApi } from "../context/config";
 import { Avatar, EmptyState, ErrorState, LoadError, Skeleton, Spinner } from "../components/common";
 import { FeedItem, FeedItemSkeleton, isKnownFeedItem } from "../components/FeedItem";
 import { FollowButton } from "../components/Follow";
+import { TabPanel, Tabs, type TabItem } from "../components/Tabs";
 import { errorMessage, formatCount, useAsync, useDocumentTitle } from "../util";
 
 /** localStorage key remembering the last selected feed tab. */
@@ -12,10 +13,11 @@ export const FEED_TAB_KEY = "webgame.feed.tab";
 
 export type FeedTab = "all" | "games";
 
-const TABS: { tab: FeedTab; label: string }[] = [
-  { tab: "all", label: "Everything" },
-  { tab: "games", label: "New games" },
+const TABS: TabItem<FeedTab>[] = [
+  { value: "all", label: "Everything" },
+  { value: "games", label: "New games" },
 ];
+const TABS_ID = "pf-feed-tabs";
 
 const TAB_KINDS: Record<FeedTab, FeedItemKind[] | undefined> = {
   all: undefined,
@@ -170,22 +172,10 @@ export function FeedPage() {
           <h1>Feed</h1>
           <p className="pf-muted">New games, updates and high scores from people you follow.</p>
         </div>
-        <div className="pf-tabs" role="tablist" aria-label="Feed filter">
-          {TABS.map((t) => (
-            <button
-              key={t.tab}
-              type="button"
-              role="tab"
-              aria-selected={tab === t.tab}
-              className={`pf-tab${tab === t.tab ? " is-active" : ""}`}
-              onClick={() => selectTab(t.tab)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <Tabs id={TABS_ID} label="Feed filter" items={TABS} value={tab} onChange={selectTab} />
       </header>
 
+      <TabPanel id={TABS_ID} value={tab}>
       {state.loading ? (
         <div className="pf-feed__list" aria-busy="true">
           <span className="pf-sr-only" role="status">
@@ -235,6 +225,7 @@ export function FeedPage() {
           )}
         </>
       )}
+      </TabPanel>
     </div>
   );
 }

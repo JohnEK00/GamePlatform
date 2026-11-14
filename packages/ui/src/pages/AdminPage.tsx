@@ -6,9 +6,11 @@ import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
 import { ConfirmDialog, EmptyState, ErrorState, Pagination, Skeleton, UserLink } from "../components/common";
 import { REPORT_REASONS } from "../components/Report";
+import { TabPanel, Tabs } from "../components/Tabs";
 import { errorMessage, formatDate, timeAgo, useAsync, useDocumentTitle } from "../util";
 
 const PER_PAGE = 25;
+const STATUS_TABS_ID = "pf-admin-status";
 
 const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => string; body: (r: Report) => string; danger: boolean }> = {
   dismiss: {
@@ -155,15 +157,23 @@ export function AdminPage() {
           <p className="pf-muted">Review reported games and comments.</p>
         </div>
       </header>
-      <div className="pf-tabs" role="tablist" aria-label="Report status">
-        {(["open", "resolved"] as const).map((s) => (
-          <button key={s} type="button" role="tab" aria-selected={status === s} className={`pf-tab${status === s ? " is-active" : ""}`} onClick={() => setStatus(s)}>
-            {s === "open" ? "Open" : "Resolved"}
-            {status === s && data ? <span className="pf-tab__count">{data.total}</span> : null}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        id={STATUS_TABS_ID}
+        label="Report status"
+        value={status}
+        onChange={setStatus}
+        items={(["open", "resolved"] as const).map((s) => ({
+          value: s,
+          label: (
+            <>
+              {s === "open" ? "Open" : "Resolved"}
+              {status === s && data ? <span className="pf-tab__count">{data.total}</span> : null}
+            </>
+          ),
+        }))}
+      />
 
+      <TabPanel id={STATUS_TABS_ID} value={status}>
       {error ? (
         <ErrorState error={error} onRetry={reload} />
       ) : loading && !data ? (
@@ -213,6 +223,7 @@ export function AdminPage() {
           }}
         />
       )}
+      </TabPanel>
     </div>
   );
 }

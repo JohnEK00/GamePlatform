@@ -4,6 +4,7 @@ import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
 import { EmptyState, ErrorState, Pagination, Skeleton, StarsDisplay, TagChip, Thumbnail } from "../components/common";
 import { GameGrid } from "../components/GameCard";
+import { ToggleGroup, type TabItem } from "../components/Tabs";
 import { formatCount, useAsync, useDocumentTitle } from "../util";
 
 const SORTS: { key: GameSort; label: string }[] = [
@@ -13,6 +14,7 @@ const SORTS: { key: GameSort; label: string }[] = [
   { key: "top", label: "Top rated" },
   { key: "favorites", label: "Most favorited" },
 ];
+const SORT_ITEMS: TabItem<GameSort>[] = SORTS.map((s) => ({ value: s.key, label: s.label }));
 const PER_PAGE = 24;
 const TRENDING_SHELF_SIZE = 8;
 
@@ -168,20 +170,8 @@ export function HomePage() {
             )}
             {games.data && <span className="pf-muted pf-section-title__count">{games.data.total}</span>}
           </h2>
-          <div className="pf-tabs" role="tablist" aria-label="Sort games">
-            {SORTS.map((s) => (
-              <button
-                key={s.key}
-                type="button"
-                role="tab"
-                aria-selected={sort === s.key}
-                className={`pf-tab${sort === s.key ? " is-active" : ""}`}
-                onClick={() => update({ sort: s.key === "new" ? null : s.key })}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          {/* A sort order, not tabs: a toggle-button group (aria-pressed). */}
+          <ToggleGroup label="Sort games" items={SORT_ITEMS} value={sort} onChange={(k) => update({ sort: k === "new" ? null : k })} />
         </div>
 
         <div className="pf-chips" aria-label="Filter by tag">

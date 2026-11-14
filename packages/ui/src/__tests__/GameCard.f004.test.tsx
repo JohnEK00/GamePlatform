@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
@@ -36,6 +36,44 @@ function wrap(children: ReactNode) {
     </WebGameProviders>,
   );
 }
+
+describe("GameCard accessible names (N7)", () => {
+  it("includes the Updated badge in the thumbnail link's accessible name", () => {
+    wrap(<GameCard game={base} />);
+    const link = screen.getByRole("link", { name: "Play Pixel Peaks, updated 2 hours ago" });
+    expect(link.querySelector(".pf-badge--updated")!.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("includes the Draft badge in the accessible name", () => {
+    wrap(<GameCard game={{ ...base, published: false }} showStatus />);
+    expect(screen.getByRole("link", { name: "Play Pixel Peaks, draft" })).toBeTruthy();
+  });
+
+  it("no badge: plain label", () => {
+    wrap(<GameCard game={{ ...base, lastUpdatedAt: old }} />);
+    expect(screen.getByRole("link", { name: "Play Pixel Peaks" })).toBeTruthy();
+  });
+
+  it("hides decorative glyphs from assistive tech and spells out plays", () => {
+    const { container } = wrap(
+      <>
+        <GameCard game={base} />
+        <GameCard game={{ ...base, id: "g2" }} highlight="trending" />
+      </>,
+    );
+    const glyphs = Array.from(container.querySelectorAll(".pf-card__meta span")).filter((s) => /[▶🔥]/u.test(s.textContent ?? "") && s.children.length === 0);
+    expect(glyphs.length).toBe(2);
+    for (const g of glyphs) expect(g.getAttribute("aria-hidden")).toBe("true");
+    // Visible text minus aria-hidden parts reads naturally.
+    const spoken = (el: Element) => {
+      const c = el.cloneNode(true) as Element;
+      c.querySelectorAll('[aria-hidden="true"]').forEach((n) => n.remove());
+      return c.textContent!.trim();
+    };
+    expect(spoken(container.querySelector('[title="4321 plays"]')!)).toBe("4.3k plays");
+    expect(spoken(container.querySelector(".pf-card__trending")!)).toBe("1.2k plays this week");
+  });
+});
 
 describe("GameCard F004 Updated badge", () => {
   it("shows the badge over the thumbnail for a recent lastUpdatedAt, with a relative title", () => {
@@ -81,7 +119,7 @@ describe("GameCard F004 Updated badge", () => {
         <GameCard game={{ ...base, id: "g2" }} highlight="related" sharedTags={["platformer", "pixel", "retro"]} />
       </>,
     );
-    expect(container.querySelector(".pf-card__trending")!.textContent).toBe("🔥 1.2k this week");
+    expect(container.querySelector(".pf-card__trending")!.textContent).toBe("🔥 1.2k plays this week");
     expect(container.querySelector(".pf-card__shared")!.textContent).toBe("#platformer #pixel");
     expect(container.querySelectorAll(".pf-badge--updated").length).toBe(2);
   });

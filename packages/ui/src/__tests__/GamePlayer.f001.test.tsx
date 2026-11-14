@@ -81,7 +81,7 @@ describe("GamePlayer leaderboard requests (F001)", () => {
     const { iframe, frameSpy, getLb } = await setup();
     post(iframe.contentWindow, { type: "webgame:leaderboard-get", requestId: "lb-1", period: "week", limit: 5 });
     await flush();
-    expect(getLb).toHaveBeenCalledWith("g1", { period: "week", limit: 5 });
+    expect(getLb).toHaveBeenCalledWith("g1", { period: "week", limit: 25 });
     const [reply] = sent(frameSpy, "webgame:leaderboard");
     expect(reply).toEqual({
       type: "webgame:leaderboard",
@@ -103,7 +103,7 @@ describe("GamePlayer leaderboard requests (F001)", () => {
     expect(json).not.toMatch(/avatar|"u1"|"u2"|"s1"|tok/);
   });
 
-  it("caches per (period, limit) for 10s with one in-flight request", async () => {
+  it("caches per period for 10s with one in-flight request, whatever the limit (N4)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     const { iframe, frameSpy, getLb } = await setup();
     const w = iframe.contentWindow;
@@ -117,14 +117,65 @@ describe("GamePlayer leaderboard requests (F001)", () => {
     await flush();
     expect(getLb).toHaveBeenCalledTimes(1);
 
-    post(w, { type: "webgame:leaderboard-get", requestId: "lb-4", period: "day", limit: 6 });
+    // A different limit no longer creates a new cache key.
+    for (let l = 1; l <= 25; l++) post(w, { type: "webgame:leaderboard-get", requestId: `lim-${l}`, period: "day", limit: l });
+    await flush();
+    expect(getLb).toHaveBeenCalledTimes(1);
+
+    post(w, { type: "webgame:leaderboard-get", requestId: "lb-4", period: "week", limit: 6 });
     await flush();
     expect(getLb).toHaveBeenCalledTimes(2);
+    expect(getLb).toHaveBeenLastCalledWith("g1", { period: "week", limit: 25 });
 
     await flush(10_001);
     post(w, { type: "webgame:leaderboard-get", requestId: "lb-5", period: "day", limit: 5 });
     await flush();
     expect(getLb).toHaveBeenCalledTimes(3);
+  });
+
+  it("slices the cached 25-entry board to the requested limit (N4)", async () => {
+    const { iframe, frameSpy, getLb } = await setup();
+    const w = iframe.contentWindow;
+    post(w, { type: "webgame:leaderboard-get", requestId: "a", period: "week", limit: 1 });
+    await flush();
+    post(w, { type: "webgame:leaderboard-get", requestId: "b", period: "week", limit: 25 });
+    await flush();
+    expect(getLb).toHaveBeenCalledTimes(1);
+    const [a, b] = sent(frameSpy, "webgame:leaderboard") as { leaderboard: { entries: unknown[]; me: unknown; totalPlayers: number } }[];
+    expect(a.leaderboard.entries).toHaveLength(1);
+    expect(a.leaderboard.me).toEqual({ rank: 2, score: 90_000, display: "1:30.000" });
+    expect(a.leaderboard.totalPlayers).toBe(2);
+    expect(b.leaderboard.entries).toHaveLength(2);
+  });
+
+  it("throttles in-game API fetches per player instance and answers the excess locally (N4)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { iframe, frameSpy, getLb, submit } = await setup();
+    submit.mockResolvedValue({
+      id: "s9",
+      user: { id: "u1", username: "bob", displayName: "Bob", avatarUrl: null },
+      score: 1,
+      createdAt: "",
+      rank: 1,
+      personalBest: false,
+    } as ScoreSubmitResult);
+    const w = iframe.contentWindow;
+    // Each score submit drops the cache, so every read would otherwise be a fresh API call.
+    for (let i = 0; i < 14; i++) {
+      post(w, { type: "webgame:leaderboard-get", requestId: `r-${i}`, period: "all", limit: 5 });
+      await flush();
+      post(w, { type: "webgame:score", score: i });
+      await flush();
+    }
+    expect(getLb).toHaveBeenCalledTimes(10);
+    const replies = sent(frameSpy, "webgame:leaderboard");
+    expect(replies).toHaveLength(14);
+    expect(replies.slice(10).every((m) => m.error === "rate_limited" && m.leaderboard === null)).toBe(true);
+
+    await flush(10_001);
+    post(w, { type: "webgame:leaderboard-get", requestId: "later", period: "all", limit: 5 });
+    await flush();
+    expect(getLb).toHaveBeenCalledTimes(11);
   });
 
   it("clamps the limit and ignores malformed requests", async () => {
@@ -143,8 +194,10 @@ describe("GamePlayer leaderboard requests (F001)", () => {
     post(w, { type: "webgame:leaderboard-get", requestId: "lb-2", period: "all", limit: 500 });
     post(w, { type: "webgame:leaderboard-get", requestId: "lb-3", period: "all", limit: -3 });
     await flush();
-    expect(getLb).toHaveBeenNthCalledWith(1, "g1", { period: "all", limit: 25 });
-    expect(getLb).toHaveBeenNthCalledWith(2, "g1", { period: "all", limit: 1 });
+    expect(getLb).toHaveBeenCalledTimes(1);
+    expect(getLb).toHaveBeenCalledWith("g1", { period: "all", limit: 25 });
+    const replies = sent(frameSpy, "webgame:leaderboard") as { requestId: string; leaderboard: { entries: unknown[] } }[];
+    expect(replies.map((r) => [r.requestId, r.leaderboard.entries.length])).toEqual([["lb-2", 2], ["lb-3", 1]]);
   });
 
   it("ignores messages from other sources", async () => {

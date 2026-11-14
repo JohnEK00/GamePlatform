@@ -159,7 +159,7 @@ describe("VersionHistory", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit notes for v3" }));
     const ta = container.querySelector<HTMLTextAreaElement>(".pf-versions__row textarea")!;
     expect(ta.value).toBe("Added 3 new levels");
-    expect(ta.maxLength).toBe(1000);
+    expect(ta.hasAttribute("maxlength")).toBe(false);
     fireEvent.change(ta, { target: { value: "Added 3 new levels and a boss" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Save" })));
     expect(patch).toHaveBeenCalledWith("g1", 3, "Added 3 new levels and a boss");
@@ -188,6 +188,48 @@ describe("VersionHistory", () => {
     expect(patch).toHaveBeenCalledTimes(1);
     expect(patch).toHaveBeenCalledWith("g1", 2, "older fixed");
     expect(onUpdated).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the row's Edit button after Cancel and after Save (N8)", async () => {
+    const client = new ApiClient({ baseUrl: "http://api.test" });
+    vi.spyOn(client, "listGameVersions").mockResolvedValue(page([row(3, "x", true), row(2, "old")], 2));
+    vi.spyOn(client, "updateVersionNotes").mockImplementation(async (_id, v, notes) => row(v, notes));
+    setup(makeGame({ isOwner: true }), client);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Version history/ })));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit notes for v2" }));
+    expect(screen.queryByRole("button", { name: "Edit notes for v2" })).toBeNull();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Cancel" })));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit notes for v2" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit notes for v2" }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Save" })));
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit notes for v2" }));
+  });
+
+  it("counts and limits notes in Unicode code points like the server (N8)", async () => {
+    const client = new ApiClient({ baseUrl: "http://api.test" });
+    vi.spyOn(client, "listGameVersions").mockResolvedValue(page([row(3, "", true)], 1));
+    const patch = vi.spyOn(client, "updateVersionNotes").mockImplementation(async (_id, v, notes) => row(v, notes, true));
+    const { container } = setup(makeGame({ isOwner: true }), client);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Version history/ })));
+    fireEvent.click(screen.getByRole("button", { name: "Edit notes for v3" }));
+    const ta = container.querySelector<HTMLTextAreaElement>(".pf-versions__row textarea")!;
+    // 950 emoji = 1900 UTF-16 units but 950 code points: accepted, counter in code points.
+    fireEvent.change(ta, { target: { value: "🎮".repeat(950) } });
+    expect(ta.value).toBe("🎮".repeat(950));
+    expect(container.querySelector(".pf-notesfield__count")!.textContent).toBe("950/1000");
+    // Typing past the limit is cut to 1000 code points.
+    fireEvent.change(ta, { target: { value: "🎮".repeat(950) + "🚀".repeat(80) } });
+    expect(Array.from(ta.value).length).toBe(1000);
+    expect(ta.value).toBe("🎮".repeat(950) + "🚀".repeat(50));
+    expect(container.querySelector(".pf-notesfield__count")!.textContent).toBe("1000/1000");
+    // At the limit, further insertions are rejected.
+    fireEvent.change(ta, { target: { value: "x" + ta.value } });
+    expect(ta.value).toBe("🎮".repeat(950) + "🚀".repeat(50));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Save" })));
+    expect(Array.from(patch.mock.calls[0][2]).length).toBe(1000);
   });
 
   it("shows a 422 under the textarea and a 429 as a toast", async () => {

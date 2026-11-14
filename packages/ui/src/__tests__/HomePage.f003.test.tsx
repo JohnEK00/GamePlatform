@@ -75,7 +75,7 @@ describe("HomePage F003", () => {
     expect(shelf.textContent).toContain("Hot Game");
     // Only items with playsWeek > 0 show.
     expect(shelf.textContent).not.toContain("Cold Game");
-    expect(shelf.querySelector(".pf-card__trending")!.textContent).toBe("🔥 1.2k this week");
+    expect(shelf.querySelector(".pf-card__trending")!.textContent).toBe("🔥 1.2k plays this week");
     const seeAll = screen.getByRole("link", { name: "See all →" });
     expect(seeAll.getAttribute("href")).toBe("/?sort=trending");
     // The main grid (sort=new) keeps the all-time count.
@@ -116,16 +116,21 @@ describe("HomePage F003", () => {
 
   it("the Trending tab sets ?sort=trending and the main grid shows weekly counts", async () => {
     const { listGames } = await setup("/?page=2", []);
-    const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
+    // N6: the sort strip is a toggle-button group, not a tab list.
+    expect(screen.queryAllByRole("tab")).toEqual([]);
+    const group = screen.getByRole("group", { name: "Sort games" });
+    const tabs = Array.from(group.querySelectorAll("button")).map((t) => t.textContent);
     expect(tabs.slice(0, 2)).toEqual(["New", "Trending"]);
+    expect(screen.getByRole("button", { name: "New" }).getAttribute("aria-pressed")).toBe("true");
     listGames.mockImplementation(async (q: ListGamesQuery = {}) =>
       q.sort === "trending" && q.perPage === 24 ? page([game("m2", "Weekly Hit", 7)]) : page([]),
     );
-    await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Trending" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Trending" })));
     expect(screen.getByTestId("loc").textContent).toBe("/?sort=trending");
     expect(listGames).toHaveBeenCalledWith(expect.objectContaining({ sort: "trending", page: 1, perPage: 24 }));
-    expect(screen.getByRole("tab", { name: "Trending" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "Trending" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "New" }).getAttribute("aria-pressed")).toBe("false");
     const card = screen.getByText("Weekly Hit").closest("article")!;
-    expect(card.querySelector(".pf-card__trending")!.textContent).toBe("🔥 7 this week");
+    expect(card.querySelector(".pf-card__trending")!.textContent).toBe("🔥 7 plays this week");
   });
 });

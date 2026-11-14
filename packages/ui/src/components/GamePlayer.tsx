@@ -8,7 +8,16 @@ import { useToast } from "../context/toast";
 import { errorMessage, formatScore } from "../util";
 import { Spinner } from "./common";
 import { AchievementIcon } from "./Achievements";
-import { isRequestId, parseLeaderboardRequest, scoreToastText, toLeaderboardView, toScoreResultView, type LeaderboardView } from "../leaderboard";
+import {
+  GAME_LEADERBOARD_MAX_LIMIT,
+  isRequestId,
+  parseLeaderboardRequest,
+  scoreToastText,
+  sliceLeaderboardView,
+  toLeaderboardView,
+  toScoreResultView,
+  type LeaderboardView,
+} from "../leaderboard";
 
 export type GamePlayerGame = Pick<Game, "id" | "title" | "width" | "height"> &
   Partial<Pick<Game, "playUrl" | "version" | "published" | "isOwner" | "leaderboard">>;
@@ -29,8 +38,16 @@ export const CLOUD_LOAD_TIMEOUT_MS = 400;
 /** Minimum delay between a `webgame:save` and the cloud PUT (and between PUTs). */
 export const CLOUD_SAVE_DEBOUNCE_MS = 2000;
 
-/** F001: how long a `(period, limit)` leaderboard answer is reused for in-game requests. */
+/** F001: how long a per-period leaderboard answer is reused for in-game requests. */
 export const GAME_LEADERBOARD_CACHE_MS = 10_000;
+/**
+ * N4: per player instance, at most this many in-game leaderboard API fetches per
+ * `GAME_LEADERBOARD_THROTTLE_WINDOW_MS`. Requests beyond that (that aren't served from cache or an
+ * in-flight fetch) are answered locally with `error: "rate_limited"` without hitting the API, so a game
+ * can't drain the viewer's shared leaderboard rate-limit bucket.
+ */
+export const GAME_LEADERBOARD_THROTTLE_MAX = 10;
+export const GAME_LEADERBOARD_THROTTLE_WINDOW_MS = 10_000;
 
 type LbOutcome = { leaderboard: LeaderboardView } | { error: "unavailable" | "rate_limited" };
 type LbCacheEntry = { at: number; value?: LbOutcome; inflight?: Promise<LbOutcome> };
@@ -187,10 +204,16 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
   latest.current = { user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game };
   /** Achievement ids already sent (or being sent) by this player instance. */
   const unlocked = useRef(new Set<string>());
-  /** F001: per-(viewer, period, limit) cache with single flight for in-game leaderboard reads. */
+  /**
+   * F001/N4: per-(viewer, period) cache with single flight for in-game leaderboard reads. Always fetches
+   * the maximum page (25) and slices to the requested limit, so at most 3 keys exist per viewer.
+   */
   const lbCache = useRef(new Map<string, LbCacheEntry>());
+  /** N4: timestamps of recent in-game leaderboard API fetches (sliding-window throttle). */
+  const lbFetches = useRef<number[]>([]);
   useEffect(() => {
     lbCache.current = new Map();
+    lbFetches.current = [];
   }, [game.id]);
 
   // ---- Cloud saves (GAME_FORMAT v2): prefetch as soon as the player mounts when logged in ----
@@ -460,7 +483,7 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           const req = parseLeaderboardRequest(data as Record<string, unknown>);
           if (!req) return;
           const source = event.source as Window;
-          const key = `${u?.id ?? ""}|${req.period}|${req.limit}`;
+          const key = `${u?.id ?? ""}|${req.period}`;
           const cache = lbCache.current;
           const now = Date.now();
           const entry = cache.get(key);
@@ -468,10 +491,21 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           if (entry?.inflight) outcome = entry.inflight;
           else if (entry?.value && now - entry.at < GAME_LEADERBOARD_CACHE_MS) outcome = Promise.resolve(entry.value);
           else {
+            const fetches = lbFetches.current.filter((t) => now - t < GAME_LEADERBOARD_THROTTLE_WINDOW_MS);
+            lbFetches.current = fetches;
+            if (fetches.length >= GAME_LEADERBOARD_THROTTLE_MAX) {
+              try {
+                source.postMessage({ type: "webgame:leaderboard", requestId: req.requestId, leaderboard: null, error: "rate_limited" }, "*");
+              } catch {
+                /* frame gone */
+              }
+              return;
+            }
+            fetches.push(now);
             const viewerId = u?.id ?? null;
             const fallback = g.leaderboard;
             const e: LbCacheEntry = { at: now };
-            e.inflight = api.getLeaderboard(g.id, { period: req.period, limit: req.limit }).then(
+            e.inflight = api.getLeaderboard(g.id, { period: req.period, limit: GAME_LEADERBOARD_MAX_LIMIT }).then(
               (lb): LbOutcome => ({ leaderboard: toLeaderboardView(lb, viewerId, fallback) }),
               (err: unknown): LbOutcome => ({ error: isApiError(err) && err.code === "rate_limited" ? "rate_limited" : "unavailable" }),
             );
@@ -487,7 +521,7 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           }
           outcome.then((v) => {
             const msg = "leaderboard" in v
-              ? { type: "webgame:leaderboard", requestId: req.requestId, leaderboard: v.leaderboard }
+              ? { type: "webgame:leaderboard", requestId: req.requestId, leaderboard: sliceLeaderboardView(v.leaderboard, req.limit) }
               : { type: "webgame:leaderboard", requestId: req.requestId, leaderboard: null, error: v.error };
             try {
               source.postMessage(msg, "*");

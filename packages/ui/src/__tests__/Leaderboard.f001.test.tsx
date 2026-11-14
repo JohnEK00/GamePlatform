@@ -44,6 +44,10 @@ describe("Leaderboard (F001)", () => {
     expect(await screen.findByText("1:23.456")).toBeTruthy();
     expect(get).toHaveBeenCalledWith("g1", { period: "week", limit: 10 });
     expect(screen.getByRole("tab", { name: "This week" }).getAttribute("aria-selected")).toBe("true");
+    // N6: scores live in a tabpanel labelled by / controlled from the selected tab.
+    const panel = screen.getByRole("tabpanel", { name: "This week" });
+    expect(screen.getByRole("tab", { name: "This week" }).getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.textContent).toContain("1:23.456");
     expect(screen.getAllByText("Best time").length).toBeGreaterThan(0);
     expect(screen.getByText("41 players · resets in 5h 12m")).toBeTruthy();
   });
@@ -78,6 +82,22 @@ describe("Leaderboard (F001)", () => {
       fireEvent.click(screen.getByRole("tab", { name: "All time" }));
     });
     await waitFor(() => expect(screen.getByText("41 players")).toBeTruthy());
+  });
+
+  it("supports arrow-key navigation between periods (N6)", async () => {
+    const { get } = setup((p) => board(p));
+    await screen.findByText("1:23.456");
+    const week = screen.getByRole("tab", { name: "This week" });
+    await act(async () => {
+      week.focus();
+      fireEvent.keyDown(week, { key: "ArrowLeft" });
+    });
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Today" }));
+    expect(get).toHaveBeenLastCalledWith("g1", { period: "day", limit: 10 });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("tab", { name: "Today" }), { key: "End" });
+    });
+    expect(screen.getByRole("tab", { name: "All time" }).getAttribute("aria-selected")).toBe("true");
   });
 
   it("starts on the remembered period", async () => {

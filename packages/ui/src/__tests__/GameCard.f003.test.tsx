@@ -37,7 +37,7 @@ describe("GameCard F003 highlights", () => {
   it("trending: the weekly line replaces the all-time count when playsWeek > 0", () => {
     const { container } = wrap(<GameCard game={base} highlight="trending" />);
     const trending = container.querySelector(".pf-card__trending")!;
-    expect(trending.textContent).toBe("🔥 1.2k this week");
+    expect(trending.textContent).toBe("🔥 1.2k plays this week");
     expect(trending.getAttribute("title")).toBe("1234 plays in the last 7 days");
     expect(container.querySelector('[title="4321 plays"]')).toBeNull();
     expect(container.textContent).not.toContain("▶ 4.3k");
@@ -46,7 +46,7 @@ describe("GameCard F003 highlights", () => {
   it("trending: falls back to the all-time count when playsWeek is 0 or missing (older servers)", () => {
     const { container, unmount } = wrap(<GameCard game={{ ...base, playsWeek: 0 }} highlight="trending" />);
     expect(container.querySelector(".pf-card__trending")).toBeNull();
-    expect(container.querySelector('[title="4321 plays"]')!.textContent).toBe("▶ 4.3k");
+    expect(container.querySelector('[title="4321 plays"]')!.textContent).toBe("▶ 4.3k plays");
     unmount();
     const { playsWeek: _omit, ...legacy } = base;
     const r2 = wrap(<GameCard game={legacy as GameSummary} highlight="trending" />);
@@ -77,7 +77,7 @@ describe("GameCard F003 highlights", () => {
     const plain = wrap(<GameCard game={base} />).container.innerHTML;
     const legacy = wrap(<GameCard game={{ ...base, playsWeek: 0 }} sharedTags={["pixel"]} />).container.innerHTML;
     expect(plain).toBe(legacy);
-    expect(plain).toContain("▶ 4.3k");
+    expect(plain).toContain("4.3k");
     expect(plain).not.toContain("pf-card__trending");
     expect(plain).not.toContain("pf-card__shared");
   });

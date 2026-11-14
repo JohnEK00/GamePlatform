@@ -105,6 +105,22 @@ describe("FeedPage", () => {
     expect(screen.queryByText("Suggested creators")).toBeNull();
     expect(localStorage.getItem(FEED_TAB_KEY)).toBe("games");
     expect(screen.getByRole("tab", { name: "New games" }).getAttribute("aria-selected")).toBe("true");
+    // N6: the list lives in a tabpanel labelled by the selected tab.
+    const panel = screen.getByRole("tabpanel", { name: "New games" });
+    expect(screen.getByRole("tab", { name: "New games" }).getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.textContent).toContain("No new games from people you follow yet.");
+  });
+
+  it("arrow keys switch feed tabs (N6)", async () => {
+    const { feed } = await setup(async () => ({ items: [], nextCursor: null }));
+    await screen.findByText("Your feed is empty");
+    const all = screen.getByRole("tab", { name: "Everything" });
+    expect(all.tabIndex).toBe(0);
+    expect(screen.getByRole("tab", { name: "New games" }).tabIndex).toBe(-1);
+    all.focus();
+    fireEvent.keyDown(all, { key: "ArrowRight" });
+    await waitFor(() => expect(feed).toHaveBeenLastCalledWith({ kinds: ["gamePublished", "gameUpdated"] }, expect.any(AbortSignal)));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "New games" }));
   });
 
   it("restores the remembered tab and shows a retryable error", async () => {

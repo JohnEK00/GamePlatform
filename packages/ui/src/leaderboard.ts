@@ -60,6 +60,11 @@ export function parseLeaderboardRequest(data: Record<string, unknown>): { reques
   return { requestId: data.requestId, period: data.period, limit };
 }
 
+/** Returns `view` with at most `limit` entries (other fields unchanged). */
+export function sliceLeaderboardView(view: LeaderboardView, limit: number): LeaderboardView {
+  return view.entries.length <= limit ? view : { ...view, entries: view.entries.slice(0, Math.max(0, limit)) };
+}
+
 /** Builds the sanitised in-game view from an API `Leaderboard`. `viewerId` decides `isMe`. */
 export function toLeaderboardView(lb: Leaderboard, viewerId: string | null | undefined, fallback?: Partial<LeaderboardConfig>): LeaderboardView {
   const cfg = normalizeLeaderboardConfig(lb.config ?? fallback);

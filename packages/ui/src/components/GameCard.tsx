@@ -24,16 +24,24 @@ export function GameCard({ game, showStatus, highlight, sharedTags }: GameCardPr
   // F004: "Draft" wins over "Updated"; older servers omit lastUpdatedAt (no badge).
   const showDraft = !!showStatus && !game.published;
   const showUpdated = !showDraft && isRecentlyUpdated(game);
+  const updatedTitle = showUpdated ? `Updated ${timeAgo(game.lastUpdatedAt as string)}` : "";
+  // N7: the link's aria-label replaces its content, so the badge must be part of the label (and the
+  // visual badge is hidden from AT to avoid a double announcement).
+  const linkLabel = `Play ${game.title}${showDraft ? ", draft" : showUpdated ? `, ${updatedTitle.charAt(0).toLowerCase()}${updatedTitle.slice(1)}` : ""}`;
   return (
     <article className="pf-card">
-      <Link to={`/games/${game.id}`} className="pf-card__link" aria-label={`Play ${game.title}`}>
+      <Link to={`/games/${game.id}`} className="pf-card__link" aria-label={linkLabel}>
         <Thumbnail src={game.thumbnailUrl} seed={game.id} alt="" />
         <span className="pf-card__play" aria-hidden="true">
           ▶
         </span>
-        {showDraft && <span className="pf-badge pf-badge--draft pf-card__badge">Draft</span>}
+        {showDraft && (
+          <span className="pf-badge pf-badge--draft pf-card__badge" aria-hidden="true">
+            Draft
+          </span>
+        )}
         {showUpdated && (
-          <span className="pf-badge pf-badge--updated pf-card__badge" title={`Updated ${timeAgo(game.lastUpdatedAt as string)}`}>
+          <span className="pf-badge pf-badge--updated pf-card__badge" title={updatedTitle} aria-hidden="true">
             Updated
           </span>
         )}
@@ -54,10 +62,14 @@ export function GameCard({ game, showStatus, highlight, sharedTags }: GameCardPr
         <div className="pf-card__meta">
           {showTrending ? (
             <span className="pf-card__trending" title={`${playsWeek} plays in the last 7 days`}>
-              🔥 {formatCount(playsWeek)} this week
+              <span aria-hidden="true">🔥</span> {formatCount(playsWeek)}
+              <span className="pf-sr-only"> plays</span> this week
             </span>
           ) : (
-            <span title={`${game.plays} plays`}>▶ {formatCount(game.plays)}</span>
+            <span title={`${game.plays} plays`}>
+              <span aria-hidden="true">▶</span> {formatCount(game.plays)}
+              <span className="pf-sr-only"> plays</span>
+            </span>
           )}
           {game.ratingCount > 0 ? <StarsDisplay value={game.ratingAvg} count={game.ratingCount} /> : <span className="pf-muted">Not rated</span>}
           <FavoriteButton gameId={game.id} gameTitle={game.title} favorites={game.favorites ?? 0} />

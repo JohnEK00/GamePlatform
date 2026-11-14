@@ -76,6 +76,19 @@ export function VersionHistory({ game, onUpdated }: VersionHistoryProps) {
   const [editError, setEditError] = useState<string | null>(null);
   // Drops responses for a previous game/version (the history is reset on every bundle replace).
   const generation = useRef(0);
+  // N8: each row's Edit button, and the version whose button gets focus back once its editor closes.
+  const editButtons = useRef(new Map<number, HTMLButtonElement>());
+  const returnFocusTo = useRef<number | null>(null);
+  useEffect(() => {
+    const v = returnFocusTo.current;
+    if (v === null || editing !== null || saving) return;
+    returnFocusTo.current = null;
+    editButtons.current.get(v)?.focus();
+  }, [editing, saving]);
+  const closeEditor = (version: number) => {
+    returnFocusTo.current = version;
+    setEditing(null);
+  };
 
   const latest = game.latestVersion;
 
@@ -133,7 +146,7 @@ export function VersionHistory({ game, onUpdated }: VersionHistoryProps) {
     try {
       const updated = await api.updateVersionNotes(game.id, version, notes);
       setItems((prev) => prev?.map((v) => (v.version === version ? { ...v, ...updated } : v)) ?? prev);
-      setEditing(null);
+      closeEditor(version);
       if (version === game.version || updated.current) {
         onUpdated?.({ ...game, latestVersion: { ...latest, ...updated, current: true } });
       }
@@ -193,6 +206,10 @@ export function VersionHistory({ game, onUpdated }: VersionHistoryProps) {
                     {v.current && <span className="pf-versions__current">Current</span>}
                     {game.isOwner && editing !== v.version && (
                       <button
+                        ref={(el) => {
+                          if (el) editButtons.current.set(v.version, el);
+                          else if (editButtons.current.get(v.version)) editButtons.current.delete(v.version);
+                        }}
                         type="button"
                         className="pf-btn pf-btn--ghost pf-btn--sm pf-versions__edit"
                         aria-label={`Edit notes for v${v.version}`}
@@ -213,7 +230,7 @@ export function VersionHistory({ game, onUpdated }: VersionHistoryProps) {
                       error={editError}
                       onSave={(n) => void save(v.version, n)}
                       onCancel={() => {
-                        setEditing(null);
+                        closeEditor(v.version);
                         setEditError(null);
                       }}
                     />

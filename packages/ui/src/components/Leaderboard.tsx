@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Link } from "react-router-dom";
 import type { LeaderboardConfig, LeaderboardPeriod, Score } from "../api/types";
 import { useApi } from "../context/config";
@@ -6,14 +6,15 @@ import { useAuth } from "../context/auth";
 import { formatScore, formatTimeUntil, useAsync } from "../util";
 import { isLeaderboardPeriod, normalizeLeaderboardConfig } from "../leaderboard";
 import { Avatar, LoadError, Skeleton } from "./common";
+import { TabPanel, Tabs, type TabItem } from "./Tabs";
 
 /** localStorage key remembering the last selected period tab. */
 export const LEADERBOARD_PERIOD_KEY = "webgame.lb.period";
 
-const TABS: { period: LeaderboardPeriod; label: string }[] = [
-  { period: "day", label: "Today" },
-  { period: "week", label: "This week" },
-  { period: "all", label: "All time" },
+const TABS: TabItem<LeaderboardPeriod>[] = [
+  { value: "day", label: "Today" },
+  { value: "week", label: "This week" },
+  { value: "all", label: "All time" },
 ];
 
 const EMPTY_TEXT: Record<LeaderboardPeriod, string> = {
@@ -54,6 +55,7 @@ export function Leaderboard({ gameId, config, limit = 10, refreshKey = 0 }: Lead
   const api = useApi();
   const { user } = useAuth();
   const [period, setPeriod] = useState<LeaderboardPeriod>(readPeriod);
+  const tabsId = `pf-lb-${useId().replace(/[^\w-]/g, "")}`;
   const { data, loading, error, reload } = useAsync(() => api.getLeaderboard(gameId, { period, limit }), [api, gameId, period, limit, refreshKey]);
   // Re-render once a minute so "resets in" stays fresh.
   const [, setTick] = useState(0);
@@ -92,20 +94,8 @@ export function Leaderboard({ gameId, config, limit = 10, refreshKey = 0 }: Lead
       <h2 id="pf-lb-title" className="pf-panel__title">
         <span aria-hidden="true">🏆</span> {label || "Leaderboard"}
       </h2>
-      <div className="pf-tabs pf-lb__tabs" role="tablist" aria-label="Leaderboard period">
-        {TABS.map((t) => (
-          <button
-            key={t.period}
-            type="button"
-            role="tab"
-            aria-selected={period === t.period}
-            className={`pf-tab ${period === t.period ? "is-active" : ""}`}
-            onClick={() => selectPeriod(t.period)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs id={tabsId} className="pf-lb__tabs" label="Leaderboard period" items={TABS} value={period} onChange={selectPeriod} />
+      <TabPanel id={tabsId} value={period}>
       {loading && !shown ? (
         <ol className="pf-leaderboard" aria-busy="true">
           {Array.from({ length: 5 }, (_, i) => (
@@ -141,6 +131,7 @@ export function Leaderboard({ gameId, config, limit = 10, refreshKey = 0 }: Lead
           {resetsIn ? ` · resets in ${resetsIn}` : ""}
         </p>
       )}
+      </TabPanel>
     </section>
   );
 }

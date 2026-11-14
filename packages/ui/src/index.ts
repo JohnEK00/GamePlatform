@@ -29,6 +29,8 @@ export {
   CLOUD_LOAD_TIMEOUT_MS,
   CLOUD_SAVE_DEBOUNCE_MS,
   GAME_LEADERBOARD_CACHE_MS,
+  GAME_LEADERBOARD_THROTTLE_MAX,
+  GAME_LEADERBOARD_THROTTLE_WINDOW_MS,
 } from "./components/GamePlayer";
 export { FavoritesProvider, FavoriteButton, useFavorites } from "./components/Favorite";
 export type { FavoriteButtonProps, FavoriteState, FavoritesApi } from "./components/Favorite";
@@ -87,6 +89,8 @@ export type { VersionHistoryProps } from "./components/VersionHistory";
 export { ReleaseNotesField } from "./components/ReleaseNotesField";
 export type { ReleaseNotesFieldProps } from "./components/ReleaseNotesField";
 export type { RelatedGamesProps } from "./components/RelatedGames";
+export { Tabs, TabPanel, ToggleGroup, tabId, tabPanelId } from "./components/Tabs";
+export type { TabsProps, TabPanelProps, TabItem, ToggleGroupProps } from "./components/Tabs";
 export { StarRating } from "./components/StarRating";
 export type { StarRatingProps } from "./components/StarRating";
 export { Leaderboard, LEADERBOARD_PERIOD_KEY } from "./components/Leaderboard";
@@ -98,6 +102,7 @@ export {
   toLeaderboardView,
   toScoreResultView,
   sampleLeaderboardView,
+  sliceLeaderboardView,
 } from "./leaderboard";
 export type { LeaderboardView, LeaderboardViewEntry, ScoreResultView } from "./leaderboard";
 export { Comments } from "./components/Comments";
