@@ -8,11 +8,35 @@ import { formatCount, useAsync, useDocumentTitle } from "../util";
 
 const SORTS: { key: GameSort; label: string }[] = [
   { key: "new", label: "New" },
+  { key: "trending", label: "Trending" },
   { key: "popular", label: "Popular" },
   { key: "top", label: "Top rated" },
   { key: "favorites", label: "Most favorited" },
 ];
 const PER_PAGE = 24;
+const TRENDING_SHELF_SIZE = 8;
+
+/** F003: "Trending this week" shelf. Hidden while nothing has weekly plays, and silently on errors. */
+function TrendingShelf() {
+  const api = useApi();
+  const { data, loading, error } = useAsync(() => api.listGames({ sort: "trending", perPage: TRENDING_SHELF_SIZE }), [api]);
+  // Older servers may omit playsWeek: treat it as 0 (=> no shelf).
+  const items = (data?.items ?? []).filter((g) => (g.playsWeek ?? 0) > 0);
+  if (error || (!loading && items.length === 0)) return null;
+  return (
+    <section className="pf-shelf" aria-labelledby="pf-trending-title">
+      <div className="pf-shelf__head">
+        <h2 id="pf-trending-title" className="pf-section-title">
+          Trending this week
+        </h2>
+        <Link to="/?sort=trending" className="pf-shelf__more">
+          See all →
+        </Link>
+      </div>
+      <GameGrid games={items} loading={loading} skeletons={TRENDING_SHELF_SIZE} highlight="trending" />
+    </section>
+  );
+}
 
 function Featured() {
   const api = useApi();
@@ -128,6 +152,8 @@ export function HomePage() {
 
       {showHero && <Featured />}
 
+      {showHero && <TrendingShelf />}
+
       <section id="pf-browse" className="pf-browse" aria-labelledby="pf-browse-title">
         <div className="pf-browse__head">
           <h2 id="pf-browse-title" className="pf-section-title">
@@ -207,7 +233,7 @@ export function HomePage() {
             {filtered ? "Try another search or tag." : "The arcade is empty. Be the first to ship a game!"}
           </EmptyState>
         ) : (
-          <GameGrid games={games.data?.items} loading={games.loading} />
+          <GameGrid games={games.data?.items} loading={games.loading} highlight={sort === "trending" ? "trending" : undefined} />
         )}
 
         {games.data && (

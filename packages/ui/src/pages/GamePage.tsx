@@ -10,6 +10,7 @@ import { clearGameSave, discardPendingCloudSave, GamePlayer, hasGameSave } from 
 import { GameAchievements } from "../components/Achievements";
 import { FavoriteButton } from "../components/Favorite";
 import { FollowButton, useFollows } from "../components/Follow";
+import { RelatedGames } from "../components/RelatedGames";
 import { ReportButton } from "../components/Report";
 import { useAuth } from "../context/auth";
 import { Leaderboard } from "../components/Leaderboard";
@@ -315,6 +316,7 @@ export function GamePage() {
           </dl>
         </section>
       </aside>
+      <RelatedGames gameId={game.id} />
     </div>
   );
 }

@@ -1201,6 +1201,56 @@ textarea.pf-input {
   font-size: 0.82rem;
   color: var(--pf-text-2);
 }
+/* F003: discovery highlights */
+.pf-card__shared {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--pf-mono);
+  font-size: 0.76rem;
+  color: var(--pf-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pf-card__trending {
+  color: var(--pf-accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pf-shelf,
+.pf-related {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.pf-related {
+  grid-column: 1 / -1;
+  margin-top: 16px;
+  padding-top: 24px;
+  border-top: 1px solid var(--pf-border);
+}
+.pf-related .pf-section-title,
+.pf-shelf .pf-section-title {
+  margin: 0 !important;
+}
+.pf-shelf__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+}
+.pf-shelf__more {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--pf-accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.pf-shelf__more:hover {
+  color: var(--pf-accent-hover);
+  text-decoration: underline;
+}
 .pf-card--skeleton .pf-thumb {
   border-radius: 0;
 }

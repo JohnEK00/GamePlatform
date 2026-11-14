@@ -4,7 +4,23 @@ import { formatCount } from "../util";
 import { FavoriteButton } from "./Favorite";
 import { Avatar, Skeleton, StarsDisplay, Thumbnail } from "./common";
 
-export function GameCard({ game, showStatus }: { game: GameSummary; showStatus?: boolean }) {
+/** F003: optional emphasis for discovery shelves. */
+export type GameCardHighlight = "trending" | "related";
+
+export type GameCardProps = {
+  game: GameSummary;
+  showStatus?: boolean;
+  /** "trending": weekly plays replace the all-time count; "related": shows shared tags. */
+  highlight?: GameCardHighlight;
+  /** With highlight="related": the tags shared with the source game (up to 2 are shown). */
+  sharedTags?: string[];
+};
+
+export function GameCard({ game, showStatus, highlight, sharedTags }: GameCardProps) {
+  // Older servers don't send playsWeek: treat it as 0.
+  const playsWeek = typeof game.playsWeek === "number" && game.playsWeek > 0 ? game.playsWeek : 0;
+  const showTrending = highlight === "trending" && playsWeek > 0;
+  const shown = highlight === "related" && sharedTags ? sharedTags.slice(0, 2) : [];
   return (
     <article className="pf-card">
       <Link to={`/games/${game.id}`} className="pf-card__link" aria-label={`Play ${game.title}`}>
@@ -22,8 +38,19 @@ export function GameCard({ game, showStatus }: { game: GameSummary; showStatus?:
           <Avatar user={game.owner} size={18} />
           <span>{game.owner.displayName || game.owner.username}</span>
         </Link>
+        {shown.length > 0 && (
+          <p className="pf-card__shared" title={`Shares ${shown.map((t) => `#${t}`).join(", ")}`}>
+            {shown.map((t) => `#${t}`).join(" ")}
+          </p>
+        )}
         <div className="pf-card__meta">
-          <span title={`${game.plays} plays`}>▶ {formatCount(game.plays)}</span>
+          {showTrending ? (
+            <span className="pf-card__trending" title={`${playsWeek} plays in the last 7 days`}>
+              🔥 {formatCount(playsWeek)} this week
+            </span>
+          ) : (
+            <span title={`${game.plays} plays`}>▶ {formatCount(game.plays)}</span>
+          )}
           {game.ratingCount > 0 ? <StarsDisplay value={game.ratingAvg} count={game.ratingCount} /> : <span className="pf-muted">Not rated</span>}
           <FavoriteButton gameId={game.id} gameTitle={game.title} favorites={game.favorites ?? 0} />
         </div>
@@ -45,12 +72,28 @@ export function GameCardSkeleton() {
   );
 }
 
-export function GameGrid({ games, loading, skeletons = 8, showStatus }: { games?: GameSummary[]; loading?: boolean; skeletons?: number; showStatus?: boolean }) {
+export function GameGrid({
+  games,
+  loading,
+  skeletons = 8,
+  showStatus,
+  highlight,
+  sharedTagsById,
+}: {
+  games?: GameSummary[];
+  loading?: boolean;
+  skeletons?: number;
+  showStatus?: boolean;
+  highlight?: GameCardHighlight;
+  sharedTagsById?: Record<string, string[]>;
+}) {
   return (
     <div className="pf-grid" aria-busy={loading || undefined}>
       {loading
         ? Array.from({ length: skeletons }, (_, i) => <GameCardSkeleton key={i} />)
-        : games?.map((g) => <GameCard key={g.id} game={g} showStatus={showStatus} />)}
+        : games?.map((g) => (
+            <GameCard key={g.id} game={g} showStatus={showStatus} highlight={highlight} sharedTags={sharedTagsById?.[g.id]} />
+          ))}
     </div>
   );
 }

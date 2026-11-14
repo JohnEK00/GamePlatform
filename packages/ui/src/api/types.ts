@@ -35,6 +35,19 @@ export type GameSummary = {
   updatedAt: string;
   /** v2: number of users who favorited the game. */
   favorites: number;
+  /**
+   * F003: counted non-owner plays in the last 7 UTC days (approximate snapshot).
+   * Older servers omit it; treat a missing value as 0.
+   */
+  playsWeek: number;
+};
+
+/** F003: an item of `GET /api/games/{id}/related`. */
+export type RelatedGame = GameSummary & {
+  /** "tags": shares >= 1 tag with the source game; "trending": fill-up. */
+  reason: "tags" | "trending";
+  /** Shared tags in the SOURCE game's tag order; [] when reason is "trending". */
+  sharedTags: string[];
 };
 
 export type Game = GameSummary & {
@@ -117,7 +130,7 @@ export type UserProfileResponse = {
 };
 export type UpdateMeRequest = { displayName?: string; bio?: string };
 
-export type GameSort = "new" | "popular" | "top" | "favorites";
+export type GameSort = "new" | "popular" | "top" | "favorites" | "trending";
 
 export type ListGamesQuery = {
   q?: string;

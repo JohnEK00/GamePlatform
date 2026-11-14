@@ -26,6 +26,7 @@ import type {
   ListGamesQuery,
   LoginRequest,
   Page,
+  RelatedGame,
   PageQuery,
   PlayResponse,
   PreviewTokenResponse,
@@ -288,6 +289,10 @@ export class ApiClient {
   // ---------- Games ----------
   listGames(query: ListGamesQuery = {}, signal?: AbortSignal): Promise<Page<GameSummary>> {
     return this.request("/api/games", { query, signal });
+  }
+  /** F003: "More like this" for a game (`limit` 1–24 server-side, default 8). */
+  getRelatedGames(id: string, query: { limit?: number } = {}, signal?: AbortSignal): Promise<RelatedGame[]> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/related`, { query: { limit: query.limit }, signal });
   }
   getGame(id: string): Promise<Game> {
     return this.request(`/api/games/${encodeURIComponent(id)}`);

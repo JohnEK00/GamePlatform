@@ -344,6 +344,15 @@ export function DocsPage() {
         </ul>
       </section>
 
+      <section>
+        <h2>12. Publishing: tags &amp; discovery</h2>
+        <p>
+          Tags drive <em>More like this</em>. Use specific tags (<code>platformer</code>, <code>roguelike</code>) over generic ones
+          (<code>game</code>, <code>fun</code>); rarer shared tags weigh more. <em>Trending</em> counts distinct players per day over
+          the last 7 days; your own plays of your own game never count.
+        </p>
+      </section>
+
       <div className="pf-panel pf-docs__cta">
         <div>
           <h2>Ready to ship?</h2>
