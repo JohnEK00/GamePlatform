@@ -1,4 +1,4 @@
-import { createZip } from "./zip";
+import { createZip, createZipAsync } from "./zip";
 
 /**
  * A Studio project: the game.json object plus bundle files keyed by bundle-relative path ("main.js", "assets/x.png").
@@ -64,6 +64,9 @@ export const ALLOWED_EXTENSIONS = ["json", "js", "png", "jpg", "jpeg", "webp", "
 export const TEXT_EXTENSIONS = ["js", "json", "txt", "css", "svg", "md", "csv"];
 export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "svg"];
 export const MAX_PROJECT_FILES = 2000;
+/** Backend bundle limits (GAME_FORMAT.md, backend/src/bundle.rs). */
+export const MAX_BUNDLE_COMPRESSED_BYTES = 50 * 1024 * 1024;
+export const MAX_BUNDLE_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
 export const ACHIEVEMENT_ID_PATTERN = /^[a-z0-9_-]{1,32}$/;
 
 export function extOf(path: string): string {
@@ -132,7 +135,100 @@ export function validateProject(project: StudioProject): string[] {
   const paths = Object.keys(project.files);
   if (paths.length + 1 > MAX_PROJECT_FILES) errs.push(`Too many files (max ${MAX_PROJECT_FILES}).`);
   for (const p of paths) if (!ALLOWED_EXTENSIONS.includes(extOf(p))) errs.push(`"${p}": file type not allowed in bundles.`);
+  errs.push(...validateBundlePaths(paths));
+  const size = projectSize(project);
+  if (size > MAX_BUNDLE_UNCOMPRESSED_BYTES)
+    errs.push(`The project is ${formatMB(size)} uncompressed; bundles may be at most ${formatMB(MAX_BUNDLE_UNCOMPRESSED_BYTES)}.`);
   return errs;
+}
+
+const asciiLower = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+const formatMB = (n: number) => `${(n / (1024 * 1024)).toFixed(n >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+
+/**
+ * Path problems the backend rejects (bundle.rs): invalid paths, case-insensitive duplicates (including a
+ * second "game.json"), and a file whose path is also used as a folder ("x" and "x/y").
+ */
+export function validateBundlePaths(paths: string[]): string[] {
+  const errs: string[] = [];
+  const byLower = new Map<string, string>([["game.json", "game.json"]]);
+  const normalized: string[] = [];
+  for (const p of paths) {
+    const n = normalizeProjectPath(p);
+    if (!n) {
+      errs.push(`"${p}": invalid file path.`);
+      continue;
+    }
+    const lower = asciiLower(n);
+    const prev = byLower.get(lower);
+    if (prev !== undefined) errs.push(`"${n}" clashes with "${prev}" (file names are case-insensitive in bundles).`);
+    else {
+      byLower.set(lower, n);
+      normalized.push(n);
+    }
+  }
+  const dirs = new Map<string, string>();
+  for (const n of normalized) {
+    const segs = n.split("/");
+    for (let i = 1; i < segs.length; i++) {
+      const d = asciiLower(segs.slice(0, i).join("/"));
+      if (!dirs.has(d)) dirs.set(d, n);
+    }
+  }
+  for (const n of [...normalized, "game.json"]) {
+    const child = dirs.get(asciiLower(n));
+    if (child !== undefined) errs.push(`"${n}" is a file but "${child}" uses it as a folder.`);
+  }
+  return errs;
+}
+
+/**
+ * Maps the `file` of a `webgame:error` (a bundle-relative path, or a URL ending in one) to a path in the
+ * project's files. Returns null when it can't be matched (callers then fall back to the entry).
+ */
+export function resolveProjectFile(files: Record<string, unknown>, file: string | null | undefined): string | null {
+  if (typeof file !== "string" || !file.trim()) return null;
+  if (file in files) return file;
+  const direct = normalizeProjectPath(file);
+  if (direct && direct in files) return direct;
+  let path = file;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(file)) {
+    try {
+      path = new URL(file).pathname;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    /* keep it encoded */
+  }
+  let best: string | null = null;
+  for (const p of Object.keys(files)) {
+    if ((path === p || path.endsWith(`/${p}`)) && (!best || p.length > best.length)) best = p;
+  }
+  return best;
+}
+
+/** Byte size of one project file (strings are measured as UTF-8). */
+export function fileSize(data: string | ArrayBuffer): number {
+  return typeof data === "string" ? new TextEncoder().encode(data).length : data.byteLength;
+}
+
+/** Total uncompressed size of the bundle the project produces (game.json included). */
+export function projectSize(project: StudioProject): number {
+  let n = fileSize(JSON.stringify(manifestForBundle(project.manifest), null, 2) + "\n");
+  for (const [p, d] of Object.entries(project.files)) if (p !== "game.json") n += fileSize(d);
+  return n;
+}
+
+/** Problem with a built bundle's (compressed) size, or null when it is within the upload limit. */
+export function checkBundleSize(bundle: Blob | Uint8Array): string | null {
+  const n = bundle instanceof Uint8Array ? bundle.length : bundle.size;
+  return n > MAX_BUNDLE_COMPRESSED_BYTES
+    ? `The bundle is ${formatMB(n)} compressed; uploads may be at most ${formatMB(MAX_BUNDLE_COMPRESSED_BYTES)}.`
+    : null;
 }
 
 /** game.json as written into bundles: empty achievement icons/descriptions are dropped. */
@@ -151,11 +247,23 @@ export function manifestForBundle(manifest: object): StudioManifest {
   return m;
 }
 
-/** Builds the bundle .zip (game.json at the root + all files). */
-export function buildBundleZip(project: StudioProject): Blob {
+function bundleFiles(project: StudioProject): Record<string, string | ArrayBuffer> {
   const files: Record<string, string | ArrayBuffer> = { "game.json": JSON.stringify(manifestForBundle(project.manifest), null, 2) + "\n" };
   for (const [p, d] of Object.entries(project.files)) if (p !== "game.json") files[p] = d;
-  return new Blob([createZip(files)], { type: "application/zip" });
+  return files;
+}
+
+/** Builds the bundle .zip (game.json at the root + all files), store-only. */
+export function buildBundleZip(project: StudioProject): Blob {
+  return new Blob([createZip(bundleFiles(project))], { type: "application/zip" });
+}
+
+/**
+ * Builds the bundle .zip DEFLATE-compressed where the runtime has `CompressionStream("deflate-raw")`
+ * (store-only otherwise). Use it for uploads and exports: the backend's 50 MB limit is on the compressed size.
+ */
+export async function buildBundleZipAsync(project: StudioProject, opts: { compression?: "deflate" | "store" } = {}): Promise<Blob> {
+  return new Blob([await createZipAsync(bundleFiles(project), { compression: opts.compression })], { type: "application/zip" });
 }
 
 // ---------- autosave (localStorage) ----------

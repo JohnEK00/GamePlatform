@@ -5,7 +5,7 @@ import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
 import { formatScore, formatTimeUntil, useAsync } from "../util";
 import { isLeaderboardPeriod, normalizeLeaderboardConfig } from "../leaderboard";
-import { Avatar, Skeleton } from "./common";
+import { Avatar, LoadError, Skeleton } from "./common";
 
 /** localStorage key remembering the last selected period tab. */
 export const LEADERBOARD_PERIOD_KEY = "webgame.lb.period";
@@ -54,7 +54,7 @@ export function Leaderboard({ gameId, config, limit = 10, refreshKey = 0 }: Lead
   const api = useApi();
   const { user } = useAuth();
   const [period, setPeriod] = useState<LeaderboardPeriod>(readPeriod);
-  const { data, loading, error } = useAsync(() => api.getLeaderboard(gameId, { period, limit }), [api, gameId, period, limit, refreshKey]);
+  const { data, loading, error, reload } = useAsync(() => api.getLeaderboard(gameId, { period, limit }), [api, gameId, period, limit, refreshKey]);
   // Re-render once a minute so "resets in" stays fresh.
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -115,7 +115,7 @@ export function Leaderboard({ gameId, config, limit = 10, refreshKey = 0 }: Lead
           ))}
         </ol>
       ) : error ? (
-        <p className="pf-muted pf-small">Couldn't load scores.</p>
+        <LoadError message="Couldn't load scores." onRetry={reload} />
       ) : !shown || entries.length === 0 ? (
         <p className="pf-muted pf-small">{EMPTY_TEXT[period]}</p>
       ) : (

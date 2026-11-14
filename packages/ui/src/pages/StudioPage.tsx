@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { isApiError } from "../api/client";
 import { useApi, usePlatform } from "../context/config";
 import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
 import { Alert, ConfirmDialog, ProgressBar, Spinner } from "../components/common";
+import { useModal } from "../components/useModal";
 import { GameFields, type GameFieldValues } from "../components/GameFields";
 import { errorMessage, formatBytes, parseTags, useDocumentTitle, validateTags } from "../util";
 import { CodeEditor, type CodeEditorHandle } from "../studio/CodeEditor";
@@ -13,8 +14,12 @@ import { STUDIO_TEMPLATES } from "../studio/templates";
 import {
   ACHIEVEMENT_ID_PATTERN,
   asManifest,
-  buildBundleZip,
+  buildBundleZipAsync,
+  checkBundleSize,
   downloadBlob,
+  MAX_BUNDLE_UNCOMPRESSED_BYTES,
+  projectSize,
+  resolveProjectFile,
   extOf,
   IMAGE_EXTENSIONS,
   isTextPath,
@@ -292,6 +297,8 @@ function PublishDialog({ project, onClose }: { project: StudioProject; onClose: 
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof GameFieldValues, string>>>({});
   const busy = progress !== null;
+  const ref = useModal<HTMLFormElement>(true, onClose, { initialFocus: "#pf-game-title", canClose: !busy });
+  const uid = useId();
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -302,10 +309,22 @@ function PublishDialog({ project, onClose }: { project: StudioProject; onClose: 
     if (tagErr) errs.tags = tagErr;
     setFieldErrors(errs);
     if (Object.keys(errs).length) return;
+    // R11: catch everything the backend would reject before uploading anything.
+    const problems = validateProject(project);
+    if (problems.length) {
+      setError(`Fix these problems first: ${problems.slice(0, 3).join(" ")}${problems.length > 3 ? ` (+${problems.length - 3} more)` : ""}`);
+      return;
+    }
     setError(null);
     setProgress(0);
     try {
-      const zip = buildBundleZip(project);
+      const zip = await buildBundleZipAsync(project);
+      const sizeErr = checkBundleSize(zip);
+      if (sizeErr) {
+        setProgress(null);
+        setError(sizeErr);
+        return;
+      }
       const bundle = new File([zip], `${slugify(values.title)}.zip`, { type: "application/zip" });
       const game = await api.createGame({ title: values.title.trim(), description: values.description, tags, published: values.published, bundle }, (p) =>
         setProgress(p.fraction),
@@ -320,8 +339,8 @@ function PublishDialog({ project, onClose }: { project: StudioProject; onClose: 
 
   return (
     <div className="pf-modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
-      <form className="pf-modal pf-modal--wide pf-form" role="dialog" aria-modal="true" aria-labelledby="pf-publish-title" onSubmit={submit}>
-        <h2 id="pf-publish-title">Publish to the arcade</h2>
+      <form className="pf-modal pf-modal--wide pf-form" role="dialog" aria-modal="true" aria-labelledby={`${uid}-title`} ref={ref} onSubmit={submit}>
+        <h2 id={`${uid}-title`}>Publish to the arcade</h2>
         <GameFields values={values} onChange={setValues} disabled={busy} errors={fieldErrors} />
         {progress !== null && <ProgressBar value={progress} label="Uploading" />}
         {error && <Alert>{error}</Alert>}
@@ -368,6 +387,7 @@ export function StudioPage() {
 
   const manifest = asManifest(project.manifest);
   const problems = useMemo(() => validateProject(project), [project]);
+  const size = useMemo(() => projectSize(project), [project]);
   const fileNames = useMemo(() => Object.keys(project.files).sort((a, b) => a.localeCompare(b)), [project.files]);
 
   // Autosave (debounced).
@@ -378,11 +398,17 @@ export function StudioPage() {
   }, [project]);
 
   const log = useCallback((e: StudioConsoleEntry) => {
-    setLogs((xs) => [...xs.slice(-199), { ...e, id: ++logId.current, time: Date.now() }]);
-    if (e.level === "error" && e.line) {
-      const m = asManifest(projectRef.current.manifest);
-      setErrorLine({ file: typeof m.entry === "string" ? m.entry : "", line: e.line });
+    // R3: errors carry the bundle-relative `file`; fall back to the entry when it is missing or unknown.
+    let entry = e;
+    if (e.line) {
+      const p = projectRef.current;
+      const m = asManifest(p.manifest);
+      const fallback = typeof m.entry === "string" ? (resolveProjectFile(p.files, m.entry) ?? m.entry) : undefined;
+      const file = resolveProjectFile(p.files, e.file) ?? fallback;
+      entry = { ...e, file };
+      if (e.level === "error" && file) setErrorLine({ file, line: e.line });
     }
+    setLogs((xs) => [...xs.slice(-199), { ...entry, id: ++logId.current, time: Date.now() }]);
   }, []);
   const projectRef = useRef(project);
   projectRef.current = project;
@@ -511,11 +537,13 @@ export function StudioPage() {
     let blob: Blob;
     const filename = `${slugify(String(manifest.name ?? "game"))}.zip`;
     try {
-      blob = buildBundleZip(project);
+      blob = await buildBundleZipAsync(project);
     } catch (e) {
       toast.error("Couldn't build the zip", errorMessage(e));
       return;
     }
+    const sizeErr = checkBundleSize(blob);
+    if (sizeErr) toast.error("Too large to upload", sizeErr);
     if (platform.saveFile) {
       try {
         if (await platform.saveFile(filename, blob)) toast.success("Saved", filename);
@@ -531,9 +559,10 @@ export function StudioPage() {
 
   const jumpTo = (item: LogItem) => {
     if (!item.line) return;
-    const entry = typeof manifest.entry === "string" ? manifest.entry : null;
-    if (entry && entry in project.files) {
-      setSelected(entry);
+    const target = resolveProjectFile(project.files, item.file) ?? resolveProjectFile(project.files, typeof manifest.entry === "string" ? manifest.entry : null);
+    if (target && typeof project.files[target] === "string") {
+      setSelected(target);
+      setErrorLine(item.level === "error" ? { file: target, line: item.line } : null);
       setTimeout(() => editorRef.current?.goTo(item.line!, item.column ?? 1), 0);
     }
   };
@@ -545,6 +574,13 @@ export function StudioPage() {
           <h1>Studio</h1>
           <span className="pf-muted pf-small" aria-live="polite">
             {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved in this browser" : "⚠ Too large to autosave"}
+          </span>
+          <span
+            className={`pf-small ${size > MAX_BUNDLE_UNCOMPRESSED_BYTES ? "pf-studio__size--over" : "pf-muted"}`}
+            title={`Bundle size before compression (limit ${formatBytes(MAX_BUNDLE_UNCOMPRESSED_BYTES)} uncompressed, 50 MB compressed)`}
+            data-testid="studio-size"
+          >
+            {formatBytes(size)} · {Object.keys(project.files).length + 1} files
           </span>
         </div>
         <div className="pf-studio__actions">
@@ -714,8 +750,14 @@ export function StudioPage() {
               {logs.map((l) => (
                 <li key={l.id} className={`pf-log pf-log--${l.level}`}>
                   {l.line ? (
-                    <button type="button" className="pf-log__loc" onClick={() => jumpTo(l)} title="Go to line">
-                      {l.file ? `${l.file.split("/").pop()}:` : ""}
+                    <button
+                      type="button"
+                      className="pf-log__loc"
+                      onClick={() => jumpTo(l)}
+                      title={`Go to ${l.file ? `${l.file} ` : ""}line ${l.line}`}
+                      aria-label={`Go to ${l.file ? `${l.file} ` : ""}line ${l.line}${l.column ? `, column ${l.column}` : ""}`}
+                    >
+                      {l.file ? `${l.file}:` : ""}
                       {l.line}
                       {l.column ? `:${l.column}` : ""}
                     </button>

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiClient, ApiError, parseRetryAfter } from "../api/client";
+import { ApiClient, ApiError, KEEPALIVE_MAX_BODY_BYTES, parseRetryAfter } from "../api/client";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(status === 204 || body === undefined ? null : JSON.stringify(body), {
@@ -52,6 +52,21 @@ describe("ApiClient v2 routes", () => {
     expect(call(0)).toMatchObject({ url: "http://api.test/api/games/g1/save", method: "GET" });
     expect(call(1)).toMatchObject({ url: "http://api.test/api/games/g1/save", method: "PUT", body: { data: { level: 2 } } });
     expect(call(2)).toMatchObject({ url: "http://api.test/api/games/g1/save", method: "DELETE" });
+  });
+
+  it("R10: putSave keepalive only when asked and only for bodies within the keepalive quota", async () => {
+    const { client, fetchMock } = makeClient(() => jsonResponse(200, { updatedAt: "x" }));
+    await client.putSave("g1", { level: 2 });
+    await client.putSave("g1", { level: 3 }, { keepalive: true });
+    await client.putSave("g1", { blob: "x".repeat(KEEPALIVE_MAX_BODY_BYTES) }, { keepalive: true });
+    const inits = fetchMock.mock.calls.map((c) => c[1]!);
+    expect(inits[0].keepalive).toBeUndefined();
+    expect(inits[1].keepalive).toBe(true);
+    expect(inits[1].method).toBe("PUT");
+    expect(JSON.parse(String(inits[1].body))).toEqual({ data: { level: 3 } });
+    // > quota: sent as a normal request instead of being dropped
+    expect(inits[2].keepalive).toBeUndefined();
+    expect(String(inits[2].body).length).toBeGreaterThan(KEEPALIVE_MAX_BODY_BYTES);
   });
 
   it("stats", async () => {

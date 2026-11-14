@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "../api/client";
@@ -165,6 +165,8 @@ describe("StudioPage", () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     render(<WebGameApp config={{ apiBaseUrl: "", routerMode: "hash", platform: saveFile ? { saveFile } : undefined }} client={client} />);
     await act(async () => (await screen.findByRole("button", { name: /Export .zip/ })).click());
+    // The zip is built asynchronously (DEFLATE via CompressionStream).
+    await waitFor(() => expect(saveFile ?? clickSpy).toHaveBeenCalled());
     window.location.hash = "";
     return clickSpy;
   }

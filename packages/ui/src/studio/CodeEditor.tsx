@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef, useState, type KeyboardEvent } from "react";
+import { forwardRef, useId, useImperativeHandle, useRef, useState, type KeyboardEvent } from "react";
 
 export type CodeEditorHandle = {
   /** Moves the caret to a 1-based line/column and scrolls it into view. */
@@ -20,7 +20,13 @@ export type CodeEditorProps = {
 const INDENT = "  ";
 const LINE_HEIGHT = 20; // px, must match .pf-editor CSS
 
-/** Textarea code editor: line numbers, Tab / Shift+Tab indentation, auto-indent on Enter, Ctrl/Cmd+S to run. */
+/**
+ * Textarea code editor: line numbers, Tab / Shift+Tab indentation, auto-indent on Enter, Ctrl/Cmd+S to run.
+ *
+ * Keyboard access (WCAG 2.1.2, no keyboard trap): Tab only indents while "tab capture" is on. Escape releases
+ * it for the next key, so Esc then Tab moves focus out; Ctrl+M (as in VS Code) toggles "Tab moves focus"
+ * until toggled back. A short hint below the editor says so and is linked with aria-describedby.
+ */
 export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor(
   { value, onChange, onRun, label, readOnly, errorLine },
   ref,
@@ -28,7 +34,12 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
   const taRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
+  /** "capture": Tab indents · "escaped": the next Tab leaves (one-shot) · "focus": Tab moves focus (Ctrl+M). */
+  const [tabMode, setTabMode] = useState<"capture" | "escaped" | "focus">("capture");
+  const [announce, setAnnounce] = useState("");
+  const hintId = useId();
   const lines = value.split("\n").length;
+  const tabCaptured = tabMode === "capture" && !readOnly;
 
   useImperativeHandle(ref, () => ({
     focus: () => taRef.current?.focus(),
@@ -69,6 +80,29 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       e.preventDefault();
       onRun?.();
       return;
+    }
+    if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "m" || e.key === "M")) {
+      e.preventDefault();
+      const next = tabMode === "focus" ? "capture" : "focus";
+      setTabMode(next);
+      setAnnounce(next === "focus" ? "Tab moves focus. Press Ctrl+M to indent with Tab again." : "Tab indents. Press Escape then Tab to leave the editor.");
+      return;
+    }
+    if (e.key === "Escape") {
+      if (tabMode === "capture") {
+        setTabMode("escaped");
+        setAnnounce("Tab capture off: press Tab to move focus out of the editor.");
+      }
+      return;
+    }
+    if (e.key === "Tab") {
+      // Released: let the browser move focus. A one-shot release ends with this Tab.
+      if (tabMode !== "capture" || readOnly) {
+        if (tabMode === "escaped") setTabMode("capture");
+        return;
+      }
+    } else if (tabMode === "escaped" && !["Shift", "Control", "Alt", "Meta"].includes(e.key)) {
+      setTabMode("capture");
     }
     if (readOnly) return;
     const { selectionStart: s, selectionEnd: en, value: v } = ta;
@@ -116,31 +150,53 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
   };
 
   return (
-    <div className="pf-editor">
-      <div className="pf-editor__gutter" ref={gutterRef} aria-hidden="true">
-        <div style={{ transform: `translateY(${-scrollTop}px)` }}>
-          {Array.from({ length: lines }, (_, i) => (
-            <div key={i} className={errorLine === i + 1 ? "is-error" : undefined}>
-              {i + 1}
-            </div>
-          ))}
+    <div className="pf-editor-wrap">
+      <div className="pf-editor">
+        <div className="pf-editor__gutter" ref={gutterRef} aria-hidden="true">
+          <div style={{ transform: `translateY(${-scrollTop}px)` }}>
+            {Array.from({ length: lines }, (_, i) => (
+              <div key={i} className={errorLine === i + 1 ? "is-error" : undefined}>
+                {i + 1}
+              </div>
+            ))}
+          </div>
         </div>
+        <textarea
+          ref={taRef}
+          className="pf-editor__input"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoComplete="off"
+          autoCorrect="off"
+          wrap="off"
+          readOnly={readOnly}
+          aria-label={label}
+          aria-describedby={hintId}
+          onBlur={() => tabMode === "escaped" && setTabMode("capture")}
+        />
       </div>
-      <textarea
-        ref={taRef}
-        className="pf-editor__input"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-        spellCheck={false}
-        autoCapitalize="off"
-        autoComplete="off"
-        autoCorrect="off"
-        wrap="off"
-        readOnly={readOnly}
-        aria-label={label}
-      />
+      <p className="pf-editor__hint" id={hintId} data-tab-mode={tabCaptured ? "capture" : "focus"}>
+        {tabCaptured ? (
+          <>
+            <kbd>Tab</kbd> indents · <kbd>Esc</kbd> then <kbd>Tab</kbd> to leave editor · <kbd>Ctrl</kbd>+<kbd>M</kbd> Tab moves focus
+          </>
+        ) : tabMode === "escaped" ? (
+          <>
+            Press <kbd>Tab</kbd> to leave the editor
+          </>
+        ) : (
+          <>
+            <kbd>Tab</kbd> moves focus · <kbd>Ctrl</kbd>+<kbd>M</kbd> to indent with Tab
+          </>
+        )}
+      </p>
+      <span className="pf-sr-only" role="status" aria-live="polite">
+        {announce}
+      </span>
     </div>
   );
 });

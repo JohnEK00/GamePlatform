@@ -3,7 +3,7 @@ export { WebGameApp, WebGameProviders, WebGameRoutes } from "./WebGameApp";
 export type { WebGameAppProps } from "./WebGameApp";
 
 // API
-export { ApiClient, ApiError, isApiError, buildQuery, resolveApiUrl, parseRetryAfter, rateLimitMessage } from "./api/client";
+export { ApiClient, ApiError, isApiError, buildQuery, resolveApiUrl, parseRetryAfter, rateLimitMessage, KEEPALIVE_MAX_BODY_BYTES } from "./api/client";
 export type { ApiClientOptions } from "./api/client";
 export type * from "./api/types";
 
@@ -39,11 +39,18 @@ export { PlaysChart, niceMax } from "./components/PlaysChart";
 export type { PlaysChartProps } from "./components/PlaysChart";
 
 // Studio
-export { createZip, crc32 } from "./studio/zip";
-export type { ZipFiles, ZipInput } from "./studio/zip";
+export { createZip, createZipAsync, canDeflateRaw, crc32 } from "./studio/zip";
+export type { ZipFiles, ZipInput, CreateZipOptions, CreateZipAsyncOptions, DeflateRawSync } from "./studio/zip";
 export {
   buildBundleZip,
+  buildBundleZipAsync,
   validateProject,
+  validateBundlePaths,
+  projectSize,
+  checkBundleSize,
+  resolveProjectFile,
+  MAX_BUNDLE_COMPRESSED_BYTES,
+  MAX_BUNDLE_UNCOMPRESSED_BYTES,
   projectFromFileList,
   serializeProject,
   deserializeProject,
@@ -84,6 +91,7 @@ export {
   EmptyState,
   ErrorState,
   FallbackArt,
+  LoadError,
   Pagination,
   ProgressBar,
   Skeleton,
@@ -93,6 +101,8 @@ export {
   Thumbnail,
   UserLink,
 } from "./components/common";
+export { useModal } from "./components/useModal";
+export type { UseModalOptions } from "./components/useModal";
 
 // Pages
 export { HomePage } from "./pages/HomePage";

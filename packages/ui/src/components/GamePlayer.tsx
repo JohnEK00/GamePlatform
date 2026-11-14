@@ -226,15 +226,18 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
     let timer: ReturnType<typeof setTimeout> | null = null;
     let inflight: Promise<void> | null = null;
     const arm = (ms: number) => {
-      if (timer === null) timer = setTimeout(flush, ms);
+      if (timer === null) timer = setTimeout(() => flush(), ms);
     };
-    function flush() {
+    // `final`: the page is going away (pagehide / unmount). Use fetch keepalive so the browser doesn't cancel
+    // the PUT; ApiClient falls back to a normal request for bodies over the keepalive quota. The data is
+    // already in localStorage either way (written before the debounce).
+    function flush(final = false) {
       if (timer !== null) clearTimeout(timer);
       timer = null;
       const data = pending;
       pending = null;
       if (!data || !latest.current.token) return;
-      const p: Promise<void> = api.putSave(gameId, data).then(
+      const p: Promise<void> = (final ? api.putSave(gameId, data, { keepalive: true }) : api.putSave(gameId, data)).then(
         () => {},
         (e: unknown) => {
           if (isApiError(e) && e.code === "rate_limited") {
@@ -266,11 +269,11 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
       pending = data;
       arm(CLOUD_SAVE_DEBOUNCE_MS);
     };
-    const onPageHide = () => flush();
+    const onPageHide = () => flush(true);
     window.addEventListener("pagehide", onPageHide);
     return () => {
       window.removeEventListener("pagehide", onPageHide);
-      flush();
+      flush(true);
       cloudWrite.current = null;
       writers.delete(writer);
       if (writers.size === 0 && cloudWriters.get(gameId) === writers) cloudWriters.delete(gameId);

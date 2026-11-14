@@ -287,12 +287,16 @@ export function DocsPage() {
       <section>
         <h2>9. Game Studio</h2>
         <p>
-          The <Link to="/studio">Studio</Link> is a small IDE in the arcade: a file list, a code editor (<kbd>Tab</kbd> indents,{" "}
-          <kbd>Ctrl/⌘ S</kbd> runs), a <code>game.json</code> form with an achievements editor, starter templates and a live preview
+          The <Link to="/studio">Studio</Link> is a small IDE in the arcade: a file list, a code editor (<kbd>Tab</kbd> indents, <kbd>Esc</kbd> then <kbd>Tab</kbd>{" "}
+          leaves the editor, <kbd>Ctrl M</kbd> switches Tab to moving focus, <kbd>Ctrl/⌘ S</kbd> runs), a <code>game.json</code> form with an achievements editor, starter templates and a live preview
           with a console that shows errors with line numbers. Scores and achievements in the preview are only simulated.
         </p>
         <ul>
           <li>Your project autosaves in this browser. Import images and sounds, or open a whole game folder.</li>
+          <li>
+            Split your code into several modules with relative imports (<code>import {"{ Player }"} from "./player.js"</code>); the
+            preview runs them all, and errors link to the right file and line.
+          </li>
           <li>
             <strong>Export .zip</strong> downloads a ready-to-upload bundle; <strong>Publish</strong> uploads it straight to the
             arcade (requires an account).

@@ -142,7 +142,15 @@ type RequestOptions = {
   query?: Query;
   json?: unknown;
   signal?: AbortSignal;
+  /** Use `fetch` keepalive when the body fits the browser's keepalive quota (see KEEPALIVE_MAX_BODY_BYTES). */
+  keepalive?: boolean;
 };
+
+/**
+ * Largest request body sent with `keepalive: true`. Browsers cap the bodies of all in-flight keepalive
+ * requests at 64 KiB; we leave a little room for other keepalive traffic and fall back to a normal fetch above it.
+ */
+export const KEEPALIVE_MAX_BODY_BYTES = 60 * 1024;
 
 /** Typed client for the WebGameApp REST API (docs/API.md). */
 export class ApiClient {
@@ -182,6 +190,10 @@ export class ApiClient {
       signal: opts.signal,
     };
     if (opts.json !== undefined) init.body = JSON.stringify(opts.json);
+    if (opts.keepalive) {
+      const size = typeof init.body === "string" ? new TextEncoder().encode(init.body).length : 0;
+      if (size <= KEEPALIVE_MAX_BODY_BYTES) init.keepalive = true;
+    }
     let res: Response;
     try {
       res = await f(this.baseUrl + path + buildQuery(opts.query), init);
@@ -373,8 +385,13 @@ export class ApiClient {
   getSave(id: string, signal?: AbortSignal): Promise<CloudSave> {
     return this.request(`/api/games/${encodeURIComponent(id)}/save`, { signal });
   }
-  putSave(id: string, data: Record<string, unknown>): Promise<PutSaveResponse> {
-    return this.request(`/api/games/${encodeURIComponent(id)}/save`, { method: "PUT", json: { data } });
+  /**
+   * `opts.keepalive`: send with `fetch(…, { keepalive: true })` so the request survives the page being closed
+   * (use it for the pagehide / unmount flush). Bodies over {@link KEEPALIVE_MAX_BODY_BYTES} can't use keepalive
+   * (browser quota) and go out as a normal request instead.
+   */
+  putSave(id: string, data: Record<string, unknown>, opts: { keepalive?: boolean } = {}): Promise<PutSaveResponse> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/save`, { method: "PUT", json: { data }, keepalive: opts.keepalive });
   }
   deleteSave(id: string): Promise<void> {
     return this.request(`/api/games/${encodeURIComponent(id)}/save`, { method: "DELETE" });

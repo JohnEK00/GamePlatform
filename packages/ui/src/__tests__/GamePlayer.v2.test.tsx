@@ -185,7 +185,23 @@ describe("GamePlayer cloud saves", () => {
     post(iframe.contentWindow, { type: "webgame:save", data: { hp: 3 } });
     expect(putSave).not.toHaveBeenCalled();
     unmount();
-    expect(putSave).toHaveBeenCalledWith("g1", { hp: 3 });
+    expect(putSave).toHaveBeenCalledWith("g1", { hp: 3 }, { keepalive: true });
+  });
+
+  it("R10: flushes on pagehide with keepalive (debounced PUTs don't use it)", async () => {
+    vi.useFakeTimers();
+    const { iframe, putSave, unmount } = await setup();
+    post(iframe.contentWindow, { type: "webgame:save", data: { hp: 1 } });
+    await flush(2000);
+    expect(putSave).toHaveBeenLastCalledWith("g1", { hp: 1 });
+    post(iframe.contentWindow, { type: "webgame:save", data: { hp: 2 } });
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(putSave).toHaveBeenLastCalledWith("g1", { hp: 2 }, { keepalive: true });
+    expect(JSON.parse(localStorage.getItem("webgame.save.g1")!)).toEqual({ hp: 2 });
+    unmount();
+    expect(putSave).toHaveBeenCalledTimes(2);
   });
 
   it("discardPendingCloudSave drops the pending write (used by Clear save data)", async () => {

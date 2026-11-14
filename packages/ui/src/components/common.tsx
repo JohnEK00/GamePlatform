@@ -1,8 +1,9 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { UserRef } from "../api/types";
 import { useResolveUrl } from "../context/config";
 import { errorMessage, hashString } from "../util";
+import { useModal } from "./useModal";
 
 export function Spinner({ size = 20, label = "Loading" }: { size?: number; label?: string }) {
   return <span className="pf-spinner" style={{ width: size, height: size }} role="status" aria-label={label} />;
@@ -40,6 +41,20 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
     >
       {errorMessage(error)}
     </EmptyState>
+  );
+}
+
+/** Compact inline load failure for panels: a muted message plus a Retry button. */
+export function LoadError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <p className="pf-load-error pf-muted pf-small" role="status">
+      <span>{message}</span>
+      {onRetry && (
+        <button type="button" className="pf-linkbtn" onClick={onRetry}>
+          Retry
+        </button>
+      )}
+    </p>
   );
 }
 
@@ -222,28 +237,25 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const cancelRef = useRef(onCancel);
-  cancelRef.current = onCancel;
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancelRef.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      prev?.focus?.();
-    };
-  }, [open]);
+  const uid = useId();
+  const ref = useModal<HTMLDivElement>(open, onCancel, { canClose: !busy });
   if (!open) return null;
   return (
     <div className="pf-modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
-      <div className="pf-modal" role="dialog" aria-modal="true" aria-labelledby="pf-confirm-title" ref={ref}>
-        <h2 id="pf-confirm-title">{title}</h2>
-        {children && <div className="pf-modal__body">{children}</div>}
+      <div
+        className="pf-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${uid}-title`}
+        aria-describedby={children ? `${uid}-body` : undefined}
+        ref={ref}
+      >
+        <h2 id={`${uid}-title`}>{title}</h2>
+        {children && (
+          <div className="pf-modal__body" id={`${uid}-body`}>
+            {children}
+          </div>
+        )}
         <div className="pf-modal__actions">
           <button type="button" className="pf-btn pf-btn--ghost" onClick={onCancel} data-autofocus>
             Cancel
