@@ -179,3 +179,40 @@ export function formatTimeUntil(endIso: string | null | undefined, now = Date.no
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
 }
+
+/** F004: how long a card shows the "Updated" badge after a bundle replace (7 days). */
+export const UPDATED_BADGE_MS = 7 * 24 * 3600 * 1000;
+/** F004: tolerated clock skew for a `lastUpdatedAt` slightly in the future. */
+const UPDATED_BADGE_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * F004: true while `lastUpdatedAt` is a valid timestamp less than {@link UPDATED_BADGE_MS} ago.
+ * A timestamp up to 5 minutes in the future (clock skew) also counts. Missing (older servers) or null → false.
+ */
+export function isRecentlyUpdated(game: { lastUpdatedAt?: string | null }, now = Date.now()): boolean {
+  const iso = game?.lastUpdatedAt;
+  if (typeof iso !== "string" || !iso) return false;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return false;
+  const age = now - t;
+  return age >= -UPDATED_BADGE_SKEW_MS && age < UPDATED_BADGE_MS;
+}
+
+/** F004: max length of release notes (Unicode scalar values, checked server-side too). */
+export const RELEASE_NOTES_MAX = 1000;
+
+/** F004: query value that scrolls the game page to its "What's new" panel (works with HashRouter too). */
+export const VERSIONS_SECTION = "versions";
+
+/** F004: link to a game's version history (`?section=versions`, not a `#hash`, so it works under HashRouter). */
+export function gameVersionsPath(gameId: string): string {
+  return `/games/${encodeURIComponent(gameId)}?section=${VERSIONS_SECTION}`;
+}
+
+/** F004: copy for a 409 on bundle replace (a stale `expectedVersion` or a lost concurrent upload). */
+export const REPLACE_CONFLICT_MESSAGE = "This game was updated to a newer version since you opened this page. Reload and try again.";
+
+/** F004: a 422 whose message is about the release notes (shown under the notes textarea). */
+export function isNotesError(e: unknown): boolean {
+  return isApiError(e) && e.code === "validation" && /notes/i.test(e.message);
+}

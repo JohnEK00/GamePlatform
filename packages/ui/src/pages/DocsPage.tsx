@@ -353,6 +353,23 @@ export function DocsPage() {
         </p>
       </section>
 
+      <section>
+        <h2>13. Release notes</h2>
+        <p>
+          When you upload a new bundle (game page → <em>Replace bundle</em>, or the edit page), type what changed in the{" "}
+          <em>What's new</em> box. You can add notes to your first upload too, and fix any note later from the game page's{" "}
+          <em>Version history</em>. Notes are plain text, up to 1000 characters, with line breaks kept; HTML, Markdown and
+          links show as typed. Replacing a bundle drops achievements your new <code>game.json</code> no longer declares, so
+          say so in the note.
+        </p>
+        <p>
+          Replacing the bundle of a <strong>published</strong> game puts an <span className="pf-badge pf-badge--updated">Updated</span>{" "}
+          badge on its cards for 7 days, and your followers and everyone who favorited the game see the note in their{" "}
+          <Link to="/feed">feed</Link> (several updates within 24 hours are grouped, showing up to 3 notes). Editing details,
+          publishing a draft or fixing a note doesn't badge the game or notify anyone again.
+        </p>
+      </section>
+
       <div className="pf-panel pf-docs__cta">
         <div>
           <h2>Ready to ship?</h2>

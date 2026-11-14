@@ -15,6 +15,7 @@ import type {
   Game,
   GameAchievement,
   GameStats,
+  GameVersion,
   ListReportsQuery,
   PutSaveResponse,
   Report,
@@ -305,14 +306,28 @@ export class ApiClient {
     form.append("published", input.published === false ? "false" : "true");
     form.append("bundle", input.bundle, fileName(input.bundle, "bundle.zip"));
     if (input.thumbnail) form.append("thumbnail", input.thumbnail, fileName(input.thumbnail, "thumbnail"));
+    if (input.notes && input.notes.trim()) form.append("notes", input.notes);
     return this.upload("POST", "/api/games", form, onProgress);
   }
   updateGame(id: string, body: UpdateGameRequest): Promise<Game> {
     return this.request(`/api/games/${encodeURIComponent(id)}`, { method: "PATCH", json: body });
   }
-  replaceBundle(id: string, bundle: Blob, onProgress?: UploadProgress): Promise<Game> {
+  /**
+   * F004: `opts.notes` (sent when non-empty after trim) and `opts.expectedVersion` (the version the page was
+   * based on; a mismatch returns 409 `conflict`).
+   */
+  replaceBundle(
+    id: string,
+    bundle: Blob,
+    onProgress?: UploadProgress,
+    opts: { notes?: string; expectedVersion?: number } = {},
+  ): Promise<Game> {
     const form = new FormData();
     form.append("bundle", bundle, fileName(bundle, "bundle.zip"));
+    if (opts.notes && opts.notes.trim()) form.append("notes", opts.notes);
+    if (opts.expectedVersion !== undefined && opts.expectedVersion !== null) {
+      form.append("expectedVersion", String(Math.trunc(opts.expectedVersion)));
+    }
     return this.upload("PUT", `/api/games/${encodeURIComponent(id)}/bundle`, form, onProgress);
   }
   replaceThumbnail(id: string, thumbnail: Blob, onProgress?: UploadProgress): Promise<Game> {
@@ -451,6 +466,19 @@ export class ApiClient {
   }
   getFeedSuggestions(): Promise<SuggestedCreator[]> {
     return this.request("/api/feed/suggestions");
+  }
+
+  // ---------- F004: Version history ----------
+  /** Highest version first; server default 20 per page (max 100). */
+  listGameVersions(id: string, query: PageQuery = {}): Promise<Page<GameVersion>> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/versions`, { query: { page: query.page, perPage: query.perPage } });
+  }
+  /** Owner-only: fix a version's release notes. */
+  updateVersionNotes(id: string, version: number, notes: string): Promise<GameVersion> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/versions/${encodeURIComponent(String(version))}`, {
+      method: "PATCH",
+      json: { notes },
+    });
   }
 }
 

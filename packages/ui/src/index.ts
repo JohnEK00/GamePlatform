@@ -72,6 +72,10 @@ export type { GamePlayerProps, GamePlayerGame } from "./components/GamePlayer";
 export { GameCard, GameCardSkeleton, GameGrid } from "./components/GameCard";
 export type { GameCardProps, GameCardHighlight } from "./components/GameCard";
 export { RelatedGames, RELATED_GAMES_LIMIT } from "./components/RelatedGames";
+export { VersionHistory } from "./components/VersionHistory";
+export type { VersionHistoryProps } from "./components/VersionHistory";
+export { ReleaseNotesField } from "./components/ReleaseNotesField";
+export type { ReleaseNotesFieldProps } from "./components/ReleaseNotesField";
 export type { RelatedGamesProps } from "./components/RelatedGames";
 export { StarRating } from "./components/StarRating";
 export type { StarRatingProps } from "./components/StarRating";
@@ -131,4 +135,16 @@ export { FollowListPage } from "./pages/FollowListPage";
 export type { FollowListMode } from "./pages/FollowListPage";
 
 // Utils
-export { formatCount, formatDate, timeAgo, errorMessage, looksLikeZip, formatScore, formatTimeUntil } from "./util";
+export {
+  formatCount,
+  formatDate,
+  timeAgo,
+  errorMessage,
+  looksLikeZip,
+  formatScore,
+  formatTimeUntil,
+  UPDATED_BADGE_MS,
+  isRecentlyUpdated,
+  RELEASE_NOTES_MAX,
+  gameVersionsPath,
+} from "./util";

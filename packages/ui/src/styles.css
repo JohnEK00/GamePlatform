@@ -3256,3 +3256,165 @@ a.pf-tab {
     align-items: flex-start;
   }
 }
+
+/* ---------- F004: release notes, "Updated" badge, version history ---------- */
+.pf-badge--updated {
+  /* Near-opaque so it stays legible over any thumbnail; green = distinct from draft (yellow) and owner (purple). */
+  background: rgba(10, 11, 19, 0.86);
+  color: var(--pf-success);
+  box-shadow: inset 0 0 0 1px rgba(47, 217, 166, 0.55);
+}
+.pf-notesfield__input {
+  resize: vertical;
+  min-height: 5.5em;
+}
+.pf-notesfield__count {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+}
+.pf-upload__addnotes {
+  justify-self: start;
+  font-size: 0.88rem;
+}
+.pf-replace__file {
+  color: var(--pf-text);
+  overflow-wrap: anywhere;
+}
+.pf-replace__conflict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.pf-versions {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.pf-versions__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.pf-versions__head .pf-panel__title {
+  margin: 0;
+}
+.pf-versions__notes {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--pf-text-2);
+  line-height: 1.5;
+}
+.pf-versions__empty {
+  margin: 0;
+}
+.pf-versions__toggle {
+  justify-self: start;
+  font-size: 0.88rem;
+  text-decoration: none;
+  color: var(--pf-text-2);
+}
+.pf-versions__toggle:hover {
+  color: var(--pf-accent);
+}
+.pf-versions__history {
+  display: grid;
+  gap: 10px;
+}
+.pf-versions__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  border-top: 1px solid var(--pf-border);
+}
+.pf-versions__row {
+  display: grid;
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--pf-border);
+}
+.pf-versions__rowhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.pf-versions__num {
+  font-family: var(--pf-mono);
+  color: var(--pf-text);
+}
+.pf-versions__current {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(47, 217, 166, 0.14);
+  color: var(--pf-success);
+}
+.pf-versions__edit {
+  margin-left: auto;
+}
+.pf-versions__editor {
+  display: grid;
+  gap: 8px;
+}
+.pf-versions__editactions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.pf-versions__more {
+  justify-self: center;
+}
+.pf-versions__loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.pf-versions__earlier {
+  margin: 0;
+  font-style: italic;
+}
+.pf-feed__changes {
+  display: grid;
+  gap: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--pf-border-strong);
+}
+.pf-feed__noteslist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.pf-feed__notes {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--pf-text-2);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.pf-feed__ver {
+  font-family: var(--pf-mono);
+  font-size: 0.82rem;
+}
+.pf-feed__whatsnew {
+  justify-self: start;
+  color: var(--pf-accent);
+  text-decoration: none;
+}
+.pf-feed__whatsnew:hover {
+  text-decoration: underline;
+}

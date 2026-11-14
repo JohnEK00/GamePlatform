@@ -40,6 +40,11 @@ export type GameSummary = {
    * Older servers omit it; treat a missing value as 0.
    */
   playsWeek: number;
+  /**
+   * F004: RFC3339 UTC of the latest bundle replace made while the game was published; null if none.
+   * Older servers omit it; treat a missing value as null.
+   */
+  lastUpdatedAt?: string | null;
 };
 
 /** F003: an item of `GET /api/games/{id}/related`. */
@@ -67,6 +72,29 @@ export type Game = GameSummary & {
   achievements: AchievementDef[];
   /** F001: leaderboard semantics from game.json (defaults when absent). */
   leaderboard: LeaderboardConfig;
+  /** F004: the current version's history row. Older servers omit it. */
+  latestVersion?: GameVersion;
+};
+
+/** F004: one row of a game's version history. */
+export type GameVersion = {
+  /** >= 1 */
+  version: number;
+  /** Plain text, 0–1000 chars, "
+" line breaks; "" = no notes. Never render as HTML. */
+  notes: string;
+  /** RFC3339 UTC: when this version went live. */
+  createdAt: string;
+  /** version === the game's current version */
+  current: boolean;
+};
+
+/** F004: what a (possibly coalesced) gameUpdated feed item covers. */
+export type FeedUpdate = {
+  /** Lowest version covered; === FeedItem.version when only one. */
+  fromVersion: number;
+  /** Covered versions with non-empty notes, newest first, at most 3. */
+  changes: { version: number; notes: string }[];
 };
 
 export type Page<T> = { items: T[]; total: number; page: number; perPage: number };
@@ -156,6 +184,8 @@ export type CreateGameInput = {
   bundle: Blob;
   /** png/jpg/webp ≤ 2MB */
   thumbnail?: Blob | null;
+  /** F004: version 1's release notes (sent only when non-empty after trim). */
+  notes?: string;
 };
 
 export type UpdateGameRequest = {
@@ -337,6 +367,8 @@ export type FeedItem = {
   } | null;
   /** achievementUnlocked only. `count`: unlocks by the actor in this game that UTC day (>= 1); the def is the latest. */
   achievement: (AchievementDef & { count: number }) | null;
+  /** F004: gameUpdated only; missing on older servers (treat as null). */
+  update?: FeedUpdate | null;
 };
 
 export type FeedPage = { items: FeedItem[]; nextCursor: string | null };

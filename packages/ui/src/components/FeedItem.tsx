@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { FeedItem as FeedItemData, FeedItemKind } from "../api/types";
 import { normalizeLeaderboardConfig } from "../leaderboard";
-import { formatScore, timeAgo } from "../util";
+import { formatScore, gameVersionsPath, timeAgo } from "../util";
 import { AchievementIcon } from "./Achievements";
 import { Avatar, Skeleton, Thumbnail } from "./common";
 
@@ -40,16 +40,27 @@ function sentence(item: FeedItemData): ReactNode {
           {actor} published {game}
         </>
       );
-    case "gameUpdated":
-      return item.version != null ? (
+    case "gameUpdated": {
+      if (item.version == null) {
+        return (
+          <>
+            {actor} updated {game}
+          </>
+        );
+      }
+      // F004: a coalesced item covers fromVersion..version.
+      const from = item.update?.fromVersion;
+      const count = typeof from === "number" && from < item.version ? item.version - from + 1 : 1;
+      return count > 1 ? (
         <>
-          {actor} updated {game} to v{item.version}
+          {actor} updated {game} to v{item.version} ({count} updates)
         </>
       ) : (
         <>
-          {actor} updated {game}
+          {actor} updated {game} to v{item.version}
         </>
       );
+    }
     case "personalBest": {
       if (!item.score) return null;
       const display = feedScoreDisplay(item.score);
@@ -88,6 +99,11 @@ export function FeedItem({ item }: { item: FeedItemData }) {
   const text = sentence(item);
   if (text === null) return null;
   const ach = item.kind === "achievementUnlocked" ? item.achievement : null;
+  // F004: release notes of the covered versions (plain text, newest first, at most 3).
+  const changes =
+    item.kind === "gameUpdated" && item.update && Array.isArray(item.update.changes)
+      ? item.update.changes.filter((c) => c && typeof c.notes === "string" && c.notes.trim() !== "").slice(0, 3)
+      : [];
   return (
     <article className="pf-feeditem" data-kind={item.kind}>
       <Link to={`/u/${encodeURIComponent(item.actor.username)}`} className="pf-feeditem__avatar" tabIndex={-1} aria-hidden="true">
@@ -95,6 +111,20 @@ export function FeedItem({ item }: { item: FeedItemData }) {
       </Link>
       <div className="pf-feeditem__body">
         <p className="pf-feeditem__text">{text}</p>
+        {changes.length > 0 && (
+          <div className="pf-feed__changes">
+            <ul className="pf-feed__noteslist">
+              {changes.map((c) => (
+                <li key={c.version} className="pf-feed__notes">
+                  <span className="pf-feed__ver pf-muted">v{c.version}:</span> {c.notes}
+                </li>
+              ))}
+            </ul>
+            <Link to={gameVersionsPath(item.game.id)} className="pf-feed__whatsnew pf-small">
+              What's new →
+            </Link>
+          </div>
+        )}
         <div className="pf-feeditem__meta pf-small pf-muted">
           <time dateTime={item.createdAt}>{timeAgo(item.createdAt)}</time>
           {item.reason === "favorite" && <span className="pf-feeditem__tag">From your favorites</span>}

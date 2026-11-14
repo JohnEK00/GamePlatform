@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import type { GameSummary } from "../api/types";
-import { formatCount } from "../util";
+import { formatCount, isRecentlyUpdated, timeAgo } from "../util";
 import { FavoriteButton } from "./Favorite";
 import { Avatar, Skeleton, StarsDisplay, Thumbnail } from "./common";
 
@@ -21,6 +21,9 @@ export function GameCard({ game, showStatus, highlight, sharedTags }: GameCardPr
   const playsWeek = typeof game.playsWeek === "number" && game.playsWeek > 0 ? game.playsWeek : 0;
   const showTrending = highlight === "trending" && playsWeek > 0;
   const shown = highlight === "related" && sharedTags ? sharedTags.slice(0, 2) : [];
+  // F004: "Draft" wins over "Updated"; older servers omit lastUpdatedAt (no badge).
+  const showDraft = !!showStatus && !game.published;
+  const showUpdated = !showDraft && isRecentlyUpdated(game);
   return (
     <article className="pf-card">
       <Link to={`/games/${game.id}`} className="pf-card__link" aria-label={`Play ${game.title}`}>
@@ -28,7 +31,12 @@ export function GameCard({ game, showStatus, highlight, sharedTags }: GameCardPr
         <span className="pf-card__play" aria-hidden="true">
           ▶
         </span>
-        {showStatus && !game.published && <span className="pf-badge pf-badge--draft pf-card__badge">Draft</span>}
+        {showDraft && <span className="pf-badge pf-badge--draft pf-card__badge">Draft</span>}
+        {showUpdated && (
+          <span className="pf-badge pf-badge--updated pf-card__badge" title={`Updated ${timeAgo(game.lastUpdatedAt as string)}`}>
+            Updated
+          </span>
+        )}
       </Link>
       <div className="pf-card__body">
         <h3 className="pf-card__title">

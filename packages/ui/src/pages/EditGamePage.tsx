@@ -7,7 +7,17 @@ import { useToast } from "../context/toast";
 import { Alert, ConfirmDialog, EmptyState, ErrorState, ProgressBar, Skeleton, Spinner, Thumbnail } from "../components/common";
 import { FileDrop } from "../components/FileDrop";
 import { GameFields, type GameFieldValues } from "../components/GameFields";
-import { errorMessage, looksLikeZip, parseTags, useAsync, useDocumentTitle, validateTags } from "../util";
+import { ReleaseNotesField } from "../components/ReleaseNotesField";
+import {
+  errorMessage,
+  isNotesError,
+  looksLikeZip,
+  parseTags,
+  REPLACE_CONFLICT_MESSAGE,
+  useAsync,
+  useDocumentTitle,
+  validateTags,
+} from "../util";
 import { NotFoundPage } from "./NotFoundPage";
 import { BUNDLE_ACCEPT, IMAGE_ACCEPT } from "./UploadPage";
 
@@ -33,6 +43,11 @@ export function EditGamePage() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // F004: release notes for the next bundle, and the 409 "reload" state.
+  const [notes, setNotes] = useState("");
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [reloading, setReloading] = useState(false);
 
   useEffect(() => {
     if (game && !values) setValues(toValues(game));
@@ -103,17 +118,38 @@ export function EditGamePage() {
   const uploadBundle = async () => {
     if (!bundle) return;
     setFileError(null);
+    setNotesError(null);
+    setConflict(false);
     if (!(await looksLikeZip(bundle))) return setFileError(`"${bundle.name}" doesn't look like a valid .zip file.`);
     setProgress({ what: "Uploading bundle", v: 0 });
     try {
-      const g = await api.replaceBundle(game.id, bundle, (p) => setProgress({ what: "Uploading bundle", v: p.fraction }));
+      const g = await api.replaceBundle(game.id, bundle, (p) => setProgress({ what: "Uploading bundle", v: p.fraction }), {
+        notes,
+        expectedVersion: game.version,
+      });
       setData(g);
       setBundle(null);
-      toast.success("New version uploaded", `Version ${g.version} is live.`);
+      setNotes("");
+      toast.success(`Version ${g.version} is live`);
     } catch (err) {
-      setFileError(isApiError(err) && err.code === "validation" ? `Bundle rejected: ${err.message}` : errorMessage(err));
+      if (isApiError(err) && err.status === 409) setConflict(true);
+      else if (isNotesError(err)) setNotesError(errorMessage(err));
+      else setFileError(isApiError(err) && err.code === "validation" ? `Bundle rejected: ${err.message}` : errorMessage(err));
     } finally {
       setProgress(null);
+    }
+  };
+
+  /** F004: refetch the game after a 409, keeping the chosen bundle, typed notes and unsaved details. */
+  const reloadGame = async () => {
+    setReloading(true);
+    try {
+      setData(await api.getGame(game.id));
+      setConflict(false);
+    } catch (err) {
+      setFileError(errorMessage(err));
+    } finally {
+      setReloading(false);
     }
   };
 
@@ -173,12 +209,21 @@ export function EditGamePage() {
               Version {game.version} · entry <code>{game.entry}</code> · {game.width}×{game.height}
             </p>
             <FileDrop label="New bundle (.zip)" hint="Uploading bumps the version" accept={BUNDLE_ACCEPT} file={bundle} onFile={setBundle} disabled={busy} icon="📦" />
-            <button type="button" className="pf-btn" disabled={!bundle || busy} onClick={uploadBundle}>
+            <ReleaseNotesField value={notes} onChange={setNotes} disabled={busy} error={notesError} />
+            <button type="button" className="pf-btn" disabled={!bundle || busy || reloading} onClick={uploadBundle}>
               Upload new version
             </button>
           </div>
         </div>
         {progress && <ProgressBar value={progress.v} label={progress.what} />}
+        {conflict && (
+          <div className="pf-alert pf-alert--error pf-replace__conflict" role="alert">
+            <span>{REPLACE_CONFLICT_MESSAGE}</span>{" "}
+            <button type="button" className="pf-btn pf-btn--sm" onClick={() => void reloadGame()} disabled={reloading}>
+              {reloading ? <Spinner size={12} /> : null} Reload
+            </button>
+          </div>
+        )}
         {fileError && <Alert>{fileError}</Alert>}
       </section>
 
