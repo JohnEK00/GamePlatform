@@ -9,6 +9,8 @@ export { Assets } from './assets';
 export { AudioManager, Sound } from './audio';
 export type { PlayOptions, SoundHandle, ToneOptions, NoiseOptions } from './audio';
 export { Camera } from './camera';
+export { screenshotSize, FrameCapture } from './capture';
+export type { ScreenshotOptions, ShareScreenshotOptions, ScreenshotError, CaptureResult, FrameGrabber } from './capture';
 export {
   Input, InputState, GamepadState, GamepadButtons, computeLetterbox, clientToGame, combineAxis,
 } from './input';
@@ -25,6 +27,7 @@ export { Physics, Body } from './physics';
 export type { BodyOptions, PhysicsOptions, Side } from './physics';
 export {
   Platform, Storage, ACHIEVEMENT_ID_RE, LEADERBOARD_TIMEOUT_MS, SCORE_RESULT_TIMEOUT_MS, MAX_PENDING_LEADERBOARD,
+  SHARE_INTERVAL_MS, SHARE_RESULT_TIMEOUT_MS, sanitizeCaption,
 } from './platform';
 export type { LeaderboardPeriod, LeaderboardView, ScoreResultView, PlatformReply } from './platform';
 export { BundleFiles, deriveStorageKey, mimeType, normalizePath } from './files';

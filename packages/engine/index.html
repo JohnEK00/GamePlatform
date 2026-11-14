@@ -43,9 +43,11 @@
   <div id="toasts"></div>
   <iframe id="player" sandbox="allow-scripts" allow="autoplay; fullscreen; gamepad" title="game"></iframe>
   <script type="module">
+    import { screenshotHost } from '/playground-screenshots.js';
     // Dev playground host: loads player.html (which mirrors the backend player page) in a sandboxed
     // iframe and plays the parent role: storage handshake (webgame:hello -> webgame:load), persisting
-    // webgame:save to localStorage under webgame.save.{gameId}, fullscreen, pause/resume/mute.
+    // webgame:save to localStorage under webgame.save.{gameId}, fullscreen, pause/resume/mute, and the
+    // F005 screenshot messages (playground-screenshots.js).
     const params = new URLSearchParams(location.search);
     const select = document.getElementById('game');
     const log = document.getElementById('log');
@@ -70,6 +72,20 @@
       setTimeout(() => el.remove(), 4200);
     }
     const toGame = (msg) => frame.contentWindow?.postMessage(msg, '*');
+    // F005: 📷 button + in-memory tray; images are re-encoded in this page before display.
+    const onScreenshot = screenshotHost({
+      toGame, bar: document.getElementById('bar'), log, slug: () => name,
+      note(text, err) {
+        log.textContent = text;
+        const el = document.createElement('div');
+        el.className = 'toast';
+        el.textContent = text;
+        if (err) el.style.borderColor = '#ff6b6b';
+        toasts.append(el);
+        setTimeout(() => el.classList.add('out'), 3600);
+        setTimeout(() => el.remove(), 4200);
+      },
+    });
 
     let muted = false;
     document.getElementById('mute').onclick = () => {
@@ -87,6 +103,7 @@
       const d = e.data;
       if (!d || typeof d.type !== 'string' || !d.type.startsWith('webgame:')) return;
       console.info('[host] received', d);
+      if (onScreenshot(d)) return;
       switch (d.type) {
         case 'webgame:hello': {
           let data = null;

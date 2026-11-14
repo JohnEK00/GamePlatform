@@ -2,6 +2,7 @@
 import { Assets } from './assets';
 import { AudioManager, Sound } from './audio';
 import { Camera } from './camera';
+import { FrameCapture, normalizeMaxSize, type ScreenshotOptions } from './capture';
 import { activity, debugLines, FrameMeter, type DebugStats } from './debug';
 import { BundleFiles, deriveStorageKey, type FileMap } from './files';
 import { computeLetterbox, GamepadButtons, Input } from './input';
@@ -12,7 +13,7 @@ import {
 import { showErrorOverlay } from './overlay';
 import { ParticleEmitter } from './particles';
 import { Body, Physics } from './physics';
-import { Platform, Storage, defaultPoster, storageHandshake } from './platform';
+import { Platform, Storage, defaultPoster, isRequestId, storageHandshake } from './platform';
 import { Renderer } from './renderer';
 import { SceneManager, type Scene, type SceneLike } from './scenes';
 import { Animation, SpriteSheet, Texture } from './texture';
@@ -144,6 +145,7 @@ export class Engine {
   private readonly cleanup: (() => void)[] = [];
   private lastSize = '';
   private readonly meter = new FrameMeter();
+  private readonly capturer: FrameCapture;
 
   constructor(canvas: HTMLCanvasElement, opts: BootOptions) {
     if (!canvas || typeof (canvas as HTMLCanvasElement).getContext !== 'function') throw new Error('boot(): a <canvas> element is required');
@@ -166,6 +168,10 @@ export class Engine {
     this.input = new Input(canvas, w, h);
     this.scenes = new SceneManager<Engine>(this);
     this.storage = new Storage(deriveStorageKey(this.baseUrl, opts.files, opts.storageKey),this.platform);
+    this.capturer = new FrameCapture(w, h);
+    this.platform.setCapture(() =>
+      this.state === 'running' ? this.capturer.capture('share') : Promise.resolve({ error: 'unavailable' as const }),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -195,6 +201,16 @@ export class Engine {
   every(seconds: number, fn: () => void): { cancel(): void } {
     return this.timers.every(seconds, fn);
   }
+  /**
+   * Capture the next rendered frame as a PNG for the game's own use (nothing is posted). Resolves
+   * null when not running, busy, after 2000 ms without a frame, on failure, or over 8 MiB.
+   * `maxSize` (longest side) is rounded and clamped to 64–4096, default 1920.
+   */
+  captureFrame(opts: ScreenshotOptions = {}): Promise<Blob | null> {
+    if (this.state !== 'running') return Promise.resolve(null);
+    return this.capturer.request('game', { maxSize: normalizeMaxSize(opts?.maxSize) });
+  }
+
   /** Convenience: push/replace scenes. */
   setScene(scene: SceneLike<Engine>): Promise<Scene<Engine>> {
     return this.scenes.size ? this.scenes.replace(scene) : this.scenes.push(scene);
@@ -236,30 +252,7 @@ export class Engine {
     this.cleanup.push(() => this.input.detach());
     this.cleanup.push(this.audio.attachUnlock(window));
 
-    on(window, 'message', ((e: MessageEvent) => {
-      if (e.source !== window.parent) return;
-      const d = e.data as { type?: unknown; muted?: unknown; data?: unknown } | null;
-      if (!d || typeof d !== 'object' || typeof d.type !== 'string') return;
-      switch (d.type) {
-        case 'webgame:pause':
-          this.setPaused('host', true);
-          break;
-        case 'webgame:resume':
-          this.setPaused('host', false);
-          break;
-        case 'webgame:mute':
-          this.audio.muted = d.muted === undefined ? true : !!d.muted;
-          break;
-        case 'webgame:load':
-          this.storage.hydrate(d.data); // later loads merge; non-objects are ignored
-          break;
-        case 'webgame:leaderboard':
-        case 'webgame:score-result':
-          this.platform.handleReply(d);
-          break;
-      }
-    }) as EventListener);
-
+    on(window, 'message', ((e: MessageEvent) => this.onMessage(e)) as EventListener);
     on(window, 'pagehide', () => this.storage.flush());
     on(window, 'keydown', ((e: KeyboardEvent) => {
       if (e.code !== 'F3' || e.repeat) return;
@@ -298,6 +291,45 @@ export class Engine {
     } catch {
       /* ignore */
     }
+  }
+
+  /** Host → game messages (only from window.parent). */
+  private onMessage(e: MessageEvent): void {
+    if (e.source !== window.parent) return;
+    const d = e.data as { type?: unknown; muted?: unknown; data?: unknown; requestId?: unknown } | null;
+    if (!d || typeof d !== 'object' || typeof d.type !== 'string') return;
+    switch (d.type) {
+      case 'webgame:pause':
+        this.setPaused('host', true);
+        break;
+      case 'webgame:resume':
+        this.setPaused('host', false);
+        break;
+      case 'webgame:mute':
+        this.audio.muted = d.muted === undefined ? true : !!d.muted;
+        break;
+      case 'webgame:load':
+        this.storage.hydrate(d.data); // later loads merge; non-objects are ignored
+        break;
+      case 'webgame:leaderboard':
+      case 'webgame:score-result':
+      case 'webgame:screenshot-result':
+        this.platform.handleReply(d);
+        break;
+      case 'webgame:screenshot-request':
+        this.onScreenshotRequest(d.requestId);
+        break;
+    }
+  }
+
+  /** Parent asked for a screenshot (`source: "player"`): capture the next frame and reply. */
+  private onScreenshotRequest(requestId: unknown): void {
+    if (!isRequestId(requestId)) return;
+    if (this.state !== 'running') {
+      this.platform.screenshotReply(requestId, { error: 'unavailable' });
+      return;
+    }
+    void this.capturer.capture('player').then((r) => this.platform.screenshotReply(requestId, r));
   }
 
   private reportGlobal(err: unknown): void {
@@ -409,6 +441,8 @@ export class Engine {
     this.game?.render?.(this, alpha);
     this.scenes.render(alpha);
     r.flush();
+    // Capture point (F005): the game's frame is complete; overlays below are not captured.
+    if (this.state === 'running' && this.capturer.queued) this.capturer.grab(this.canvas, r.defaultSmooth, r.gl);
     const s = this.debugStats;
     const act = activity.collect();
     s.fps = this.meter.fps;
@@ -472,6 +506,7 @@ export class Engine {
     if (this.state === 'error' || this.state === 'destroyed') return;
     this.state = 'error';
     cancelAnimationFrame(this.raf);
+    this.capturer?.cancel('failed');
     if (err && typeof err === 'object') reported.add(err);
     const { message, stack } = errText(err);
     console.error('[pixelforge]', err);
@@ -489,6 +524,7 @@ export class Engine {
   destroy(): void {
     this.state = 'destroyed';
     this.storage.flush();
+    this.capturer.close();
     this.platform.cancelPending();
     cancelAnimationFrame(this.raf);
     for (const f of this.cleanup.splice(0)) f();

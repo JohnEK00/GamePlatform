@@ -377,6 +377,10 @@ class PlayScene {
   update(engine, dt) {
     const input = engine.input;
     if (input.wasPressed('KeyM')) engine.audio.muted = !engine.audio.muted;
+    // F005 photo mode: P (or gamepad Select/Back) hides the HUD and offers the frame to the
+    // player's screenshot tray. shareScreenshot is new in F005, so feature-detect it.
+    if ((input.wasPressed('KeyP') || input.gamepad(0).wasPressed('Back')) && !this.photo && typeof engine.platform.shareScreenshot === 'function')
+      this.photo = true;
     this.time += dt;
     this.anim += dt;
     this.dust.update(dt);
@@ -629,7 +633,14 @@ class PlayScene {
     this.gore.draw(r);
     for (const pop of this.pops || []) r.drawText(`+${pop.n}`, pop.x, pop.y, { size: 9, align: 'center', color: '#fee761', alpha: pop.a, shadow: '#1a1c2c' });
 
-    this.renderHud(engine);
+    if (!this.photo) {
+      this.renderHud(engine);
+    } else {
+      // This frame has no HUD. A capture requested now is taken at this frame's capture point
+      // (right after render), so the HUD can come back on the next frame.
+      this.photo = false;
+      engine.platform.shareScreenshot();
+    }
   }
 
   renderHud(engine) {

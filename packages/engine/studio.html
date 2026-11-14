@@ -35,6 +35,7 @@
   <div id="toasts"></div>
   <iframe id="player" sandbox="allow-scripts" allow="autoplay; fullscreen; gamepad" title="game"></iframe>
   <script type="module">
+    import { screenshotHost } from '/playground-screenshots.js';
     // Mimics the platform's studio host for GET /play/studio: the parent fetches the bundle files itself
     // and sends them in-memory via webgame:studio-load. The game never touches /examples over HTTP for
     // its assets, so this exercises boot({ files }). Score/achievement messages are NOT persisted —
@@ -93,11 +94,17 @@
     }
 
     const toGame = (msg) => frame.contentWindow?.postMessage(msg, '*');
+    // F005: same capture flow as the playground (download / remove only; nothing leaves the page).
+    const onScreenshot = screenshotHost({
+      toGame, bar: document.getElementById('bar'), log, slug: () => name,
+      note: (text, err) => { log.textContent = text; toast(text, err); },
+    });
     window.addEventListener('message', (e) => {
       if (e.source !== frame.contentWindow) return;
       const d = e.data;
       if (!d || typeof d.type !== 'string' || !d.type.startsWith('webgame:')) return;
       console.info('[studio host] received', d);
+      if (onScreenshot(d)) return;
       switch (d.type) {
         case 'webgame:studio-ready':
           if (bundle) toGame({ type: 'webgame:studio-load', manifest: bundle.manifest, files: bundle.files });

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  LEADERBOARD_TIMEOUT_MS, MAX_PENDING_LEADERBOARD, Platform, SCORE_RESULT_TIMEOUT_MS, Storage, storageHandshake,
+  LEADERBOARD_TIMEOUT_MS, MAX_PENDING_LEADERBOARD, Platform, SCORE_RESULT_TIMEOUT_MS, SHARE_INTERVAL_MS,
+  SHARE_RESULT_TIMEOUT_MS, Storage, sanitizeCaption, storageHandshake,
   type HandshakeWindow, type LeaderboardView, type PlatformMessage, type ScoreResultView,
 } from '../src/platform';
+import type { CaptureResult } from '../src/capture';
 
 /** A fake child window with a fake parent; `deliver` simulates a postMessage arriving. */
 function mockWindow(topLevel = false) {
@@ -238,5 +240,118 @@ describe('F001 request/reply', () => {
     await expect(a).resolves.toBeNull();
     await expect(b).resolves.toBeNull();
     expect(p.pendingCount).toBe(0);
+  });
+});
+
+describe('F005 shareScreenshot', () => {
+  const blob = new Blob([new Uint8Array(8)], { type: 'image/png' });
+  const ok = (): Promise<CaptureResult> => Promise.resolve({ blob, width: 1280, height: 720 });
+  function setup(capture: () => Promise<CaptureResult> = ok, hasParent = true) {
+    const sent: PlatformMessage[] = [];
+    const p = new Platform((m) => sent.push(m), () => hasParent);
+    p.setCapture(capture);
+    return { p, sent };
+  }
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('posts source "game" with an ss- id and resolves true on accepted', async () => {
+    const { p, sent } = setup();
+    const r = p.shareScreenshot({ caption: 'Score 12' });
+    await flush();
+    expect(sent).toEqual([
+      { type: 'webgame:screenshot', requestId: 'ss-1', source: 'game', image: blob, width: 1280, height: 720, caption: 'Score 12' },
+    ]);
+    p.handleReply({ type: 'webgame:screenshot-result', requestId: 'ss-9', accepted: true }); // unknown id
+    p.handleReply({ type: 'webgame:score-result', requestId: 'ss-1', accepted: true }); // wrong type
+    expect(p.pendingCount).toBe(1);
+    p.handleReply({ type: 'webgame:screenshot-result', requestId: 'ss-1', accepted: true });
+    await expect(r).resolves.toBe(true);
+  });
+
+  it('resolves false on accepted: false, an error, or the 5000 ms timeout', async () => {
+    const { p } = setup();
+    const a = p.shareScreenshot();
+    await flush();
+    p.handleReply({ type: 'webgame:screenshot-result', requestId: 'ss-1', accepted: false, error: 'rate_limited' });
+    await expect(a).resolves.toBe(false);
+
+    vi.advanceTimersByTime(SHARE_INTERVAL_MS);
+    const b = p.shareScreenshot();
+    await flush();
+    p.handleReply({ type: 'webgame:screenshot-result', requestId: 'ss-2', accepted: true, error: 'invalid' });
+    await expect(b).resolves.toBe(false);
+
+    vi.advanceTimersByTime(SHARE_INTERVAL_MS);
+    const c = p.shareScreenshot();
+    await flush();
+    vi.advanceTimersByTime(SHARE_RESULT_TIMEOUT_MS);
+    await expect(c).resolves.toBe(false);
+    expect(p.pendingCount).toBe(0);
+  });
+
+  it('enforces the 3000 ms interval between shares', async () => {
+    const { p, sent } = setup();
+    void p.shareScreenshot();
+    await flush();
+    vi.advanceTimersByTime(SHARE_INTERVAL_MS - 1);
+    await expect(p.shareScreenshot()).resolves.toBe(false);
+    expect(console.warn).toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    void p.shareScreenshot();
+    await flush();
+    expect(sent.map((m) => (m as { requestId?: string }).requestId)).toEqual(['ss-1', 'ss-2']);
+  });
+
+  it('no parent or a failed capture → false without posting', async () => {
+    const noParent = setup(ok, false);
+    await expect(noParent.p.shareScreenshot()).resolves.toBe(false);
+    expect(noParent.sent).toEqual([]);
+    const failing = setup(() => Promise.resolve({ error: 'unavailable' }));
+    await expect(failing.p.shareScreenshot()).resolves.toBe(false);
+    expect(failing.sent).toEqual([]);
+  });
+
+  it('cancelPending (destroy) resolves pending shares with false', async () => {
+    const { p } = setup();
+    const r = p.shareScreenshot();
+    await flush();
+    p.cancelPending();
+    await expect(r).resolves.toBe(false);
+    vi.advanceTimersByTime(SHARE_INTERVAL_MS);
+    await expect(p.shareScreenshot()).resolves.toBe(false);
+  });
+
+  it('sanitises captions', async () => {
+    expect(sanitizeCaption(undefined)).toBe('');
+    expect(sanitizeCaption(42)).toBe('42');
+    expect(sanitizeCaption('  a\nb\u0007c‮d⁦e‏f  ')).toBe('abcdef');
+    const long = '😀'.repeat(200);
+    expect(Array.from(sanitizeCaption(long))).toHaveLength(140);
+    const { p, sent } = setup();
+    void p.shareScreenshot({ caption: '\u0000‪' });
+    await flush();
+    expect(sent[0]).not.toHaveProperty('caption'); // empty after sanitising → omitted
+  });
+
+  it('screenshotReply posts the image or the error with the echoed id', () => {
+    const sent: PlatformMessage[] = [];
+    const p = new Platform((m) => sent.push(m));
+    p.screenshotReply('ps-1', { blob, width: 10, height: 20 });
+    p.screenshotReply('ps-2', { error: 'busy' });
+    expect(sent).toEqual([
+      { type: 'webgame:screenshot', requestId: 'ps-1', source: 'player', image: blob, width: 10, height: 20 },
+      { type: 'webgame:screenshot', requestId: 'ps-2', source: 'player', error: 'busy' },
+    ]);
   });
 });

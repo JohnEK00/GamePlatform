@@ -111,6 +111,7 @@ paths such as `"assets/ship.png"`; `./`, a leading `/`, `..` segments and query 
 | `debug` | show the debug overlay (**F3** also toggles it) |
 | `debugStats` | `{ fps, frameMs, workMs, drawCalls, sprites, tweens, particles, bodies }`, updated every frame |
 | `files` | the in-memory bundle files (`boot` option `files`) |
+| `captureFrame({ maxSize? })` | PNG Blob of the next frame, or `null` (see Screenshots) |
 | `renderer`, `assets`, `input`, `audio`, `scenes`, `tweens`, `storage`, `platform`, `random` | systems (below) |
 | `Vec2`, `Rect`, `Color`, `Random`, `Tilemap`, `Physics`, `Body`, `ParticleEmitter`, `Tween`, `Easing`, `SpriteSheet`, `Animation`, `Texture`, `Sound`, `Camera`, `GamepadButtons` | classes and constants |
 | `math` | `clamp, lerp, invLerp, remap, approach, wrap, degToRad, radToDeg, damp, circlesOverlap, circleRectOverlap` |
@@ -121,7 +122,7 @@ camera shake. Then a render pass clears to `background` and runs `game.render` �
 **Automatic behavior:**
 * **Visibility:** the game pauses while the tab or iframe is hidden.
 * **Audio unlock:** audio is unlocked on the first pointer or key gesture.
-* **Host messages:** the engine handles `webgame:pause`, `webgame:resume` and `webgame:mute {muted}` from the parent window.
+* **Host messages:** the engine handles `webgame:pause`, `webgame:resume`, `webgame:mute {muted}` and `webgame:screenshot-request {requestId}` from the parent window.
 * **Crashes:** if `update` or `render` throws, the loop stops, an error overlay appears, and `webgame:error` is posted. Uncaught errors and rejections are also posted.
 
 ## Debug overlay
@@ -359,6 +360,46 @@ The backend checks these rules on upload, and so does `scripts/pack-examples.mjs
 
 The platform records the unlock for logged-in players and shows a toast. To stay compatible with v1 engines,
 guard the call: `engine.platform.unlockAchievement?.(id)`.
+
+## Screenshots (F005)
+
+Contract: docs/GAME_FORMAT.md § F005. There are three entry points, and all of them capture the **next rendered frame**:
+
+| entry point | who starts it | where the image goes |
+|---|---|---|
+| 📷 in the player bar (`webgame:screenshot-request`) | the player / host | the engine replies `webgame:screenshot` (`source: "player"`) to the parent's tray |
+| `engine.platform.shareScreenshot({ caption? })` → `Promise<boolean>` | the game | offered to the player's tray (`source: "game"`); `true` when the parent accepted it |
+| `engine.captureFrame({ maxSize? })` → `Promise<Blob \| null>` | the game | an `image/png` Blob for the game itself; nothing is posted |
+
+```js
+// e.g. after a personal best: the player decides whether to post it
+if (input.wasPressed('KeyP')) engine.platform.shareScreenshot?.({ caption: `Score ${score}` });
+```
+
+* **Output size** doesn't depend on the window or `devicePixelRatio`. For the logical `w×h`, `k = max(1, floor(1280 / max(w, h)))`
+  gives `(w·k)×(h·k)` (small games are upscaled by a whole factor). It is then scaled down to fit `maxSize` (default 1920,
+  rounded and clamped to 64–4096). Examples: 320×180 → 1280×720, 800×600 → 800×600, 3840×2160 → 1920×1080.
+  `screenshotSize(w, h, maxSize?)` is exported.
+* **Sampling**: nearest-neighbour when the backing-store → output ratio is a whole number and `smooth` is off, bilinear otherwise.
+  A small window therefore gives a softer image at the same size.
+* **What is captured**: everything the game and its scenes draw, including your own HUD. The capture point is after the
+  batch flush and before the engine's overlays, so the F3 debug overlay, the host "PAUSED" overlay and the error overlay
+  are never in the image. To hide your HUD for a "photo mode", skip drawing it in the frame where you call `shareScreenshot`
+  (see pixel-peaks).
+* **One at a time**: only one capture (from any entry point) is queued or encoding. Another call meanwhile fails fast:
+  `captureFrame` → `null` with a warning, a player request → `error: "busy"`, a share → `false`.
+* **Failures**: `null` / `false` / `unavailable` when the engine isn't running (loading, crashed, destroyed) or no frame
+  arrives within 2000 ms (hidden tab). `failed` for a lost context, an encoder or security error, or a PNG over 8 MiB.
+* **Shares** need a parent window, must be at least 3000 ms apart (earlier calls → `false` + a warning), and resolve `false`
+  on `accepted: false`, an error or no reply within 5000 ms. The caption is coerced to a string, control and bidi
+  characters are removed, and it is cut to 140 code points. The parent only adds the image to the tray: nothing is
+  uploaded or downloaded without the player clicking.
+* `destroy()` resolves pending captures with `null` and pending shares with `false`.
+* **Never draw secrets** (codes, tokens, private data) in frames you pass to `shareScreenshot`: the player can post the image publicly.
+* Encoding uses `OffscreenCanvas.convertToBlob` (or `<canvas>.toBlob`) after the frame; the drawing buffer is copied with
+  `drawImage` at the capture point (`gl.readPixels` is a fallback), so the context keeps `preserveDrawingBuffer: false`.
+* The dev harness (`index.html`) and `studio.html` have a 📷 button and an in-memory tray, and they answer game shares,
+  re-encoding every image in the parent as the real host does.
 
 ## Examples
 

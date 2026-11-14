@@ -163,6 +163,7 @@ const game = {
     this.score = 0;
     this.board = null; // "This week" top 5 (LeaderboardView) shown on the game-over screen
     this.serverBest = false; // submitScore result said personalBest
+    this.capturePrompt = 0; // seconds left of the "Press P to capture" hint (F005)
     this.run = (this.run || 0) + 1; // ignore late replies from a previous run
     this.lives = 3;
     this.combo = 1;
@@ -180,6 +181,14 @@ const game = {
   update(engine, dt) {
     const input = engine.input;
     if (input.wasPressed('KeyM')) engine.audio.muted = !engine.audio.muted;
+    // F005: P (or gamepad Select/Back) offers a screenshot to the player's tray. Nothing is posted
+    // until the player posts it. shareScreenshot is new in F005, so feature-detect it.
+    const photo = input.wasPressed('KeyP') || input.gamepad(0).wasPressed('Back');
+    if (photo && typeof engine.platform.shareScreenshot === 'function') {
+      this.capturePrompt = 0;
+      engine.platform.shareScreenshot({ caption: `Score ${Math.floor(this.score)} in Space Dodge` });
+    }
+    this.capturePrompt = Math.max(0, this.capturePrompt - dt);
     this.updateStars(dt * (this.state === 'play' ? 1 : 0.4));
     this.explosions.update(dt);
     this.sparks.update(dt);
@@ -190,7 +199,7 @@ const game = {
 
     if (this.state === 'title') {
       this.titleTime += dt;
-      if (this.titleTime > 0.3 && input.anyPressed()) {
+      if (this.titleTime > 0.3 && !photo && input.anyPressed()) {
         this.reset(engine);
         this.state = 'play';
         engine.audio.tone({ freq: 220, freqEnd: 880, duration: 0.25, type: 'triangle', volume: 0.3 });
@@ -199,7 +208,7 @@ const game = {
     }
     if (this.state === 'over') {
       this.overTime += dt;
-      if (this.overTime > 1.0 && input.anyPressed()) {
+      if (this.overTime > 1.0 && !photo && input.anyPressed()) {
         this.reset(engine);
         this.state = 'play';
       }
@@ -526,7 +535,10 @@ const game = {
       result = null;
     }
     if (run !== this.run) return;
-    if (result && result.personalBest) this.serverBest = true;
+    if (result && result.personalBest) {
+      this.serverBest = true;
+      if (typeof platform.shareScreenshot === 'function') this.capturePrompt = 3;
+    }
     if (typeof platform.getLeaderboard !== 'function') return;
     let board = null;
     try {
@@ -545,6 +557,8 @@ const game = {
     r.drawText('GAME OVER', W / 2, y0, { size: 60, align: 'center', baseline: 'middle', color: '#ff5f5f', shadow: '#000', shadowOffset: 4 });
     r.drawText(`SCORE ${this.score}`, W / 2, y0 + 70, { size: 30, align: 'center', baseline: 'middle', color: '#fff' });
     if (this.newBest || this.serverBest) r.drawText('NEW BEST!', W / 2, y0 + 110, { size: 22, align: 'center', baseline: 'middle', color: '#ffe14c' });
+    if (this.capturePrompt > 0)
+      r.drawText('Press P to capture', W / 2, y0 + 133, { size: 15, align: 'center', baseline: 'middle', color: '#4cf2ff', alpha: Math.min(1, this.capturePrompt * 2) });
     if (b) this.renderBoard(r, b, 265);
     if (this.overTime > 1 && Math.floor(engine.time * 2) % 2 === 0)
       r.drawText('PRESS ANY KEY OR TAP TO PLAY AGAIN', W / 2, b ? H - 40 : H / 2 + 100, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });
