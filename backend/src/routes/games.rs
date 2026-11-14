@@ -19,6 +19,7 @@ use crate::models::{
 };
 use crate::ratelimit::{ClientIp, Limit, key_for};
 use crate::storage::validate_image;
+use crate::trending;
 
 pub const TITLE_MAX: usize = 80;
 pub const DESCRIPTION_MAX: usize = 5000;
@@ -447,6 +448,9 @@ pub fn list_filter(query: &ListQuery, viewer: Option<&str>) -> AppResult<(String
     Ok((format!("WHERE {}", conds.join(" AND ")), binds))
 }
 
+/// F003 `sort=trending` order (needs `GAME_SELECT`'s `plays_week` alias).
+pub const TRENDING_ORDER: &str = "COALESCE((SELECT tr.score FROM game_trending tr WHERE tr.game_id = g.id), 0) DESC,      plays_week DESC, g.plays DESC, g.created_at DESC, g.id";
+
 /// `ORDER BY` for `sort`; each matches an index of migration 0004 column for column.
 pub fn list_order(sort: Option<&str>) -> AppResult<&'static str> {
     Ok(match sort.map(str::trim).unwrap_or("") {
@@ -456,9 +460,11 @@ pub fn list_order(sort: Option<&str>) -> AppResult<&'static str> {
         // Bayesian-style average: pulls games with few ratings toward a prior of 3.0 (weight
         // 2). `rating_score` is the generated column (rating_sum + 6.0) / (rating_count + 2.0).
         "top" => "g.rating_score DESC, g.rating_count DESC, g.created_at DESC, g.id",
+        // F003: snapshot score, then `plays_week` (the GAME_SELECT alias), then all-time plays.
+        "trending" => TRENDING_ORDER,
         other => {
             return Err(AppError::BadRequest(format!(
-                "Unknown sort '{other}' (expected new, popular, top or favorites)"
+                "Unknown sort '{other}' (expected new, popular, top, favorites or trending)"
             )));
         }
     })
@@ -472,6 +478,9 @@ pub async fn list_games(
     let (page, per_page) = parse_paging(query.page.as_deref(), query.per_page.as_deref(), 24)?;
     let (where_sql, binds) = list_filter(&query, viewer.id())?;
     let order = list_order(query.sort.as_deref())?;
+    if order == TRENDING_ORDER {
+        trending::ensure_fresh(&state).await;
+    }
 
     let sql = format!("{GAME_SELECT} {where_sql} ORDER BY {order} LIMIT ? OFFSET ?");
     let offset = (page - 1) * per_page;
@@ -804,12 +813,13 @@ pub async fn record_play(
                 .await?
                 .ok_or_else(|| AppError::not_found("Game"))?;
         sqlx::query(
-            "INSERT INTO play_events (game_id, user_id, day, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO play_events (game_id, user_id, day, created_at, viewer_key)              VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(viewer.id())
         .bind(now.format("%Y-%m-%d").to_string())
         .bind(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .bind(trending::viewer_key(&state.config, viewer.id(), &ip.0))
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;

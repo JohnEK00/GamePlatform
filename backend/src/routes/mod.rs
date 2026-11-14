@@ -9,6 +9,7 @@ pub mod files;
 pub mod follows;
 pub mod games;
 pub mod play;
+pub mod related;
 pub mod reports;
 pub mod saves;
 pub mod scores;
@@ -92,6 +93,7 @@ pub fn api_router() -> Router<AppState> {
             put(games::upload_thumbnail).layer(image_limit),
         )
         .route("/games/{id}/play", post(games::record_play))
+        .route("/games/{id}/related", get(related::related_games))
         .route("/games/{id}/preview-token", post(games::preview_token))
         .route(
             "/games/{id}/rating",

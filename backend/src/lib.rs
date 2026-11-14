@@ -13,6 +13,7 @@ pub mod ratelimit;
 pub mod routes;
 pub mod seed;
 pub mod storage;
+pub mod trending;
 
 use std::sync::Arc;
 
@@ -33,6 +34,8 @@ pub struct AppState {
     pub bundle_locks: locks::KeyLocks,
     /// Per-(game, viewer) play-count dedupe window (R2).
     pub play_dedupe: ratelimit::PlayDedupe,
+    /// F003 trending snapshot freshness + single flight.
+    pub trending: trending::TrendingCache,
 }
 
 impl AppState {
@@ -42,14 +45,18 @@ impl AppState {
         storage.ensure_dirs()?;
         let db = db::connect(&config.database_url).await?;
         apply_admin_roles(&db, &config.admin_usernames).await?;
-        Ok(Self {
+        let state = Self {
             db,
             limiter: ratelimit::RateLimiter::new(config.rate_limit),
             bundle_locks: locks::KeyLocks::new(),
             play_dedupe: ratelimit::PlayDedupe::new(),
+            trending: trending::TrendingCache::new(),
             config: Arc::new(config),
             storage,
-        })
+        };
+        // F003: refresh the trending snapshot once at startup (failures are logged).
+        trending::ensure_fresh(&state).await;
+        Ok(state)
     }
 }
 

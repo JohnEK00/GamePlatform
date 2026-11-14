@@ -24,6 +24,22 @@ pub struct Config {
     /// Number of trusted reverse-proxy hops in front of the server (`TRUST_PROXY`; `true` = 1,
     /// off = 0). When > 0 the client IP is the n-th `X-Forwarded-For` entry from the right.
     pub trust_proxy: usize,
+    /// Maximum age of the trending snapshot (`TRENDING_TTL_SECS`, default 600; 0 = refresh on
+    /// every trending/related read).
+    pub trending_ttl: std::time::Duration,
+}
+
+pub const DEFAULT_TRENDING_TTL_SECS: u64 = 600;
+
+/// `TRENDING_TTL_SECS`: unset → 600, otherwise a non-negative integer number of seconds.
+pub fn parse_trending_ttl(value: Option<&str>) -> Result<std::time::Duration, String> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(std::time::Duration::from_secs(DEFAULT_TRENDING_TTL_SECS)),
+        Some(v) => v
+            .parse::<u64>()
+            .map(std::time::Duration::from_secs)
+            .map_err(|_| format!("TRENDING_TTL_SECS must be a non-negative integer, got {v:?}")),
+    }
 }
 
 pub fn parse_admin_usernames(list: &str) -> Vec<String> {
@@ -185,6 +201,7 @@ impl Config {
             ),
             rate_limit: env_flag("RATE_LIMIT", true),
             trust_proxy: parse_trust_proxy(env_nonempty("TRUST_PROXY").as_deref())?,
+            trending_ttl: parse_trending_ttl(env_nonempty("TRENDING_TTL_SECS").as_deref())?,
         })
     }
 
@@ -208,13 +225,28 @@ impl Config {
             admin_usernames: Vec::new(),
             rate_limit: false,
             trust_proxy: 0,
+            trending_ttl: std::time::Duration::from_secs(DEFAULT_TRENDING_TTL_SECS),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_public_origin, parse_trust_proxy};
+    use super::{parse_public_origin, parse_trending_ttl, parse_trust_proxy};
+
+    #[test]
+    fn trending_ttl_values() {
+        use std::time::Duration;
+        assert_eq!(parse_trending_ttl(None), Ok(Duration::from_secs(600)));
+        assert_eq!(parse_trending_ttl(Some("0")), Ok(Duration::ZERO));
+        assert_eq!(
+            parse_trending_ttl(Some(" 30 ")),
+            Ok(Duration::from_secs(30))
+        );
+        for bad in ["-1", "1.5", "ten"] {
+            assert!(parse_trending_ttl(Some(bad)).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn trust_proxy_values() {

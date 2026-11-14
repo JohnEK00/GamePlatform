@@ -45,6 +45,19 @@ pub struct GameSummary {
     pub created_at: String,
     pub updated_at: String,
     pub favorites: i64,
+    /// F003: counted non-owner plays over the last 7 UTC days (trending snapshot).
+    pub plays_week: i64,
+}
+
+/// `RelatedGame` (API.md § F003): a summary plus why it was picked.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedGame {
+    #[serde(flatten)]
+    pub summary: GameSummary,
+    /// `"tags"` or `"trending"`.
+    pub reason: &'static str,
+    pub shared_tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,6 +224,7 @@ pub struct GameRow {
     pub created_at: String,
     pub updated_at: String,
     pub favorites: i64,
+    pub plays_week: i64,
     pub owner: UserRef,
     pub tags: Vec<String>,
     pub leaderboard: LeaderboardConfig,
@@ -225,7 +239,9 @@ pub const GAME_SELECT: &str = "SELECT g.id, g.owner_id, g.title, g.description, 
      u.avatar_ext AS o_avatar_ext, u.avatar_version AS o_avatar_version, \
      (SELECT group_concat(tag, ',') FROM (SELECT tag FROM game_tags t WHERE t.game_id = g.id \
         ORDER BY t.position, t.tag)) AS tags, \
-     g.favorites_count AS favorites \
+     g.favorites_count AS favorites, \
+     COALESCE((SELECT tr.plays_week FROM game_trending tr WHERE tr.game_id = g.id), 0) \
+        AS plays_week \
      FROM games g JOIN users u ON u.id = g.owner_id";
 
 pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
@@ -248,6 +264,7 @@ pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         favorites: row.try_get("favorites")?,
+        plays_week: row.try_get("plays_week")?,
         owner: user_ref_from_row(row, "o_")?,
         tags: tags
             .map(|t| {
@@ -293,6 +310,7 @@ impl GameRow {
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
             favorites: self.favorites,
+            plays_week: self.plays_week,
         }
     }
 
