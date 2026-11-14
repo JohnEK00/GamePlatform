@@ -253,7 +253,7 @@ describe("R9: dialogs", () => {
     const publish = await screen.findByRole("button", { name: /Publish/ });
     publish.focus();
     fireEvent.click(publish);
-    const dialog = screen.getByRole("dialog", { name: "Publish to the arcade" });
+    const dialog = screen.getByRole("dialog", { name: "Publish" });
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(document.activeElement?.id).toBe("pf-game-title");
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });

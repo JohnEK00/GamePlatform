@@ -330,6 +330,46 @@ export class ApiClient {
     }
     return this.upload("PUT", `/api/games/${encodeURIComponent(id)}/bundle`, form, onProgress);
   }
+  /**
+   * F013 (owner only): the current version's files as a .zip. `version` comes from `X-Game-Version` (falling
+   * back to `getGame` when a proxy strips it), `filename` from `Content-Disposition` (else `game-v{version}.zip`).
+   * Servers without F013 (405, or a 404 without an error body) reject with code `unsupported`.
+   */
+  async downloadBundle(id: string, signal?: AbortSignal): Promise<{ blob: Blob; version: number; filename: string }> {
+    const f = this.fetchImpl ?? globalThis.fetch;
+    let res: Response;
+    try {
+      res = await f(`${this.baseUrl}/api/games/${encodeURIComponent(id)}/bundle`, {
+        method: "GET",
+        headers: this.headers({ Accept: "application/zip, application/json" }),
+        signal,
+      });
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") throw e;
+      throw new ApiError("network", "Could not reach the server. Check your connection.", 0);
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      let body: unknown = undefined;
+      if (text) {
+        try {
+          body = JSON.parse(text);
+        } catch {
+          /* not JSON */
+        }
+      }
+      const hasError = !!(body as { error?: unknown } | undefined)?.error;
+      if (res.status === 405 || (res.status === 404 && !hasError))
+        throw new ApiError("unsupported", "This server doesn't support opening games in the Studio.", res.status);
+      throw ApiError.fromResponse(res.status, body, res.statusText, res.headers?.get?.("Retry-After"));
+    }
+    const blob = await res.blob();
+    const rawVersion = (res.headers?.get?.("X-Game-Version") ?? "").trim();
+    let version = /^\d+$/.test(rawVersion) ? Number(rawVersion) : 0;
+    if (!Number.isSafeInteger(version) || version < 1) version = (await this.getGame(id)).version;
+    const filename = parseContentDispositionFilename(res.headers?.get?.("Content-Disposition")) ?? `game-v${version}.zip`;
+    return { blob, version, filename };
+  }
   replaceThumbnail(id: string, thumbnail: Blob, onProgress?: UploadProgress): Promise<Game> {
     const form = new FormData();
     form.append("thumbnail", thumbnail, fileName(thumbnail, "thumbnail"));
@@ -480,6 +520,15 @@ export class ApiClient {
       json: { notes },
     });
   }
+}
+
+/** `filename="…"` (or a bare `filename=…`) from a Content-Disposition header, reduced to a safe base name. */
+function parseContentDispositionFilename(header: string | null | undefined): string | null {
+  if (!header) return null;
+  const m = /filename\s*=\s*(?:"([^"]*)"|([^;\s]+))/i.exec(header);
+  const raw = m ? (m[1] ?? m[2] ?? "") : "";
+  const base = raw.split(/[\\/]/).pop()?.replace(/[\u0000-\u001f]/g, "").trim() ?? "";
+  return base && base !== "." && base !== ".." ? base : null;
 }
 
 function fileName(b: Blob, fallback: string): string {

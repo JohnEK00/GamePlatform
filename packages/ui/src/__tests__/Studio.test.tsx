@@ -116,7 +116,8 @@ describe("StudioPage", () => {
     const client = new ApiClient({ baseUrl: "" });
     const openLocalProject = vi.fn(async () => ({ manifest: { name: "Local", entry: "game.js", width: 100, height: 100 }, files: { "game.js": "// local" } }));
     render(<WebGameApp config={{ apiBaseUrl: "", routerMode: "hash", platform: { openLocalProject } }} client={client} />);
-    await act(async () => screen.getByRole("button", { name: /Open folder/ }).click());
+    await act(async () => screen.getByRole("button", { name: /Open/ }).click());
+    await act(async () => screen.getByRole("menuitem", { name: "Local folder…" }).click());
     expect(openLocalProject).toHaveBeenCalled();
     expect((screen.getByRole("textbox", { name: "Edit game.js" }) as HTMLTextAreaElement).value).toBe("// local");
     window.location.hash = "";

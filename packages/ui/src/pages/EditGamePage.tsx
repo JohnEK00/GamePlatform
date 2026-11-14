@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { isApiError } from "../api/client";
 import type { Game } from "../api/types";
-import { useApi } from "../context/config";
+import { useApi, usePlatform } from "../context/config";
 import { useToast } from "../context/toast";
 import { Alert, ConfirmDialog, EmptyState, ErrorState, ProgressBar, Skeleton, Spinner, Thumbnail } from "../components/common";
 import { FileDrop } from "../components/FileDrop";
@@ -18,6 +18,7 @@ import {
   useDocumentTitle,
   validateTags,
 } from "../util";
+import { downloadBlob } from "../studio/project";
 import { NotFoundPage } from "./NotFoundPage";
 import { BUNDLE_ACCEPT, IMAGE_ACCEPT } from "./UploadPage";
 
@@ -30,6 +31,7 @@ export function EditGamePage() {
   const api = useApi();
   const toast = useToast();
   const navigate = useNavigate();
+  const platform = usePlatform();
   const { data: game, loading, error, reload, setData } = useAsync(() => api.getGame(id), [api, id]);
   useDocumentTitle(game ? `Edit ${game.title}` : "Edit game");
 
@@ -48,6 +50,8 @@ export function EditGamePage() {
   const [notesError, setNotesError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [reloading, setReloading] = useState(false);
+  // F013: "Download current bundle".
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     if (game && !values) setValues(toValues(game));
@@ -153,6 +157,23 @@ export function EditGamePage() {
     }
   };
 
+  /** F013: save the current version's files (owners recover their source). */
+  const downloadCurrent = async () => {
+    setDownloading(true);
+    try {
+      const { blob, filename } = await api.downloadBundle(game.id);
+      if (platform.saveFile) {
+        if (await platform.saveFile(filename, blob)) toast.success("Saved", filename);
+      } else {
+        downloadBlob(blob, filename);
+      }
+    } catch (err) {
+      toast.error("Couldn't download the bundle", typeof err === "string" ? err : errorMessage(err));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   const doDelete = async () => {
     setDeleting(true);
     try {
@@ -208,6 +229,14 @@ export function EditGamePage() {
             <p className="pf-muted pf-small">
               Version {game.version} · entry <code>{game.entry}</code> · {game.width}×{game.height}
             </p>
+            <div className="pf-edit-bundle__actions">
+              <Link to={`/studio?open=${encodeURIComponent(game.id)}`} className="pf-btn pf-btn--sm">
+                ✎ Open in Studio
+              </Link>
+              <button type="button" className="pf-btn pf-btn--sm" onClick={() => void downloadCurrent()} disabled={downloading} aria-busy={downloading || undefined}>
+                {downloading ? <Spinner size={12} /> : null} ⬇ Download current bundle
+              </button>
+            </div>
             <FileDrop label="New bundle (.zip)" hint="Uploading bumps the version" accept={BUNDLE_ACCEPT} file={bundle} onFile={setBundle} disabled={busy} icon="📦" />
             <ReleaseNotesField value={notes} onChange={setNotes} disabled={busy} error={notesError} />
             <button type="button" className="pf-btn" disabled={!bundle || busy || reloading} onClick={uploadBundle}>

@@ -1,4 +1,5 @@
 import { createZip, createZipAsync } from "./zip";
+import { readZip, type ReadZipLimits } from "./unzip";
 
 /**
  * A Studio project: the game.json object plus bundle files keyed by bundle-relative path ("main.js", "assets/x.png").
@@ -284,31 +285,70 @@ function fromBase64(b64: string): ArrayBuffer {
   return out.buffer;
 }
 
-export function serializeProject(p: StudioProject): string {
-  const files: Record<string, { t: string } | { b: string }> = {};
-  for (const [k, v] of Object.entries(p.files)) files[k] = typeof v === "string" ? { t: v } : { b: toBase64(v) };
-  return JSON.stringify({ v: 1, manifest: p.manifest, files });
+/**
+ * F013: which game a Studio project was downloaded from or last published to. Kept next to the project
+ * (never inside `StudioProject`, which is the host contract). A link whose `apiBase` differs from the
+ * current `apiBaseUrl` is ignored (not deleted).
+ */
+export type StudioLink = { gameId: string; title: string; version: number; apiBase: string };
+
+/** F013: the Studio's working state: the project plus its link and whether it was edited since the last load/publish. */
+export type StudioSession = { project: StudioProject; link?: StudioLink; dirty: boolean };
+
+/**
+ * F013: a project from a host's local folder (desktop). `localFolder.id` is an opaque, session-scoped handle
+ * for `platform.reloadLocalProject`; `name` is for display only. Never autosaved.
+ */
+export type LocalProject = StudioProject & { localFolder?: { id: string; name: string } };
+
+/** F013: a well-formed link, or null. */
+export function parseStudioLink(v: unknown): StudioLink | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.gameId !== "string" || !o.gameId) return null;
+  if (typeof o.title !== "string") return null;
+  if (typeof o.version !== "number" || !Number.isInteger(o.version) || o.version < 1) return null;
+  if (typeof o.apiBase !== "string") return null;
+  return { gameId: o.gameId, title: o.title, version: o.version, apiBase: o.apiBase };
 }
 
-export function deserializeProject(json: string): StudioProject | null {
+/** Autosave format `v: 1`. F013: optional top-level `link` and `dirty`. */
+export function serializeProject(p: StudioProject, meta: { link?: StudioLink | null; dirty?: boolean } = {}): string {
+  const files: Record<string, { t: string } | { b: string }> = {};
+  for (const [k, v] of Object.entries(p.files)) files[k] = typeof v === "string" ? { t: v } : { b: toBase64(v) };
+  const out: Record<string, unknown> = { v: 1, manifest: p.manifest, files };
+  if (meta.link) out.link = meta.link;
+  if (meta.dirty !== undefined) out.dirty = meta.dirty;
+  return JSON.stringify(out);
+}
+
+/** F013: reads an autosave with its link (a malformed one is dropped) and dirty flag (missing → false). */
+export function deserializeSession(json: string): StudioSession | null {
   try {
-    const o = JSON.parse(json) as { manifest?: unknown; files?: Record<string, { t?: string; b?: string }> };
-    if (!o || typeof o !== "object" || !o.manifest || typeof o.manifest !== "object" || !o.files) return null;
+    const o = JSON.parse(json) as { manifest?: unknown; files?: Record<string, { t?: string; b?: string }>; link?: unknown; dirty?: unknown };
+    if (!o || typeof o !== "object" || !o.manifest || typeof o.manifest !== "object" || !o.files || typeof o.files !== "object") return null;
     const files: StudioProject["files"] = {};
     for (const [k, v] of Object.entries(o.files)) {
       if (typeof v?.t === "string") files[k] = v.t;
       else if (typeof v?.b === "string") files[k] = fromBase64(v.b);
     }
-    return { manifest: o.manifest as object, files };
+    const session: StudioSession = { project: { manifest: o.manifest as object, files }, dirty: o.dirty === true };
+    const link = parseStudioLink(o.link);
+    if (link) session.link = link;
+    return session;
   } catch {
     return null;
   }
 }
 
+export function deserializeProject(json: string): StudioProject | null {
+  return deserializeSession(json)?.project ?? null;
+}
+
 /** Saves to localStorage. Returns false if storage is unavailable or full. */
-export function saveProjectToStorage(p: StudioProject): boolean {
+export function saveProjectToStorage(p: StudioProject, meta: { link?: StudioLink | null; dirty?: boolean } = {}): boolean {
   try {
-    localStorage.setItem(STUDIO_STORAGE_KEY, serializeProject(p));
+    localStorage.setItem(STUDIO_STORAGE_KEY, serializeProject(p, meta));
     return true;
   } catch {
     return false;
@@ -316,36 +356,59 @@ export function saveProjectToStorage(p: StudioProject): boolean {
 }
 
 export function loadProjectFromStorage(): StudioProject | null {
+  return loadSessionFromStorage()?.project ?? null;
+}
+
+/** F013: the autosaved session (project + link + dirty), or null. */
+export function loadSessionFromStorage(): StudioSession | null {
   try {
     const raw = localStorage.getItem(STUDIO_STORAGE_KEY);
-    return raw ? deserializeProject(raw) : null;
+    return raw ? deserializeSession(raw) : null;
   } catch {
     return null;
   }
 }
 
-// ---------- import from a folder (<input webkitdirectory>) ----------
+// ---------- import from a folder (<input webkitdirectory>) or a .zip ----------
+
+/** One file of an import source; `read` is only called for files the project keeps. */
+export type ProjectEntry = { path: string; read(): Promise<Uint8Array | string> };
+
+function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
+  return u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength && u8.buffer instanceof ArrayBuffer ? u8.buffer : u8.slice().buffer;
+}
+
+/** UTF-8 decode that keeps a leading BOM (so it survives a round trip). */
+function decodeText(d: Uint8Array | string): string {
+  return typeof d === "string" ? d : new TextDecoder("utf-8", { ignoreBOM: true }).decode(d);
+}
 
 /**
- * Reads a folder selection into a project: strips a single common top-level folder, parses game.json, keeps
- * text files as strings and everything else as ArrayBuffers. Skips files with disallowed extensions and
- * dotfiles. Throws if game.json is missing or invalid JSON.
+ * Shared import rules for folders and .zip files: strips a single common top-level folder only when it holds
+ * `game.json` (the backend rule), parses game.json, keeps text files as strings and everything else as
+ * ArrayBuffers, skips dotfiles (silently) and disallowed extensions (reported in `skipped`), caps the file
+ * count, and throws if game.json is missing or invalid JSON.
  */
-export async function projectFromFileList(list: ArrayLike<File>): Promise<{ project: StudioProject; skipped: string[] }> {
-  const items = Array.from(list).map((f) => ({ file: f, path: ((f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name).replace(/\\/g, "/") }));
-  if (!items.length) throw new Error("The folder is empty.");
+export async function projectFromEntries(
+  entries: ProjectEntry[],
+  source: "folder" | "zip" = "folder",
+): Promise<{ project: StudioProject; skipped: string[] }> {
+  const items = entries.map((e) => ({ ...e, path: e.path.replace(/\\/g, "/").replace(/^\/+/, "") }));
+  if (!items.length) throw new Error(source === "zip" ? "The .zip is empty." : "The folder is empty.");
   const firstSeg = (p: string) => (p.includes("/") ? p.slice(0, p.indexOf("/")) : null);
   const top = firstSeg(items[0].path);
-  const strip = top !== null && items.every((i) => firstSeg(i.path) === top);
+  const strip =
+    top !== null && items.every((i) => firstSeg(i.path) === top) && items.some((i) => normalizeProjectPath(i.path.slice(top.length + 1)) === "game.json");
   const skipped: string[] = [];
   const files: StudioProject["files"] = {};
+  let count = 0;
   let manifest: object | null = null;
-  for (const { file, path } of items) {
-    const rel = normalizeProjectPath(strip ? path.slice(top!.length + 1) : path);
+  for (const item of items) {
+    const rel = normalizeProjectPath(strip ? item.path.slice(top!.length + 1) : item.path);
     if (!rel || rel.split("/").some((s) => s.startsWith("."))) continue;
     if (rel === "game.json") {
       try {
-        const parsed: unknown = JSON.parse(await file.text());
+        const parsed: unknown = JSON.parse(decodeText(await item.read()).replace(/^﻿/, ""));
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
         manifest = parsed as object;
       } catch {
@@ -353,18 +416,36 @@ export async function projectFromFileList(list: ArrayLike<File>): Promise<{ proj
       }
       continue;
     }
-    if (!ALLOWED_EXTENSIONS.includes(extOf(rel))) {
+    if (!ALLOWED_EXTENSIONS.includes(extOf(rel)) || count >= MAX_PROJECT_FILES) {
       skipped.push(rel);
       continue;
     }
-    if (Object.keys(files).length >= MAX_PROJECT_FILES) {
-      skipped.push(rel);
-      continue;
-    }
-    files[rel] = isTextPath(rel) ? await file.text() : await file.arrayBuffer();
+    const data = await item.read();
+    files[rel] = isTextPath(rel) ? decodeText(data) : typeof data === "string" ? toArrayBuffer(new TextEncoder().encode(data)) : toArrayBuffer(data);
+    count++;
   }
-  if (!manifest) throw new Error("No game.json found at the top of the folder.");
+  if (!manifest) throw new Error(source === "zip" ? "No game.json found at the top of the .zip." : "No game.json found at the top of the folder.");
   return { project: { manifest, files }, skipped };
+}
+
+/**
+ * Reads a folder selection into a project (see {@link projectFromEntries} for the rules).
+ */
+export async function projectFromFileList(list: ArrayLike<File>): Promise<{ project: StudioProject; skipped: string[] }> {
+  const entries: ProjectEntry[] = Array.from(list).map((f) => ({
+    path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name,
+    read: async () => new Uint8Array(await f.arrayBuffer()),
+  }));
+  return projectFromEntries(entries, "folder");
+}
+
+/** F013: reads a bundle .zip into a project with {@link readZip} + {@link projectFromEntries}. */
+export async function projectFromZip(data: ArrayBuffer | Uint8Array, limits?: ReadZipLimits): Promise<{ project: StudioProject; skipped: string[] }> {
+  const entries = await readZip(data, limits);
+  return projectFromEntries(
+    entries.map((e) => ({ path: e.path, read: async () => e.data })),
+    "zip",
+  );
 }
 
 /** Starts a browser download of a blob (no-op where downloads are unsupported). */

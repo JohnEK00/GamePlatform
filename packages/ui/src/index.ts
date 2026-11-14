@@ -55,13 +55,23 @@ export {
   MAX_BUNDLE_COMPRESSED_BYTES,
   MAX_BUNDLE_UNCOMPRESSED_BYTES,
   projectFromFileList,
+  projectFromZip,
+  projectFromEntries,
   serializeProject,
   deserializeProject,
+  deserializeSession,
+  parseStudioLink,
   STUDIO_STORAGE_KEY,
   leaderboardOf,
   withLeaderboard,
 } from "./studio/project";
-export type { StudioProject, StudioManifest, StudioAchievement, StudioLeaderboard } from "./studio/project";
+export type { StudioProject, StudioManifest, StudioAchievement, StudioLeaderboard, StudioLink, StudioSession, LocalProject, ProjectEntry } from "./studio/project";
+export { readZip, canInflateRaw } from "./studio/unzip";
+export type { ReadZipLimits, ZipEntryData } from "./studio/unzip";
+export { PublishDialog } from "./studio/PublishDialog";
+export type { PublishDialogProps, PublishMode } from "./studio/PublishDialog";
+export { OpenGameDialog } from "./studio/OpenGameDialog";
+export type { OpenGameDialogProps } from "./studio/OpenGameDialog";
 export { STUDIO_TEMPLATES } from "./studio/templates";
 export type { StudioTemplate } from "./studio/templates";
 export { StudioPreview, STUDIO_READY_TIMEOUT_MS } from "./studio/StudioPreview";

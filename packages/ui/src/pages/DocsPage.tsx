@@ -303,6 +303,18 @@ export function DocsPage() {
             arcade (requires an account).
           </li>
         </ul>
+        <h3>Updating a published game</h3>
+        <p>
+          On your game's page or its edit page, <strong>Open in Studio</strong> loads the current version into the Studio (or use{" "}
+          <strong>Open → My game…</strong> in the Studio). The project is then <em>linked</em> to that game: a chip shows “Linked to
+          {" "}<em>title</em> · v<em>n</em>”, and <strong>Publish</strong> defaults to <strong>Update an existing game</strong>, which replaces
+          all of the game's files with your project and creates a new version, with optional release notes. When the project wasn't opened
+          from that game, or the game changed since you opened it, you must tick a box to confirm the full replace. Title, description, tags
+          and visibility don't change. Lost your source? <strong>Download current bundle</strong> on the edit page gives you the files of the
+          current version, and <strong>Open → .zip file…</strong> loads any bundle. In the desktop app, a project opened from a local folder
+          has <strong>↻ Reload folder</strong> to re-read it after you edit files on disk; edits made in the Studio are not written back to the
+          folder, so export a .zip to keep them.
+        </p>
       </section>
 
       <section>

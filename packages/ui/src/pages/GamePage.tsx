@@ -195,6 +195,9 @@ function OwnerActions({ game, onUpdated, onReload }: { game: Game; onUpdated: (g
         <Link to={`/games/${game.id}/edit`} className="pf-btn pf-btn--sm">
           ✎ Edit details
         </Link>
+        <Link to={`/studio?open=${encodeURIComponent(game.id)}`} className="pf-btn pf-btn--sm">
+          ✎ Open in Studio
+        </Link>
         <Link to={`/games/${game.id}/stats`} className="pf-btn pf-btn--sm">
           📈 Stats
         </Link>
