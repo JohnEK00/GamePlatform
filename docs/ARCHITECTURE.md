@@ -215,3 +215,77 @@ Trending and "More like this" discovery (spec: `docs/features/F003-trending-and-
   - A new `RelatedGames` component sits at the bottom of `GamePage`, and a `TrendingShelf` sits on the home page.
   - The desktop app inherits all of this through `@webgame/ui`.
 - **Ownership**: `trending.rs` and the `/related` handler belong to backend-dev. `RelatedGames.tsx` belongs to frontend-dev.
+
+
+## F004 additions
+Version changelogs and an "Updated" badge (spec: `docs/features/F004-version-changelogs.md`).
+- **History is metadata only.** A new `game_versions` table stores one row per bundle version (number, notes, time). Bundle files for old versions are still deleted after a successful replace (R1), so history can't be used for rollback.
+- **Write path, composed with R1.** `upload_bundle` keeps its order:
+  1. Parse the multipart body (now also `notes` and `expectedVersion`, validated before any work).
+  2. `bundle_locks.try_claim(id)`.
+  3. Read the current version and compare it with both the loaded game and `expectedVersion` (409 on mismatch).
+  4. Extract into staging, then rename to `v{new}`.
+  5. One transaction: the guarded `UPDATE games … WHERE id = ? AND version = ?`, `sync_achievements`, **`INSERT game_versions`**, and when published **`UPDATE games SET last_updated_at`** plus the best-effort `activity::record_game_updated`.
+  The history row and `last_updated_at` are part of the main write (a failure fails the request); only the activity event stays best effort.
+- **Feed composition.** `record_game_updated` keeps F002's delete + insert coalescing but carries `from_version`: the minimum of the deleted rows' `COALESCE(from_version, version)` and the new version. `GET /api/feed` loads notes in one batched `game_versions` query for the page's `gameUpdated` game ids and slices `[from_version, version]` in Rust, so notes are always current.
+- **Data**: migration `backend/migrations/0007_f004.sql` runs after F003's `0006_f003.sql`:
+  ```sql
+  CREATE TABLE game_versions (
+      game_id     TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      version     INTEGER NOT NULL CHECK (version >= 1),
+      notes       TEXT NOT NULL DEFAULT '',             -- plain text, <= 1000 chars (validated in Rust)
+      created_at  TEXT NOT NULL,                        -- RFC3339 millis Z
+      PRIMARY KEY (game_id, version)
+  );
+
+  ALTER TABLE games ADD COLUMN last_updated_at TEXT;   -- latest bundle replace while published; NULL if none
+  ALTER TABLE activity_events ADD COLUMN from_version INTEGER;   -- gameUpdated: lowest covered version; NULL = version
+
+  -- Backfill last_updated_at from F002's gameUpdated events (only published replaces produce them).
+  UPDATE games SET last_updated_at = (
+      SELECT MAX(e.created_at) FROM activity_events e
+      WHERE e.game_id = games.id AND e.kind = 'gameUpdated'
+  );
+
+  -- Backfill: one row for each game's current version (no notes; date approximate).
+  INSERT INTO game_versions (game_id, version, notes, created_at)
+  SELECT id, version, '',
+         CASE WHEN version = 1 THEN created_at
+              ELSE COALESCE(last_updated_at, updated_at) END
+  FROM games;
+  ```
+  No new index is needed. `/versions` and the feed lookup use the primary key `(game_id, version)`, and `GAME_SELECT` reads `last_updated_at` from the `games` row.
+- **UI**:
+  - `isRecentlyUpdated` / `UPDATED_BADGE_MS` in `util.ts` decide the card badge client-side (7 days).
+  - New components: `VersionHistory` (the game page's "What's new" panel and history, with owner editing) and `ReleaseNotesField` (a shared textarea).
+  - Notes are always rendered as text with `white-space: pre-wrap`.
+  - The desktop app inherits everything through `@webgame/ui`.
+- **Ownership**: `routes/versions.rs` (and the optional `versions.rs` notes helper) belong to backend-dev. `VersionHistory.tsx` and `ReleaseNotesField.tsx` belong to frontend-dev.
+
+## F013 additions
+Studio: publish updates to an existing game (spec: `docs/features/F013-studio-publish-updates.md`).
+- **No migration.** F013 adds no tables or columns. Migration slot `0008` is not used by F013.
+- **Backend export** (`backend/src/export.rs`, backend-dev):
+  - `build_bundle_zip(dir, date)` walks `data/games/{id}/v{version}/` (regular files only; symlinks skipped). It writes a zip into memory, capped at 64 MiB, inside `spawn_blocking`, streaming each file into the writer. It uses the existing `zip` crate with the `deflate` feature: precompressed formats are stored, everything else deflated.
+  - `GET /api/games/{id}/bundle` shares the `/games/{id}/bundle` route with `PUT`. Its order is: owner check → `Limit::BundleDownload` → `AppState.export_slots` (`tokio::sync::Semaphore`, 2 permits, `try_acquire`, else 503) → read the version → build → re-read the version (409 on change or vanished files).
+  - It never takes `bundle_locks`.
+  - The CORS layer exposes `X-Game-Version`, `Content-Disposition` and `Retry-After`.
+- **UI zip reader** (`packages/ui/src/studio/unzip.ts`, frontend-dev): `readZip` is a central-directory reader for stored and deflate entries. It inflates with `DecompressionStream("deflate-raw")` (no dependencies), checks CRC-32 with the existing `crc32` from `zip.ts`, and enforces limits on actual inflated bytes (2000 entries, 200 MB). ZIP64, encryption and other methods are rejected.
+  - `project.ts` gains `projectFromZip`, and both it and `projectFromFileList` go through a shared `projectFromEntries`, so folder and zip imports follow the same rules (strip a top-level folder only when it holds `game.json`).
+  - The backend's own zip writer and this reader are independent implementations. The round-trip tests (backend `f013.rs` and UI `unzip.test.ts`) keep them compatible.
+- **Studio session model** (`StudioPage.tsx` with `studio/PublishDialog.tsx` and `studio/OpenGameDialog.tsx`):
+  - `StudioLink = { gameId: string; title: string; version: number; apiBase: string }` records which game the project was downloaded from or last published to. A link whose `apiBase` differs from `WebGameConfig.apiBaseUrl` is ignored.
+  - `dirty: boolean` records edits since the last load or publish, and gates a confirm before any project replace.
+  - Both are kept next to `StudioProject` (not inside it, so the host contract is unchanged).
+  - The localStorage autosave (`webgame.studio.project`, format `v: 1`) gains optional top-level `link` and `dirty`. Readers ignore a malformed `link`, and a missing `dirty` means `false`.
+  - The `/studio?open={gameId}` route query opens one of your games: it downloads `GET /api/games/{id}/bundle` and loads it with the link set. The query is removed at once with a replace navigation. It works with both `BrowserRouter` and the desktop `HashRouter`.
+  - "Publish → Update an existing game" calls `PUT /api/games/{id}/bundle` with F004 `notes` and `expectedVersion` (the version the dialog fetched), and requires an explicit confirmation when the link doesn't match the selected game's current version.
+- **Platform contract** (`PlatformConfig` in `packages/ui/src/context/config.tsx`; all optional, so older hosts still conform):
+  - `openLocalProject?: () => Promise<LocalProject | null>`, where `LocalProject = StudioProject & { localFolder?: { id: string; name: string } }`. `id` is an opaque, session-scoped handle; `name` is for display only.
+  - `reloadLocalProject?: (folderId: string) => Promise<LocalProject | null>` re-reads a folder picked earlier in this session, with no dialog, the same limits and the same validation. It rejects with an `Error` whose message says the folder is no longer available when the id is unknown or the folder is gone. The Studio then hides "↻ Reload folder".
+  - `localFolder` is never written to the autosave.
+- **Desktop folder registry** (`apps/desktop/src-tauri/src/project.rs`, desktop-dev):
+  - `ProjectFolders` maps random `folderId`s to the canonical roots the user picked in the native dialog. It is in memory only, holds at most 16 entries (LRU) and is lost on restart.
+  - `pick_project_folder` returns `folderId` in its `ProjectIndex`. The new command `reload_project_folder(folderId)` returns a fresh `ProjectIndex` (new binary ticket, same `folderId`) through the existing `read_project_dir(…, Limits::UPLOAD)`.
+  - The webview still never supplies or receives a filesystem path. The registry is the allowlist of folders it may re-read.
+- **Ownership**: `export.rs` and the handler belong to backend-dev. `unzip.ts`, `PublishDialog.tsx` and `OpenGameDialog.tsx` belong to frontend-dev. The folder registry and `platform.ts` changes belong to desktop-dev.

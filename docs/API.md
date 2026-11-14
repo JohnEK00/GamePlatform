@@ -401,3 +401,116 @@ For each game, over the window days `d` (today and the 6 previous UTC days, by `
 - **Health check:** `webgame-server healthcheck` exits 0 when `GET /api/health` on `127.0.0.1:$PORT` returns 200. The Docker `HEALTHCHECK` uses it.
 - **Shutdown:** graceful on SIGTERM and Ctrl+C.
 - **Startup cleanup:** stale `.staging-*` folders and orphaned game folders are removed.
+
+
+---
+
+## F004 additions
+
+Version changelogs and an "Updated" badge (spec: `docs/features/F004-version-changelogs.md`). All earlier rules apply, including F002 (feed) and the review-fix bundle replace serialisation (R1).
+
+### Types
+```ts
+type GameVersion = {
+  version: number;                // >= 1
+  notes: string;                  // plain text, 0–1000 chars, "\n" line breaks; "" = no notes
+  createdAt: string;              // RFC3339 UTC: when this version went live (upload / replace time)
+  current: boolean;               // version === the game's current version
+}
+
+type GameSummary = { ...F003, lastUpdatedAt: string | null }
+// lastUpdatedAt: RFC3339 UTC of the latest bundle replace made while the game was PUBLISHED; null if none.
+// Not changed by metadata PATCHes, thumbnail changes, publishing, or notes edits.
+// On EVERY GameSummary (listings, profile, favorites, feed, related, Game).
+
+type Game = { ...F003, latestVersion: GameVersion }   // the current version's row (current: true)
+
+type FeedUpdate = {
+  fromVersion: number;            // lowest version covered by this (possibly coalesced) item; === FeedItem.version when only one
+  changes: { version: number; notes: string }[];   // covered versions with non-empty notes, newest first, at most 3
+}
+type FeedItem = { ...F002, update: FeedUpdate | null }   // non-null for kind "gameUpdated" only
+```
+The UI shows an "Updated" badge while `now − lastUpdatedAt < 7 days` (client-side; the server only reports the timestamp).
+
+### Notes rules (every endpoint that accepts `notes`)
+- `\r\n` and `\r` become `\n`; leading/trailing whitespace is trimmed; runs of 3+ blank lines collapse to 2.
+- After that, at most **1000** characters (Unicode scalar values), else 422 `validation` "notes must be at most 1000 characters". A multipart `notes` field larger than 8 KB raw → 422.
+- Control characters other than `\n` and `\t`, and the bidi controls U+202A–U+202E and U+2066–U+2069 → 422 `validation` "notes contain invalid characters".
+- A missing field means `""`. Notes are plain text: clients must not render them as HTML or Markdown.
+
+### Changed endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| POST 🔒 | /api/games | v1 multipart + optional `notes` (version 1's release notes) | 201 `Game` |
+| PUT 🔒 owner | /api/games/{id}/bundle | multipart `bundle` + optional `notes` + optional `expectedVersion` (decimal string) | `Game` (version+1, `latestVersion` = the new row) |
+| GET 🔒 | /api/feed | unchanged query | `FeedPage` whose `gameUpdated` items carry `update` |
+
+`PUT …/bundle` details:
+- `expectedVersion` not a positive integer → 400 `bad_request` (checked before the upload is processed).
+- `expectedVersion` present and different from the game's current version → 409 `conflict` "The game is at v{n}; reload and retry". Nothing is written.
+- Without `expectedVersion`, behaviour is unchanged: the R1 rules still return 409 for a concurrent replace.
+- On success the new version's `GameVersion` row is written atomically with the version bump. When the game is published, `lastUpdatedAt` is set to the same timestamp as `latestVersion.createdAt`, and the F002 `gameUpdated` event is recorded as before.
+- When the game is unpublished, the version row is written but `lastUpdatedAt` is unchanged and no feed event is recorded (F002 rule). Publishing later never sets `lastUpdatedAt`.
+
+### New endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/versions | `?page=1&perPage=20` (max 100) | `Page<GameVersion>`, highest version first |
+| PATCH 🔒 owner | /api/games/{id}/versions/{version} | `{ notes: string }` | `GameVersion` |
+
+- Visibility of `/versions` follows `GET /api/games/{id}`: unknown id → 404; unpublished → 404 unless the viewer is the owner.
+- History contains every version uploaded since F004, plus one row for each game's version that was current when F004 was deployed (empty notes; `createdAt` approximate). Older versions have no row. Old bundle files are not kept; there is no rollback.
+- `PATCH …/versions/{version}`:
+  - `{version}` not a positive integer → 400 `bad_request`. No row for that version → 404 `not_found`.
+  - Missing or non-string `notes` → 422 `validation`; otherwise the notes rules above.
+  - Only `notes` changes. It does not change `lastUpdatedAt`, `updatedAt`, the game's version or any feed event's position; feed items show the new text on their next read.
+  - Owner rules as for `PATCH /api/games/{id}` (anonymous 401, others 403/404 as today).
+
+### Feed (`FeedItem.update`)
+- `fromVersion`: when the F002 24h coalescing merges several `gameUpdated` events, the item keeps the lowest version it replaced, so `fromVersion..version` lists every covered version. Items created before F004 report `fromVersion === version`.
+- `changes` is read from the version history at request time (edits show immediately), filtered to non-empty notes, newest first, max 3.
+- Clients must treat a missing `update` as `null` (older servers).
+
+### Rate limits
+- Notes edits (`PATCH …/versions/{version}`): 30 per 10 min, per user (`Limit::VersionNotes`).
+- Bundle replace and create keep the existing 20/hour.
+- `GET …/versions` is an unlimited public read, like comments.
+
+
+---
+
+## F013 additions
+
+Studio: publish updates to an existing game (spec: `docs/features/F013-studio-publish-updates.md`). All earlier rules apply. Studio updates use the F004 `PUT /api/games/{id}/bundle` fields (`notes`, `expectedVersion`) unchanged. No other endpoint changes.
+
+### New endpoint
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔒 owner | /api/games/{id}/bundle | – | 200 `application/zip`: the **current** version's stored files |
+
+- **Auth**: a session JWT. Preview-scoped tokens → 401. Anonymous → 401. Unknown id → 404. Another user's game → the same 403/404 as `PUT …/bundle`. Unpublished games work for their owner. Admins get no extra access.
+- **Body**: a zip built from the extracted files of the current version.
+  - `game.json` comes first, then the other paths sorted byte-wise. Paths are the stored ones: the single top-level folder (if the upload had one) is already stripped.
+  - Only regular files are included.
+  - png/jpg/jpeg/webp/gif/mp3/ogg/woff2 entries are stored; everything else is DEFLATE-compressed.
+  - Every entry date is the version's `createdAt` (F004), else `updatedAt`.
+  - The archive is plain zip: no ZIP64, no encryption, no data descriptors. Re-uploading it unchanged passes bundle validation.
+- **Headers**:
+  - `Content-Type: application/zip`
+  - `Content-Disposition: attachment; filename="{slug}-v{version}.zip"`. `slug` is ASCII `[a-z0-9-]`, 1–40 chars, from the title (`game` if empty).
+  - `X-Game-Version: {version}`, the version the files belong to.
+  - `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Content-Length`.
+- **Errors**:
+  - The game was replaced while the archive was being built → 409 `conflict` "The game was updated while preparing the download; retry". Clients may retry once.
+  - Archive larger than 64 MiB → 413 `payload_too_large`.
+  - More than 2 builds already running server-wide → 503 `unavailable` with `Retry-After: 5`.
+- A download never takes the R1 bundle-replace claim, so it never causes a replace to fail.
+- On servers without F013, `GET` on this path returns 405 (the route has only `PUT`).
+
+### CORS
+`/api/*` responses add `Access-Control-Expose-Headers: X-Game-Version, Content-Disposition, Retry-After`, so cross-origin clients (the desktop app, the dev web app) can read them.
+
+### Rate limits
+- Bundle downloads (`GET …/bundle`): 30/hour, per user (`Limit::BundleDownload`). Over the limit → 429 `rate_limited` with `Retry-After`.
+- Bundle replace and create keep the existing 20/hour (`Limit::Upload`).

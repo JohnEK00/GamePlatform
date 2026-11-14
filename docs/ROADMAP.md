@@ -23,9 +23,10 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | Id | Title | Size | Status |
 |---|---|---|---|
 | F001 | Leaderboards 2.0: daily/weekly boards, time/ascending scores, in-game leaderboard API | M | shipped |
-| F002 | Follow creators and an activity feed | M | specced |
-| F003 | Trending and "More like this" discovery | S | specced |
-| F004 | Version changelogs and an "Updated" badge | S | proposed |
+| F002 | Follow creators and an activity feed | M | shipped |
+| F003 | Trending and "More like this" discovery | S | in progress |
+| F004 | Version changelogs and an "Updated" badge | S | in progress |
+| F013 | Studio: publish updates to an existing game | M | specced |
 | F005 | Screenshot capture and share | S | proposed |
 | F006 | Comment replies and reactions | M | proposed |
 | F007 | In-app notifications | M | proposed |
@@ -34,19 +35,20 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F010 | Desktop offline library | M | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F012 | Engine bitmap fonts and 9-slice UI widgets | M | proposed |
+| F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
 - **User value**: players get a fresh, winnable board every day and week, and see their rank without leaving the game. Creators can build time trials and in-game high-score screens, which drives replays.
 - **Areas**: engine (+ examples), backend, frontend (player, Leaderboard panel, Studio), desktop (verification only).
 
-### F002: Follow creators and an activity feed (M, specced → [spec](features/F002-follow-and-feed.md))
+### F002: Follow creators and an activity feed (M, shipped → [spec](features/F002-follow-and-feed.md))
 - **Pitch**: follow any user, then see their new games, bundle updates, personal bests (F001) and achievement unlocks in a `/feed` page, plus updates to games you favorited. Follower counts and lists on profiles, and creator suggestions for an empty feed.
 - **User value**: a reason to come back, and creators build an audience.
 - **Areas**: backend (follows, activity events, feed and suggestions), frontend (follow button, feed page, profile counts and lists), desktop (View → Feed). No engine changes.
 - **Depends on**: F001 backend (`personalBest`) for the personal-best events only.
 
-### F003: Trending and "More like this" (S, specced → [spec](features/F003-trending-and-related.md))
+### F003: Trending and "More like this" (S, in progress → [spec](features/F003-trending-and-related.md))
 - **Pitch**:
   - A `sort=trending` option that ranks games by distinct players per day over the last 7 UTC days, with recent days weighted higher. It is built on the deduplicated `play_events`, with owner plays excluded.
   - A "Trending this week" home shelf, and a `playsWeek` count on every game card.
@@ -55,10 +57,25 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0006_f003.sql`, `trending.rs` snapshot, `/related`), frontend (sort tab, shelves, card highlights), desktop (verification only). No engine changes.
 - **Depends on**: the review-fix play dedupe and rate limit (R2) for the `viewer_key` write; everything else is independent of F002.
 
-### F004: Version changelogs and an "Updated" badge (S, proposed)
-- **Pitch**: bundle replacements take an optional "what's new" note. The game page shows a version history, and cards show an "Updated" badge for 7 days.
+### F004: Version changelogs and an "Updated" badge (S, in progress → [spec](features/F004-version-changelogs.md))
+- **Pitch**:
+  - Bundle uploads and replacements take an optional plain-text "What's new" note (up to 1000 chars), which the owner can edit later.
+  - The game page shows a "What's new" panel and the version history.
+  - Cards show an "Updated" badge for 7 days after a replace of a published game.
+  - F002 `gameUpdated` feed items quote the notes of every version they cover, including versions merged by the 24h coalescing.
+  - Replace forms send `expectedVersion`, so a stale tab gets a clear 409 on top of the R1 per-game claim.
 - **User value**: players see why to replay, and creators can talk to their players.
-- **Areas**: backend (game_versions table, endpoint), frontend (upload/edit form, history panel, badge).
+- **Areas**: backend (migration `0007_f004.sql`: `game_versions`, `games.last_updated_at`, `activity_events.from_version`; `/versions` endpoints; feed `update` field), frontend (notes fields, `VersionHistory`, badge, feed notes), desktop (verification only). No engine changes.
+- **Depends on**: F002 (shipped) and the R1 bundle replace serialisation. Lands after F003's `0006` migration.
+
+### F013: Studio: publish updates to an existing game (M, specced → [spec](features/F013-studio-publish-updates.md))
+- **Pitch**:
+  - The Studio's Publish dialog gains "Update an existing game": it replaces the bundle with F004 release notes and `expectedVersion`, and asks for confirmation when the project isn't linked to that game's current version.
+  - "Open in Studio" (owner) loads the current bundle through a new owner-only `GET /api/games/{id}/bundle`. The Studio's Open menu adds ".zip file…" and "My game…", and a project remembers its linked game.
+  - The edit page gets "Download current bundle". On desktop, "↻ Reload folder" re-reads a local folder after edits on disk.
+- **User value**: today Studio creators can only create new games, and zip-uploaded games can't be opened in the Studio at all. This closes the edit → ship loop and makes changelogs part of it.
+- **Areas**: backend (export endpoint, `Limit::BundleDownload`, CORS expose headers; no migration), frontend (zip reader, Open menu/dialog, Publish modes, link/dirty state, entry points), desktop (session folder registry + `reload_project_folder`).
+- **Depends on**: F004 (`notes`/`expectedVersion`, `ReleaseNotesField`).
 
 ### F005: Screenshot capture and share (S, proposed)
 - **Pitch**: a camera button in the player, plus `engine.platform.captureScreenshot()`, grabs the canvas as PNG. Players can download it (desktop: native save) and owners can set it as the thumbnail.
@@ -99,3 +116,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: `assets.loadBitmapFont` (BMFont JSON), `renderer.drawNineSlice`, and a tiny immediate-mode `ui.button/label/panel` helper.
 - **User value**: good-looking menus and HUDs without hand-rolled code.
 - **Areas**: engine, examples, frontend (Studio template update).
+
+### F014: Desktop Studio: save to local folder and watch for changes (S, proposed; after F013)
+- **Pitch**: for a project opened from a local folder (F013 `localFolder`), "Save to folder" writes Studio edits back to disk through a Rust command limited to the registered folder, and an optional file watcher auto-reloads on external changes.
+- **User value**: desktop creators can mix Studio edits and their own editor without exporting zips or losing edits on reload.
+- **Areas**: desktop (write command scoped to the F013 folder registry, `notify` watcher), frontend (Save button, auto-reload toggle). No backend changes.

@@ -201,3 +201,35 @@ Trending and "More like this" discovery (spec: `docs/features/F003-trending-and-
   - Rewriting is regex-based, so import-like text inside comments is rewritten too.
   - Errors use the shape `{ type: "webgame:error", message, file?, line?, column? }`.
   - Errors raised by the engine runtime itself don't carry `file` yet.
+
+## F004 additions
+
+Version changelogs and an "Updated" badge (spec: `docs/features/F004-version-changelogs.md`).
+
+**No engine, bundle, `game.json` or message changes.** Release notes are entered in the upload/replace forms, not inside the bundle. What creators need to know:
+- **Release notes.** When you upload a new bundle (game page → Replace bundle, or the edit page), you can add a "What's new" note: plain text, up to 1000 characters, line breaks kept. HTML, Markdown and links are shown as plain text. You can also add notes to your first upload, and fix any note later from the game page's version history.
+- **Who sees them.** Notes appear in the game page's "What's new" panel and version history. For a published game, your followers and everyone who favorited the game see the note in their feed with the F002 "updated {game} to v{n}" item. Several updates within 24h are grouped, showing up to 3 notes.
+- **"Updated" badge.** Replacing the bundle of a **published** game shows an "Updated" badge on its cards for 7 days. Editing the title/description/thumbnail, publishing a draft, or editing a note does not.
+- **Removed content.** A replace still drops achievements that the new `game.json` no longer declares (v2 rule). Say so in the note.
+- Version numbers stay integers assigned by the server (1, 2, 3, …). There is no rollback: only the current version's files are kept.
+
+## F013 additions
+
+Studio: publish updates to an existing game (spec: `docs/features/F013-studio-publish-updates.md`).
+
+**No engine, bundle, `game.json` or message changes.** What creators need to know:
+- **Getting your bundle back.** Owners can download the current version (edit page → "Download current bundle", or `GET /api/games/{id}/bundle`).
+  - The archive holds exactly the stored files, with `game.json` at the root and listed first.
+  - If your upload had a single top-level folder, it is gone in the download (the backend strips it on upload).
+  - The archive can be re-uploaded unchanged.
+- **Open in Studio.** "Open in Studio" (game page or edit page) and Studio → Open → "My game…" load that archive into the Studio. Studio → Open → ".zip file…" loads any bundle from disk. Opened projects follow the same rules as folder imports:
+  - a single top-level folder is stripped only when it contains `game.json`;
+  - dotfiles and disallowed extensions are skipped;
+  - text files (`js json txt css svg md csv`) are decoded as UTF-8.
+  A non-UTF-8 text file is re-encoded as UTF-8 when you publish from the Studio.
+- **Publishing an update from the Studio.** Publish → "Update an existing game" replaces **all** files of the chosen game with the Studio project. It creates version n+1 and accepts optional release notes (F004 rules).
+  - Title, description, tags and visibility don't change.
+  - Achievements no longer declared in `game.json` are removed (v2 rule).
+  - The Studio asks for confirmation when the project wasn't opened from (or last published to) that game at its current version.
+- **Desktop local folders.** A folder opened with "Open local game folder…" can be re-read with "↻ Reload folder" after you edit files on disk. Edits made inside the Studio are **not** written back to the folder. Export a .zip to keep them.
+- The Studio protocol (`/play/studio`) is unchanged. Opened games run only in the sandboxed Studio preview, and Studio sessions still record no plays, scores or achievements.
