@@ -52,6 +52,8 @@ export type Game = GameSummary & {
   isFavorite: boolean;
   /** v2: achievement definitions from the current version's game.json. */
   achievements: AchievementDef[];
+  /** F001: leaderboard semantics from game.json (defaults when absent). */
+  leaderboard: LeaderboardConfig;
 };
 
 export type Page<T> = { items: T[]; total: number; page: number; perPage: number };
@@ -240,3 +242,37 @@ export type CreateReportRequest = {
 };
 
 export type ListReportsQuery = PageQuery & { status?: ReportStatus };
+
+// ---- F001: leaderboards 2.0 ----
+
+export type LeaderboardPeriod = "day" | "week" | "all";
+
+export type LeaderboardConfig = {
+  /** "desc": higher is better (default); "asc": lower is better. */
+  order: "desc" | "asc";
+  /** "time": score is milliseconds. */
+  format: "number" | "time";
+  /** Column label; "" = UI default. Max 24 chars. */
+  label: string;
+};
+
+export type Leaderboard = {
+  period: LeaderboardPeriod;
+  /** RFC3339 UTC, inclusive; null for "all". */
+  periodStart: string | null;
+  /** RFC3339 UTC, exclusive; null for "all". */
+  periodEnd: string | null;
+  config: LeaderboardConfig;
+  /** Each user's best in the window, best first; rank = rank in this window. */
+  entries: Score[];
+  totalPlayers: number;
+  /** The viewer's best in the window, null if anonymous or no score. */
+  me: Score | null;
+};
+
+export type LeaderboardQuery = { period?: LeaderboardPeriod; limit?: number };
+
+export type ScoreSubmitResult = Score & {
+  personalBest: boolean;
+  ranks: { day: number; week: number; all: number };
+};

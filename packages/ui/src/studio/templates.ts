@@ -281,6 +281,126 @@ export default {
 };
 `;
 
+const TIME_TRIAL_MAIN = `// Time trial: steer with arrows/WASD through the gates in order and reach the goal as fast as possible.
+// Lower is better: game.json declares "leaderboard": { "order": "asc", "format": "time" }, and the score is milliseconds.
+const GATES = [
+  { x: 160, y: 120 },
+  { x: 640, y: 140 },
+  { x: 520, y: 460 },
+  { x: 140, y: 470 },
+  { x: 400, y: 300 },
+];
+const RADIUS = 26;
+
+function formatTime(ms) {
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const mm = Math.floor(ms % 1000);
+  return m + ":" + String(s).padStart(2, "0") + "." + String(mm).padStart(3, "0");
+}
+
+export default {
+  load(engine) {
+    this.best = engine.storage.get("bestMs", 0);
+    this.reset(engine);
+  },
+
+  reset(engine) {
+    this.x = 60;
+    this.y = engine.height - 60;
+    this.vx = 0;
+    this.vy = 0;
+    this.next = 0;
+    this.ms = 0;
+    this.started = false;
+    this.done = false;
+    this.result = null; // ScoreResultView | null
+    this.board = null; // LeaderboardView | null
+    this.loadingBoard = false;
+  },
+
+  async finish(engine) {
+    this.done = true;
+    const ms = Math.round(this.ms);
+    if (!this.best || ms < this.best) {
+      this.best = ms;
+      engine.storage.set("bestMs", ms);
+    }
+    engine.audio.tone({ freq: 660, freqEnd: 1320, duration: 0.25, type: "triangle" });
+    // submitScore resolves with your ranks (or null when offline, logged out or in the Studio).
+    this.result = await engine.platform.submitScore(ms);
+    if (typeof engine.platform.getLeaderboard === "function") {
+      this.loadingBoard = true;
+      this.board = await engine.platform.getLeaderboard({ period: "day", limit: 5 });
+      this.loadingBoard = false;
+    }
+  },
+
+  update(engine, dt) {
+    const { input } = engine;
+    if (this.done) {
+      if (input.wasPressed("KeyR") || input.wasPressed("Space")) this.reset(engine);
+      return;
+    }
+    const ax = input.axis("horizontal");
+    const ay = input.axis("vertical");
+    if (!this.started && (ax || ay)) this.started = true;
+    if (!this.started) return;
+
+    this.ms += dt * 1000;
+    const accel = 1400;
+    this.vx = (this.vx + ax * accel * dt) * Math.pow(0.08, dt);
+    this.vy = (this.vy + ay * accel * dt) * Math.pow(0.08, dt);
+    this.x = engine.math.clamp(this.x + this.vx * dt, 12, engine.width - 12);
+    this.y = engine.math.clamp(this.y + this.vy * dt, 12, engine.height - 12);
+
+    const g = GATES[this.next];
+    if (Math.hypot(this.x - g.x, this.y - g.y) < RADIUS + 10) {
+      this.next += 1;
+      engine.audio.tone({ freq: 440 + this.next * 110, duration: 0.08 });
+      if (this.next === GATES.length) this.finish(engine);
+    }
+  },
+
+  render(engine) {
+    const r = engine.renderer;
+    r.clear("#101326");
+    GATES.forEach((g, i) => {
+      const color = i < this.next ? "#2a3156" : i === this.next ? (i === GATES.length - 1 ? "#2fd9a6" : "#ffd166") : "#3b4a7a";
+      r.drawCircle(g.x, g.y, RADIUS, color);
+      r.drawText(i === GATES.length - 1 ? "GOAL" : String(i + 1), g.x, g.y - 8, { size: 16, color: "#101326", align: "center" });
+    });
+    r.drawCircle(this.x, this.y, 12, "#ff7a3d");
+
+    r.ui(() => {
+      r.drawText(formatTime(this.ms), 12, 10, { size: 22, color: "#ffffff" });
+      if (this.best) r.drawText("Best " + formatTime(this.best), engine.width - 12, 10, { size: 16, color: "#c3c7dc", align: "right" });
+      if (!this.started && !this.done)
+        r.drawText("Move to start the clock", engine.width / 2, engine.height - 40, { size: 16, color: "#8b91b0", align: "center" });
+      if (!this.done) return;
+
+      const cx = engine.width / 2;
+      r.drawRect(cx - 200, 90, 400, 380, "rgba(10, 11, 19, 0.88)");
+      r.drawText("FINISHED " + formatTime(this.ms), cx, 110, { size: 28, color: "#2fd9a6", align: "center" });
+      if (this.result && this.result.personalBest)
+        r.drawText("NEW BEST!  #" + this.result.ranks.day + " today", cx, 150, { size: 16, color: "#ffd166", align: "center" });
+      r.drawText("Today's top 5", cx, 190, { size: 16, color: "#c3c7dc", align: "center" });
+      if (this.loadingBoard) r.drawText("Loading…", cx, 225, { size: 14, color: "#8b91b0", align: "center" });
+      else if (!this.board || this.board.entries.length === 0)
+        r.drawText("No leaderboard available", cx, 225, { size: 14, color: "#8b91b0", align: "center" });
+      else
+        this.board.entries.forEach((e, i) => {
+          const y = 225 + i * 30;
+          const c = e.isMe ? "#ff7a3d" : "#eceef8";
+          r.drawText("#" + e.rank + "  " + e.name, cx - 170, y, { size: 16, color: c });
+          r.drawText(e.display, cx + 170, y, { size: 16, color: c, align: "right" });
+        });
+      r.drawText("Press R or Space to race again", cx, 430, { size: 14, color: "#8b91b0", align: "center" });
+    });
+  },
+};
+`;
+
 export const STUDIO_TEMPLATES: StudioTemplate[] = [
   {
     id: "blank",
@@ -329,5 +449,20 @@ export const STUDIO_TEMPLATES: StudioTemplate[] = [
       ],
     },
     files: { "main.js": PLATFORMER_MAIN },
+  },
+  {
+    id: "time-trial",
+    name: "Time trial",
+    description: "Race through the gates against the clock. Lowest time wins, and the end screen shows today's top 5.",
+    manifest: {
+      name: "Gate Rush",
+      entry: "main.js",
+      width: 800,
+      height: 600,
+      engine: "1",
+      leaderboard: { order: "asc", format: "time", label: "Best time" },
+      achievements: [],
+    },
+    files: { "main.js": TIME_TRIAL_MAIN },
   },
 ];

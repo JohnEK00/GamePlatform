@@ -18,12 +18,15 @@ import {
   extOf,
   IMAGE_EXTENSIONS,
   isTextPath,
+  LEADERBOARD_LABEL_MAX,
+  leaderboardOf,
   loadProjectFromStorage,
   normalizeProjectPath,
   projectFromFileList,
   saveProjectToStorage,
   slugify,
   validateProject,
+  withLeaderboard,
   ALLOWED_EXTENSIONS,
   type StudioAchievement,
   type StudioManifest,
@@ -68,6 +71,9 @@ function ManifestForm({ project, onChange }: { project: StudioProject; onChange:
   const setAch = (i: number, patch: Partial<StudioAchievement>) =>
     set({ achievements: achievements.map((a, j) => (j === i ? { ...a, ...patch } : a)) });
   const numVal = (v: unknown) => (typeof v === "number" ? String(v) : "");
+  const lb = leaderboardOf(m);
+  const rawLbLabel = (m.leaderboard as { label?: unknown } | undefined)?.label;
+  const lbLabel = typeof rawLbLabel === "string" ? rawLbLabel : "";
 
   return (
     <div className="pf-studio-manifest">
@@ -112,6 +118,53 @@ function ManifestForm({ project, onChange }: { project: StudioProject; onChange:
           </div>
         ))}
       </div>
+
+      <fieldset className="pf-studio-lb">
+        <legend>Leaderboard</legend>
+        <div className="pf-form__row2">
+          <div className="pf-field">
+            <label className="pf-label" htmlFor="pf-st-lb-order">
+              Order
+            </label>
+            <select
+              id="pf-st-lb-order"
+              className="pf-input"
+              value={lb.order}
+              onChange={(e) => onChange(withLeaderboard(m, { order: e.target.value === "asc" ? "asc" : "desc" }))}
+            >
+              <option value="desc">Higher is better</option>
+              <option value="asc">Lower is better</option>
+            </select>
+          </div>
+          <div className="pf-field">
+            <label className="pf-label" htmlFor="pf-st-lb-format">
+              Format
+            </label>
+            <select
+              id="pf-st-lb-format"
+              className="pf-input"
+              value={lb.format}
+              onChange={(e) => onChange(withLeaderboard(m, { format: e.target.value === "time" ? "time" : "number" }))}
+            >
+              <option value="number">Number</option>
+              <option value="time">Time (milliseconds)</option>
+            </select>
+          </div>
+        </div>
+        <div className="pf-field">
+          <label className="pf-label" htmlFor="pf-st-lb-label">
+            Label <span className="pf-muted pf-small">(optional, max {LEADERBOARD_LABEL_MAX})</span>
+          </label>
+          <input
+            id="pf-st-lb-label"
+            className="pf-input"
+            maxLength={LEADERBOARD_LABEL_MAX}
+            placeholder="Leaderboard"
+            value={lbLabel}
+            onChange={(e) => onChange(withLeaderboard(m, { label: e.target.value }))}
+          />
+        </div>
+      </fieldset>
 
       <div className="pf-studio-ach">
         <div className="pf-studio-ach__head">

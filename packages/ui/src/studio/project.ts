@@ -20,8 +20,45 @@ export type StudioManifest = {
   height?: number;
   engine?: string;
   achievements?: StudioAchievement[];
+  /** F001: optional leaderboard semantics (GAME_FORMAT.md § F001). */
+  leaderboard?: StudioLeaderboard;
   [key: string]: unknown;
 };
+
+/** F001: game.json `leaderboard` block. Every key is optional. */
+export type StudioLeaderboard = { order?: "desc" | "asc"; format?: "number" | "time"; label?: string };
+
+export const LEADERBOARD_LABEL_MAX = 24;
+
+/** F001: the effective leaderboard config of a manifest (defaults for absent/invalid values). */
+export function leaderboardOf(manifest: object | null | undefined): { order: "desc" | "asc"; format: "number" | "time"; label: string } {
+  const lb = asManifest(manifest).leaderboard as unknown;
+  const o = lb && typeof lb === "object" && !Array.isArray(lb) ? (lb as Record<string, unknown>) : {};
+  return {
+    order: o.order === "asc" ? "asc" : "desc",
+    format: o.format === "time" ? "time" : "number",
+    label: typeof o.label === "string" ? o.label.trim().slice(0, LEADERBOARD_LABEL_MAX) : "",
+  };
+}
+
+/**
+ * F001: returns a copy of the manifest with `leaderboard` set from `patch` merged onto the current values.
+ * Default values are left out, and the key is omitted entirely when everything is default.
+ */
+export function withLeaderboard(manifest: object, patch: StudioLeaderboard): StudioManifest {
+  const m = asManifest(manifest);
+  const cur = leaderboardOf(m);
+  const prevLabel = (m.leaderboard as { label?: unknown } | undefined)?.label;
+  const rawLabel = patch.label !== undefined ? patch.label : typeof prevLabel === "string" ? prevLabel : "";
+  const next = { order: patch.order ?? cur.order, format: patch.format ?? cur.format, label: String(rawLabel).slice(0, LEADERBOARD_LABEL_MAX) };
+  const out: StudioLeaderboard = {};
+  if (next.order !== "desc") out.order = next.order;
+  if (next.format !== "number") out.format = next.format;
+  if (next.label.trim() !== "") out.label = next.label;
+  if (Object.keys(out).length) m.leaderboard = out;
+  else delete m.leaderboard;
+  return m;
+}
 
 export const ALLOWED_EXTENSIONS = ["json", "js", "png", "jpg", "jpeg", "webp", "gif", "svg", "txt", "wav", "mp3", "ogg", "css", "woff2", "ttf"];
 export const TEXT_EXTENSIONS = ["js", "json", "txt", "css", "svg", "md", "csv"];
@@ -79,6 +116,17 @@ export function validateProject(project: StudioProject): string[] {
         if (a.icon !== undefined && a.icon !== "" && !(typeof a.icon === "string" && a.icon in project.files))
           errs.push(`${label}: icon "${String(a.icon)}" doesn't exist in the project.`);
       });
+    }
+  }
+  if (m.leaderboard !== undefined) {
+    const lb = m.leaderboard as unknown;
+    if (!lb || typeof lb !== "object" || Array.isArray(lb)) errs.push("game.json: leaderboard must be an object.");
+    else {
+      const o = lb as Record<string, unknown>;
+      if (o.order !== undefined && o.order !== "desc" && o.order !== "asc") errs.push('game.json: leaderboard.order must be "desc" or "asc".');
+      if (o.format !== undefined && o.format !== "number" && o.format !== "time") errs.push('game.json: leaderboard.format must be "number" or "time".');
+      if (o.label !== undefined && (typeof o.label !== "string" || o.label.trim().length > LEADERBOARD_LABEL_MAX))
+        errs.push(`game.json: leaderboard.label must be text of at most ${LEADERBOARD_LABEL_MAX} characters.`);
     }
   }
   const paths = Object.keys(project.files);

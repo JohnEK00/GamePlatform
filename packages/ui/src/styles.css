@@ -1511,6 +1511,51 @@ textarea.pf-input {
   color: var(--pf-accent);
 }
 
+/* F001: leaderboard periods, own row, footer */
+.pf-lb__tabs {
+  display: flex;
+  width: 100%;
+  margin-bottom: 12px;
+}
+.pf-lb__tabs .pf-tab {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+.pf-lb__head {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 8px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.7rem;
+}
+.pf-lb__divider {
+  height: 0;
+  margin: 8px 8px;
+  border-top: 1px dashed var(--pf-border-strong);
+}
+.pf-lb__me li {
+  background: rgba(255, 122, 61, 0.12);
+}
+.pf-lb__footer {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--pf-border);
+}
+.pf-studio-lb {
+  margin: 14px 0 0;
+  padding: 12px 14px 4px;
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-sm);
+}
+.pf-studio-lb legend {
+  padding: 0 6px;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
 .pf-comment-form {
   display: flex;
   gap: 12px;

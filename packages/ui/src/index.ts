@@ -28,6 +28,7 @@ export {
   discardPendingCloudSave,
   CLOUD_LOAD_TIMEOUT_MS,
   CLOUD_SAVE_DEBOUNCE_MS,
+  GAME_LEADERBOARD_CACHE_MS,
 } from "./components/GamePlayer";
 export { FavoritesProvider, FavoriteButton, useFavorites } from "./components/Favorite";
 export type { FavoriteButtonProps, FavoriteState, FavoritesApi } from "./components/Favorite";
@@ -47,8 +48,10 @@ export {
   serializeProject,
   deserializeProject,
   STUDIO_STORAGE_KEY,
+  leaderboardOf,
+  withLeaderboard,
 } from "./studio/project";
-export type { StudioProject, StudioManifest, StudioAchievement } from "./studio/project";
+export type { StudioProject, StudioManifest, StudioAchievement, StudioLeaderboard } from "./studio/project";
 export { STUDIO_TEMPLATES } from "./studio/templates";
 export type { StudioTemplate } from "./studio/templates";
 export { StudioPreview, STUDIO_READY_TIMEOUT_MS } from "./studio/StudioPreview";
@@ -59,7 +62,17 @@ export type { GamePlayerProps, GamePlayerGame } from "./components/GamePlayer";
 export { GameCard, GameCardSkeleton, GameGrid } from "./components/GameCard";
 export { StarRating } from "./components/StarRating";
 export type { StarRatingProps } from "./components/StarRating";
-export { Leaderboard } from "./components/Leaderboard";
+export { Leaderboard, LEADERBOARD_PERIOD_KEY } from "./components/Leaderboard";
+export type { LeaderboardProps } from "./components/Leaderboard";
+export {
+  LEADERBOARD_PERIODS,
+  DEFAULT_LEADERBOARD_CONFIG,
+  normalizeLeaderboardConfig,
+  toLeaderboardView,
+  toScoreResultView,
+  sampleLeaderboardView,
+} from "./leaderboard";
+export type { LeaderboardView, LeaderboardViewEntry, ScoreResultView } from "./leaderboard";
 export { Comments } from "./components/Comments";
 export { FileDrop } from "./components/FileDrop";
 export type { FileDropProps } from "./components/FileDrop";
@@ -98,4 +111,4 @@ export { AdminPage } from "./pages/AdminPage";
 export { StudioPage, STUDIO_OPEN_FOLDER_EVENT } from "./pages/StudioPage";
 
 // Utils
-export { formatCount, formatDate, timeAgo, errorMessage, looksLikeZip } from "./util";
+export { formatCount, formatDate, timeAgo, errorMessage, looksLikeZip, formatScore, formatTimeUntil } from "./util";

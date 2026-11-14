@@ -252,7 +252,7 @@ export function GamePage() {
             onChange={(r) => setData((g) => ({ ...(g ?? game), ...r }))}
           />
         </section>
-        <Leaderboard gameId={game.id} refreshKey={lbKey} />
+        <Leaderboard gameId={game.id} config={game.leaderboard} refreshKey={lbKey} />
         <section className="pf-panel pf-small pf-muted" aria-label="Game info">
           <dl className="pf-dl">
             <dt>Resolution</dt>

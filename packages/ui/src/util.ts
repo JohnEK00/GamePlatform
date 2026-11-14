@@ -142,3 +142,40 @@ export async function looksLikeZip(file: Blob): Promise<boolean> {
     return true; // can't check — let the server decide
   }
 }
+
+/**
+ * F001: the single score formatter (leaderboard panel, toasts, in-game views).
+ * "number" → locale string; "time" (ms) → m:ss.mmm, or h:mm:ss.mmm from 1h. Negative/non-finite → "—".
+ */
+export function formatScore(score: number, format: "number" | "time" = "number"): string {
+  if (typeof score !== "number" || !Number.isFinite(score)) return "—";
+  if (format !== "time") return score.toLocaleString();
+  if (score < 0) return "—";
+  const total = Math.round(score);
+  const ms = total % 1000;
+  const totalSec = Math.floor(total / 1000);
+  const s = totalSec % 60;
+  const totalMin = Math.floor(totalSec / 60);
+  const pad = (n: number, w: number) => String(n).padStart(w, "0");
+  if (totalMin >= 60) {
+    const h = Math.floor(totalMin / 60);
+    return `${h}:${pad(totalMin % 60, 2)}:${pad(s, 2)}.${pad(ms, 3)}`;
+  }
+  return `${totalMin}:${pad(s, 2)}.${pad(ms, 3)}`;
+}
+
+/** F001: "5h 12m" / "3d 4h" / "12m" until `endIso`, or null when unknown/past. */
+export function formatTimeUntil(endIso: string | null | undefined, now = Date.now()): string | null {
+  if (!endIso) return null;
+  const end = Date.parse(endIso);
+  if (Number.isNaN(end)) return null;
+  const left = end - now;
+  if (left <= 0) return null;
+  const mins = Math.max(1, Math.floor(left / 60000));
+  const d = Math.floor(mins / 1440);
+  const h = Math.floor((mins % 1440) / 60);
+  const m = mins % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}

@@ -1,22 +1,113 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import type { LeaderboardConfig, LeaderboardPeriod, Score } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
-import { useAsync } from "../util";
+import { formatScore, formatTimeUntil, useAsync } from "../util";
+import { isLeaderboardPeriod, normalizeLeaderboardConfig } from "../leaderboard";
 import { Avatar, Skeleton } from "./common";
 
-/** Top scores for a game. Change `refreshKey` to reload (e.g. after a score was submitted). */
-export function Leaderboard({ gameId, limit = 10, refreshKey = 0 }: { gameId: string; limit?: number; refreshKey?: number }) {
+/** localStorage key remembering the last selected period tab. */
+export const LEADERBOARD_PERIOD_KEY = "webgame.lb.period";
+
+const TABS: { period: LeaderboardPeriod; label: string }[] = [
+  { period: "day", label: "Today" },
+  { period: "week", label: "This week" },
+  { period: "all", label: "All time" },
+];
+
+const EMPTY_TEXT: Record<LeaderboardPeriod, string> = {
+  day: "No scores today yet — be the first!",
+  week: "No scores this week yet — be the first!",
+  all: "No scores yet — be the first!",
+};
+
+function readPeriod(): LeaderboardPeriod {
+  try {
+    const v = localStorage.getItem(LEADERBOARD_PERIOD_KEY);
+    if (isLeaderboardPeriod(v)) return v;
+  } catch {
+    /* storage unavailable */
+  }
+  return "week";
+}
+
+function writePeriod(p: LeaderboardPeriod) {
+  try {
+    localStorage.setItem(LEADERBOARD_PERIOD_KEY, p);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+export type LeaderboardProps = {
+  gameId: string;
+  /** F001: the game's leaderboard semantics (`Game.leaderboard`). Defaults when omitted. */
+  config?: LeaderboardConfig;
+  limit?: number;
+  /** Change to reload (e.g. after a score was submitted). */
+  refreshKey?: number;
+};
+
+/** Per-period leaderboard (Today · This week · All time) with the viewer's own row and a player count. */
+export function Leaderboard({ gameId, config, limit = 10, refreshKey = 0 }: LeaderboardProps) {
   const api = useApi();
   const { user } = useAuth();
-  const { data, loading, error } = useAsync(() => api.listScores(gameId, limit), [api, gameId, limit, refreshKey]);
+  const [period, setPeriod] = useState<LeaderboardPeriod>(readPeriod);
+  const { data, loading, error } = useAsync(() => api.getLeaderboard(gameId, { period, limit }), [api, gameId, period, limit, refreshKey]);
+  // Re-render once a minute so "resets in" stays fresh.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const shown = data && data.period === period ? data : undefined;
+  const cfg = normalizeLeaderboardConfig(shown?.config ?? config);
+  const label = cfg.label.trim();
+  const selectPeriod = (p: LeaderboardPeriod) => {
+    setPeriod(p);
+    writePeriod(p);
+  };
+
+  const entries = shown?.entries ?? [];
+  const me = shown?.me ?? null;
+  const meOutside = !!me && !entries.some((e) => e.user.id === me.user.id);
+  const isMe = (s: Score) => (!!user && s.user.id === user.id) || (!!me && s.user.id === me.user.id);
+  const resetsIn = shown && period !== "all" ? formatTimeUntil(shown.periodEnd) : null;
+
+  const row = (s: Score, key: string) => (
+    <li key={key} className={isMe(s) ? "is-me" : undefined}>
+      <span className={`pf-leaderboard__rank pf-rank-${s.rank}`}>{s.rank}</span>
+      <Link to={`/u/${encodeURIComponent(s.user.username)}`} className="pf-leaderboard__user">
+        <Avatar user={s.user} size={22} />
+        <span>{s.user.displayName || s.user.username}</span>
+      </Link>
+      <span className="pf-leaderboard__score">{formatScore(s.score, cfg.format)}</span>
+    </li>
+  );
 
   return (
-    <section className="pf-panel" aria-labelledby="pf-lb-title">
+    <section className="pf-panel pf-lb" aria-labelledby="pf-lb-title">
       <h2 id="pf-lb-title" className="pf-panel__title">
-        <span aria-hidden="true">🏆</span> Leaderboard
+        <span aria-hidden="true">🏆</span> {label || "Leaderboard"}
       </h2>
-      {loading && !data ? (
-        <ol className="pf-leaderboard">
+      <div className="pf-tabs pf-lb__tabs" role="tablist" aria-label="Leaderboard period">
+        {TABS.map((t) => (
+          <button
+            key={t.period}
+            type="button"
+            role="tab"
+            aria-selected={period === t.period}
+            className={`pf-tab ${period === t.period ? "is-active" : ""}`}
+            onClick={() => selectPeriod(t.period)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {loading && !shown ? (
+        <ol className="pf-leaderboard" aria-busy="true">
           {Array.from({ length: 5 }, (_, i) => (
             <li key={i}>
               <Skeleton width="100%" height={28} />
@@ -25,21 +116,30 @@ export function Leaderboard({ gameId, limit = 10, refreshKey = 0 }: { gameId: st
         </ol>
       ) : error ? (
         <p className="pf-muted pf-small">Couldn't load scores.</p>
-      ) : !data || data.length === 0 ? (
-        <p className="pf-muted pf-small">No scores yet — be the first!</p>
+      ) : !shown || entries.length === 0 ? (
+        <p className="pf-muted pf-small">{EMPTY_TEXT[period]}</p>
       ) : (
-        <ol className="pf-leaderboard">
-          {data.map((s) => (
-            <li key={s.id} className={user?.id === s.user.id ? "is-me" : undefined}>
-              <span className={`pf-leaderboard__rank pf-rank-${s.rank}`}>{s.rank}</span>
-              <Link to={`/u/${encodeURIComponent(s.user.username)}`} className="pf-leaderboard__user">
-                <Avatar user={s.user} size={22} />
-                <span>{s.user.displayName || s.user.username}</span>
-              </Link>
-              <span className="pf-leaderboard__score">{s.score.toLocaleString()}</span>
-            </li>
-          ))}
-        </ol>
+        <>
+          {label && (
+            <div className="pf-lb__head pf-small pf-muted" aria-hidden="true">
+              <span>Player</span>
+              <span>{label}</span>
+            </div>
+          )}
+          <ol className="pf-leaderboard">{entries.map((s) => row(s, s.id))}</ol>
+          {meOutside && me && (
+            <>
+              <div className="pf-lb__divider" role="separator" aria-label="Your best" />
+              <ol className="pf-leaderboard pf-lb__me">{row(me, `me-${me.id}`)}</ol>
+            </>
+          )}
+        </>
+      )}
+      {shown && (
+        <p className="pf-lb__footer pf-small pf-muted">
+          {shown.totalPlayers.toLocaleString()} {shown.totalPlayers === 1 ? "player" : "players"}
+          {resetsIn ? ` · resets in ${resetsIn}` : ""}
+        </p>
       )}
     </section>
   );

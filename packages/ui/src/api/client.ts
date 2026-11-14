@@ -27,6 +27,10 @@ import type {
   RatingResponse,
   RegisterRequest,
   Score,
+  ScoreSubmitResult,
+  Leaderboard,
+  LeaderboardPeriod,
+  LeaderboardQuery,
   TagCount,
   UpdateGameRequest,
   UpdateMeRequest,
@@ -318,10 +322,18 @@ export class ApiClient {
   deleteComment(commentId: string): Promise<void> {
     return this.request(`/api/comments/${encodeURIComponent(commentId)}`, { method: "DELETE" });
   }
-  listScores(id: string, limit?: number): Promise<Score[]> {
-    return this.request(`/api/games/${encodeURIComponent(id)}/scores`, { query: { limit } });
+  listScores(id: string, limit?: number, period?: LeaderboardPeriod): Promise<Score[]> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/scores`, { query: { limit, period } });
   }
-  submitScore(id: string, score: number): Promise<Score> {
+  /** F001: per-period leaderboard with the viewer's own row and a player count. */
+  getLeaderboard(id: string, query: LeaderboardQuery = {}, signal?: AbortSignal): Promise<Leaderboard> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/leaderboard`, {
+      query: { period: query.period, limit: query.limit },
+      signal,
+    });
+  }
+  /** F001: returns a ScoreSubmitResult (a superset of Score). */
+  submitScore(id: string, score: number): Promise<ScoreSubmitResult> {
     return this.request(`/api/games/${encodeURIComponent(id)}/scores`, { method: "POST", json: { score } });
   }
   listTags(): Promise<TagCount[]> {

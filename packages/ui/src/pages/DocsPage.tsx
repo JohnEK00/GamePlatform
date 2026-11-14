@@ -38,6 +38,14 @@ const ACH_JSON = `"achievements": [
     "description": "Destroy your first asteroid", "icon": "assets/ach_first.png" }
 ]`;
 
+const LB_JSON = `"leaderboard": { "order": "asc", "format": "time", "label": "Best time" }`;
+
+const LB_JS = `const result = await engine.platform.submitScore(timeMs);
+if (result?.personalBest) this.banner = "NEW BEST! #" + result.ranks.day + " today";
+
+const board = await engine.platform.getLeaderboard({ period: "week", limit: 5 });
+if (board) this.rows = board.entries.map((e) => (e.isMe ? "> " : "") + e.rank + ". " + e.name + "  " + e.display);`;
+
 function Code({ children, label }: { children: string; label: string }) {
   return (
     <figure className="pf-code">
@@ -190,12 +198,53 @@ export function DocsPage() {
       </section>
 
       <section>
-        <h2>5. Scores &amp; platform</h2>
+        <h2>5. Scores &amp; leaderboards</h2>
         <p>
           Call <code>engine.platform.submitScore(n)</code> to post a score. If the player is logged in, Pixelforge Arcade saves it
-          to the game's leaderboard (best score per player). The engine reports <code>ready</code> automatically after{" "}
+          to the game's leaderboard (best score per player), with <strong>Today</strong>, <strong>This week</strong> (ISO week,
+          Monday 00:00 UTC) and <strong>All time</strong> boards. The engine reports <code>ready</code> automatically after{" "}
           <code>load</code>, which counts a play. The arcade may pause/resume your game when the tab is hidden and toggle mute.
         </p>
+        <h3>Score semantics in game.json</h3>
+        <Code label="game.json">{LB_JSON}</Code>
+        <ul>
+          <li>
+            <code>order</code> — <code>"desc"</code> (higher is better, default) or <code>"asc"</code> (lower is better, e.g. times).
+          </li>
+          <li>
+            <code>format</code> — <code>"number"</code> (default) or <code>"time"</code>: the score is whole milliseconds (0 to
+            86,400,000) and shows as <code>1:23.456</code> (or <code>h:mm:ss.mmm</code> from one hour).
+          </li>
+          <li>
+            <code>label</code> <em>(optional)</em> — the score column name, up to 24 characters.
+          </li>
+          <li>Every key is optional; a wrong type or value is rejected on upload.</li>
+        </ul>
+        <h3>Submit result</h3>
+        <p>
+          <code>submitScore(n)</code> still posts immediately, and now returns a promise. It resolves with{" "}
+          <code>{"{ score, display, rank, personalBest, ranks: { day, week, all } }"}</code>, or <code>null</code> when the
+          player is logged out, offline, rate-limited or in the Studio preview (after at most 8 seconds). Code that ignores the
+          return value keeps working.
+        </p>
+        <h3>Reading the leaderboard in-game</h3>
+        <Code label="main.js">{LB_JS}</Code>
+        <ul>
+          <li>
+            <code>getLeaderboard({"{ period, limit }"})</code> — <code>period</code> is <code>"day"</code>, <code>"week"</code> or{" "}
+            <code>"all"</code> (default); <code>limit</code> 1–25 (default 10).
+          </li>
+          <li>
+            It resolves with <code>{"{ period, order, format, label, totalPlayers, entries, me }"}</code>. Each entry has{" "}
+            <code>rank</code>, <code>name</code>, <code>score</code>, a formatted <code>display</code> and <code>isMe</code>;{" "}
+            <code>me</code> is the player's own best in the period, or <code>null</code>.
+          </li>
+          <li>
+            It resolves <code>null</code> when unavailable (timeout after 5 seconds, no arcade page, too many pending requests), so
+            always handle <code>null</code>. Results are cached for a few seconds.
+          </li>
+          <li>In the Studio preview it returns sample data (“Player 1”…“Player 5”) that follows your order and format.</li>
+        </ul>
       </section>
 
       <section>

@@ -1,23 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isApiError } from "../api/client";
-import type { Game, Score, UnlockAchievementResponse } from "../api/types";
+import type { Game, Score, ScoreSubmitResult, UnlockAchievementResponse } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
-import { errorMessage } from "../util";
+import { errorMessage, formatScore } from "../util";
 import { Spinner } from "./common";
 import { AchievementIcon } from "./Achievements";
+import { isRequestId, parseLeaderboardRequest, scoreToastText, toLeaderboardView, toScoreResultView, type LeaderboardView } from "../leaderboard";
 
 export type GamePlayerGame = Pick<Game, "id" | "title" | "width" | "height"> &
-  Partial<Pick<Game, "playUrl" | "version" | "published" | "isOwner">>;
+  Partial<Pick<Game, "playUrl" | "version" | "published" | "isOwner" | "leaderboard">>;
 
 export type GamePlayerProps = {
   game: GamePlayerGame;
   /** Called after POST /play succeeded (once per load, when the game reports ready). */
   onPlayRecorded?: (plays: number) => void;
-  /** Called after a score was saved to the API (use it to refresh the leaderboard). */
-  onScoreSubmitted?: (score: Score) => void;
+  /** Called after a score was saved to the API (use it to refresh the leaderboard). F001: receives the ScoreSubmitResult. */
+  onScoreSubmitted?: (score: Score & Partial<ScoreSubmitResult>) => void;
   /** Called after POST …/achievements/{id} succeeded (v2), whether or not it was new. */
   onAchievementUnlocked?: (result: UnlockAchievementResponse) => void;
   className?: string;
@@ -27,6 +28,12 @@ export type GamePlayerProps = {
 export const CLOUD_LOAD_TIMEOUT_MS = 400;
 /** Minimum delay between a `webgame:save` and the cloud PUT (and between PUTs). */
 export const CLOUD_SAVE_DEBOUNCE_MS = 2000;
+
+/** F001: how long a `(period, limit)` leaderboard answer is reused for in-game requests. */
+export const GAME_LEADERBOARD_CACHE_MS = 10_000;
+
+type LbOutcome = { leaderboard: LeaderboardView } | { error: "unavailable" | "rate_limited" };
+type LbCacheEntry = { at: number; value?: LbOutcome; inflight?: Promise<LbOutcome> };
 
 const ACHIEVEMENT_ID_RE = /^[a-z0-9_-]{1,32}$/;
 const ACH_HINT_KEY = "webgame.achievementHintShown";
@@ -147,7 +154,8 @@ export function hasGameSave(gameId: string): boolean {
 
 type GameMessage =
   | { type: "webgame:ready" }
-  | { type: "webgame:score"; score: number }
+  | { type: "webgame:score"; score: number; requestId?: string }
+  | { type: "webgame:leaderboard-get"; requestId: string; period: string; limit: number }
   | { type: "webgame:error"; message?: string }
   | { type: "webgame:hello" }
   | { type: "webgame:save"; data: unknown }
@@ -179,6 +187,11 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
   latest.current = { user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game };
   /** Achievement ids already sent (or being sent) by this player instance. */
   const unlocked = useRef(new Set<string>());
+  /** F001: per-(viewer, period, limit) cache with single flight for in-game leaderboard reads. */
+  const lbCache = useRef(new Map<string, LbCacheEntry>());
+  useEffect(() => {
+    lbCache.current = new Map();
+  }, [game.id]);
 
   // ---- Cloud saves (GAME_FORMAT v2): prefetch as soon as the player mounts when logged in ----
   const cloud = useRef<CloudState>({ status: "off", data: null, savedSinceFetch: false, listeners: new Set() });
@@ -440,15 +453,72 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           );
           return;
         }
+        case "webgame:leaderboard-get": {
+          const req = parseLeaderboardRequest(data as Record<string, unknown>);
+          if (!req) return;
+          const source = event.source as Window;
+          const key = `${u?.id ?? ""}|${req.period}|${req.limit}`;
+          const cache = lbCache.current;
+          const now = Date.now();
+          const entry = cache.get(key);
+          let outcome: Promise<LbOutcome>;
+          if (entry?.inflight) outcome = entry.inflight;
+          else if (entry?.value && now - entry.at < GAME_LEADERBOARD_CACHE_MS) outcome = Promise.resolve(entry.value);
+          else {
+            const viewerId = u?.id ?? null;
+            const fallback = g.leaderboard;
+            const e: LbCacheEntry = { at: now };
+            e.inflight = api.getLeaderboard(g.id, { period: req.period, limit: req.limit }).then(
+              (lb): LbOutcome => ({ leaderboard: toLeaderboardView(lb, viewerId, fallback) }),
+              (err: unknown): LbOutcome => ({ error: isApiError(err) && err.code === "rate_limited" ? "rate_limited" : "unavailable" }),
+            );
+            e.inflight.then((v) => {
+              e.inflight = undefined;
+              if ("leaderboard" in v) {
+                e.value = v;
+                e.at = Date.now();
+              } else if (cache.get(key) === e) cache.delete(key);
+            });
+            cache.set(key, e);
+            outcome = e.inflight;
+          }
+          outcome.then((v) => {
+            const msg = "leaderboard" in v
+              ? { type: "webgame:leaderboard", requestId: req.requestId, leaderboard: v.leaderboard }
+              : { type: "webgame:leaderboard", requestId: req.requestId, leaderboard: null, error: v.error };
+            try {
+              source.postMessage(msg, "*");
+            } catch {
+              /* frame gone */
+            }
+          });
+          return;
+        }
         case "webgame:score": {
           const raw = (data as { score?: unknown }).score;
           const n = typeof raw === "number" ? raw : Number(raw);
           if (!Number.isFinite(n)) return;
           const score = Math.round(n);
+          const rid = (data as { requestId?: unknown }).requestId;
+          const requestId = isRequestId(rid) ? rid : null;
+          const source = event.source as Window;
+          const replyScore = (result: ReturnType<typeof toScoreResultView> | null, err?: "anonymous" | "rate_limited" | "failed") => {
+            if (!requestId) return;
+            try {
+              source.postMessage(
+                err ? { type: "webgame:score-result", requestId, result: null, error: err } : { type: "webgame:score-result", requestId, result },
+                "*",
+              );
+            } catch {
+              /* frame gone */
+            }
+          };
+          const format = g.leaderboard?.format === "time" ? "time" : "number";
           if (!u) {
+            replyScore(null, "anonymous");
             toast.show({
               kind: "info",
-              title: `You scored ${score.toLocaleString()}!`,
+              title: `You scored ${formatScore(score, format)}!`,
               message: "Log in to save your score to the leaderboard.",
               action: { label: "Log in", onClick: () => navigate(`/login?next=${encodeURIComponent(`/games/${g.id}`)}`) },
               duration: 8000,
@@ -457,10 +527,17 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           }
           api.submitScore(g.id, score).then(
             (s) => {
-              toast.success(`Score saved: ${s.score.toLocaleString()}`, s.rank ? `You're #${s.rank} on the leaderboard.` : undefined);
+              const t = scoreToastText(s, format);
+              toast.success(t.title, t.message);
+              replyScore(toScoreResultView(s, format));
+              // Drop cached boards so the game's next read reflects this score.
+              lbCache.current.clear();
               onScore?.(s);
             },
-            (e) => toast.error("Couldn't save your score", errorMessage(e)),
+            (e) => {
+              replyScore(null, isApiError(e) && e.code === "rate_limited" ? "rate_limited" : "failed");
+              toast.error("Couldn't save your score", errorMessage(e));
+            },
           );
           return;
         }
