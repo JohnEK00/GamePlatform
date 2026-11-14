@@ -8,6 +8,8 @@ import { useToast } from "../context/toast";
 import { errorMessage, formatScore } from "../util";
 import { Spinner } from "./common";
 import { AchievementIcon } from "./Achievements";
+import { ScreenshotTray } from "./ScreenshotTray";
+import { useScreenshotCapture } from "./useScreenshotCapture";
 import {
   GAME_LEADERBOARD_MAX_LIMIT,
   isRequestId,
@@ -30,6 +32,8 @@ export type GamePlayerProps = {
   onScoreSubmitted?: (score: Score & Partial<ScoreSubmitResult>) => void;
   /** Called after POST …/achievements/{id} succeeded (v2), whether or not it was new. */
   onAchievementUnlocked?: (result: UnlockAchievementResponse) => void;
+  /** F005: after "Set as thumbnail" from the screenshot tray (owner only). */
+  onGameUpdated?: (game: Game) => void;
   className?: string;
 };
 
@@ -184,7 +188,7 @@ type GameMessage =
  * Sandboxed iframe player. Untrusted game code runs at an opaque origin and can only talk to us via
  * postMessage; messages are accepted ONLY when `event.source === iframe.contentWindow`.
  */
-export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, className = "" }: GamePlayerProps) {
+export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, onGameUpdated, className = "" }: GamePlayerProps) {
   const api = useApi();
   const { user, token } = useAuth();
   const toast = useToast();
@@ -198,6 +202,8 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
   const [reloadKey, setReloadKey] = useState(0);
   const playRecorded = useRef(false);
   const pausedByVisibility = useRef(false);
+  // F005: 📷 requests, game shares, PLAYER_SCREENSHOT_EVENT and the in-memory tray.
+  const shots = useScreenshotCapture(iframeRef, { mode: "player", title: game.title, ready: ready && !error });
 
   // Latest values for the message handler without re-subscribing.
   const latest = useRef({ user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game });
@@ -679,7 +685,11 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
             </button>
           </div>
         )}
+        {shots.flashKey > 0 && <div key={shots.flashKey} className="pf-shot-flash" aria-hidden="true" />}
       </div>
+      <span className="pf-sr-only" aria-live="polite">
+        {shots.announcement}
+      </span>
       <div className="pf-player__bar">
         <span className="pf-player__title">{game.title}</span>
         <div className="pf-player__controls">
@@ -688,6 +698,17 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           </button>
           <button type="button" className="pf-iconbtn" onClick={toggleMute} aria-pressed={muted} aria-label={muted ? "Unmute" : "Mute"} title={muted ? "Unmute" : "Mute"}>
             {muted ? "🔇" : "🔊"}
+          </button>
+          <button
+            type="button"
+            className="pf-iconbtn"
+            onClick={shots.capture}
+            disabled={!shots.canCapture}
+            aria-busy={shots.capturing || undefined}
+            aria-label="Take screenshot"
+            title="Screenshot"
+          >
+            {shots.capturing ? <Spinner size={14} label="Capturing screenshot" /> : "📷"}
           </button>
           <button
             type="button"
@@ -701,6 +722,14 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           </button>
         </div>
       </div>
+      <ScreenshotTray
+        items={shots.items}
+        mode="player"
+        game={{ id: game.id, title: game.title, published: game.published, isOwner: game.isOwner }}
+        onRemove={shots.remove}
+        onClear={shots.clear}
+        onGameUpdated={onGameUpdated}
+      />
     </div>
   );
 }

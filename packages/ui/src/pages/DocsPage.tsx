@@ -195,6 +195,13 @@ export function DocsPage() {
               per-game save data.
             </p>
           </div>
+          <div className="pf-panel">
+            <h3>screenshots</h3>
+            <p>
+              <code>engine.captureFrame({"{maxSize}"})</code> → PNG Blob or null; <code>engine.platform.shareScreenshot({"{caption}"})</code>{" "}
+              → offers the frame to the player (see 14).
+            </p>
+          </div>
         </div>
       </section>
 
@@ -380,6 +387,34 @@ export function DocsPage() {
           <Link to="/feed">feed</Link> (several updates within 24 hours are grouped, showing up to 3 notes). Editing details,
           publishing a draft or fixing a note doesn't badge the game or notify anyone again.
         </p>
+      </section>
+
+      <section>
+        <h2>14. Screenshots</h2>
+        <p>
+          Players can press <strong>📷</strong> under the player at any time. Your game can also offer a moment to the player, or
+          grab a frame for its own use:
+        </p>
+        <Code label="main.js">{`// Offer the next frame to the player's screenshot tray (resolves true when accepted).
+if (key === "p") engine.platform.shareScreenshot({ caption: \`Score \${score}\` });
+
+// Or keep a PNG of the next frame for yourself (resolves null when it can't).
+const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
+        <ul>
+          <li>
+            The image is the frame as your game drew it, at a size that follows your <code>game.json</code> resolution (small
+            games are scaled up by a whole number, the longest side is at most 1920 by default). The F3 debug overlay and the
+            "paused" overlay are never in it.
+          </li>
+          <li>
+            Only one capture runs at a time, and <code>shareScreenshot</code> works at most once every 3 seconds. Nothing is
+            posted anywhere until the player clicks <em>Post to game page</em>.
+          </li>
+          <li>
+            Posted screenshots are public, so never draw secrets (codes, tokens) on a frame you pass to{" "}
+            <code>shareScreenshot</code>.
+          </li>
+        </ul>
       </section>
 
       <div className="pf-panel pf-docs__cta">

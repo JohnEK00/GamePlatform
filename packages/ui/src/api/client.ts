@@ -35,6 +35,8 @@ import type {
   RegisterRequest,
   Score,
   ScoreSubmitResult,
+  ScreenshotPage,
+  Screenshot,
   Leaderboard,
   LeaderboardPeriod,
   LeaderboardQuery,
@@ -519,6 +521,26 @@ export class ApiClient {
       method: "PATCH",
       json: { notes },
     });
+  }
+
+  // ---------- F005: Screenshots ----------
+  /** Newest first; `perPage` 1–50 server-side (default 12). */
+  listScreenshots(gameId: string, query: PageQuery = {}, signal?: AbortSignal): Promise<ScreenshotPage> {
+    return this.request(`/api/games/${encodeURIComponent(gameId)}/screenshots`, { query: { page: query.page, perPage: query.perPage }, signal });
+  }
+  /**
+   * Multipart `image` (png/jpg/webp ≤ 2MB) + `caption` (sent when non-empty after trim). Only ever pass an image
+   * the UI re-encoded itself (see `launderImage`), never a Blob that came from a game.
+   */
+  postScreenshot(gameId: string, image: Blob, caption = "", onProgress?: UploadProgress): Promise<Screenshot> {
+    const form = new FormData();
+    const ext = image.type === "image/jpeg" ? "jpg" : image.type === "image/webp" ? "webp" : "png";
+    form.append("image", image, `screenshot.${ext}`);
+    if (caption.trim()) form.append("caption", caption.trim());
+    return this.upload("POST", `/api/games/${encodeURIComponent(gameId)}/screenshots`, form, onProgress);
+  }
+  deleteScreenshot(id: string): Promise<void> {
+    return this.request(`/api/screenshots/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 }
 

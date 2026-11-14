@@ -268,7 +268,8 @@ export type GameStats = {
 // ---- v2: moderation ----
 
 export type ReportReason = "spam" | "offensive" | "broken" | "copyright" | "other";
-export type ReportTargetType = "game" | "comment";
+/** F005: "screenshot" added. */
+export type ReportTargetType = "game" | "comment" | "screenshot";
 export type ReportStatus = "open" | "resolved";
 export type ReportAction = "dismiss" | "unpublish" | "delete";
 
@@ -276,7 +277,7 @@ export type Report = {
   id: string;
   targetType: ReportTargetType;
   targetId: string;
-  /** Game title or the first 140 chars of the comment. */
+  /** Game title, the first 140 chars of the comment, or (F005) the screenshot caption / "Screenshot by {name}". */
   targetPreview: string;
   targetGameId: string;
   reason: ReportReason;
@@ -286,6 +287,11 @@ export type Report = {
   resolution: ReportAction | null;
   createdAt: string;
   resolvedAt: string | null;
+  /**
+   * F005: the screenshot's thumbUrl while it exists (server-relative); null for other target types and deleted
+   * screenshots. Older servers omit it; treat a missing value as null.
+   */
+  targetImageUrl: string | null;
 };
 
 export type CreateReportRequest = {
@@ -389,3 +395,28 @@ export type SuggestedCreator = {
   /** Their published game count (>= 1). */
   games: number;
 };
+
+// ---- F005: screenshots ----
+
+export type Screenshot = {
+  id: string;
+  gameId: string;
+  author: UserRef;
+  /** Plain text, 0–140 chars, single line; "" = none. Never render as HTML. */
+  caption: string;
+  /** "/media/screenshots/{id}.png" or ".jpg" (server-relative). */
+  imageUrl: string;
+  /** "/media/screenshots/{id}_t.jpg", fits in 480×480. */
+  thumbUrl: string;
+  /** Of imageUrl, 64–4096. */
+  width: number;
+  height: number;
+  /** The game's version when it was posted. */
+  gameVersion: number;
+  /** RFC3339 UTC */
+  createdAt: string;
+  /** The viewer is the author, the game owner or an admin; false when anonymous. */
+  canDelete: boolean;
+};
+
+export type ScreenshotPage = Page<Screenshot>;

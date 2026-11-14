@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useResolveUrl } from "../context/config";
 import type { Report, ReportAction, ReportStatus } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
@@ -27,11 +28,14 @@ const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => s
   },
   delete: {
     label: "Delete",
-    title: (r) => (r.targetType === "game" ? `Delete “${r.targetPreview}”?` : "Delete this comment?"),
+    title: (r) =>
+      r.targetType === "game" ? `Delete “${r.targetPreview}”?` : r.targetType === "screenshot" ? "Delete this screenshot?" : "Delete this comment?",
     body: (r) =>
       r.targetType === "game"
         ? "The game, its files, ratings, comments and scores are removed permanently."
-        : "The comment is removed permanently.",
+        : r.targetType === "screenshot"
+          ? "The screenshot and its files are removed permanently."
+          : "The comment is removed permanently.",
     danger: true,
   },
 };
@@ -45,6 +49,8 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
   const toast = useToast();
   const [confirm, setConfirm] = useState<ReportAction | null>(null);
   const [busy, setBusy] = useState(false);
+  const resolveUrl = useResolveUrl();
+  // Unpublish only makes sense for games; comments and (F005) screenshots get Dismiss / Delete.
   const actions: ReportAction[] = report.targetType === "game" ? ["dismiss", "unpublish", "delete"] : ["dismiss", "delete"];
 
   const run = async (action: ReportAction) => {
@@ -79,6 +85,22 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
           <Link to={`/games/${report.targetGameId}`} className="pf-report-row__title">
             {report.targetPreview}
           </Link>
+        ) : report.targetType === "screenshot" ? (
+          <div className="pf-report-row__shot">
+            {report.targetImageUrl ? (
+              <a href={resolveUrl(report.targetImageUrl) ?? undefined} target="_blank" rel="noopener" className="pf-report-row__thumb" title="Open full size">
+                <img src={resolveUrl(report.targetImageUrl) ?? undefined} alt={`Reported screenshot: ${report.targetPreview}`} width={120} />
+              </a>
+            ) : (
+              <span className="pf-report-row__thumb pf-report-row__thumb--gone pf-muted pf-small">(deleted)</span>
+            )}
+            <div>
+              <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>
+              <Link to={`/games/${report.targetGameId}`} className="pf-small">
+                View the game →
+              </Link>
+            </div>
+          </div>
         ) : (
           <>
             <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>
@@ -154,7 +176,7 @@ export function AdminPage() {
       <header className="pf-pagehead pf-pagehead--row">
         <div>
           <h1>Moderation</h1>
-          <p className="pf-muted">Review reported games and comments.</p>
+          <p className="pf-muted">Review reported games, comments and screenshots.</p>
         </div>
       </header>
       <Tabs

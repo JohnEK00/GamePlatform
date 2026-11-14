@@ -42,6 +42,32 @@ export { ReportDialog, ReportButton, REPORT_REASONS } from "./components/Report"
 export type { ReportDialogProps } from "./components/Report";
 export { PlaysChart, niceMax } from "./components/PlaysChart";
 export type { PlaysChartProps } from "./components/PlaysChart";
+// F005: screenshots
+export {
+  PLAYER_SCREENSHOT_EVENT,
+  launderImage,
+  fitImageForUpload,
+  screenshotFileName,
+  sanitizeScreenshotCaption,
+  browserImageCodec,
+  SCREENSHOT_MAX_BLOB_BYTES,
+  SCREENSHOT_CAPTION_MAX,
+} from "./screenshot";
+export type { ImageCodec, DecodedImage, LaunderedImage } from "./screenshot";
+export {
+  useScreenshotCapture,
+  SCREENSHOT_REQUEST_TIMEOUT_MS,
+  SCREENSHOT_SHARE_INTERVAL_MS,
+  SCREENSHOT_SHARE_MAX_PER_MOUNT,
+  SCREENSHOT_TRAY_MAX,
+} from "./components/useScreenshotCapture";
+export type { ScreenshotItem, ScreenshotCapture, ScreenshotCaptureOptions } from "./components/useScreenshotCapture";
+export { ScreenshotTray } from "./components/ScreenshotTray";
+export type { ScreenshotTrayProps } from "./components/ScreenshotTray";
+export { ScreenshotDialog, SCREENSHOTS_CHANGED_EVENT, screenshotErrorMessage } from "./components/ScreenshotDialog";
+export type { ScreenshotDialogProps, ScreenshotDialogGame } from "./components/ScreenshotDialog";
+export { ScreenshotGallery, SCREENSHOT_GALLERY_PER_PAGE } from "./components/ScreenshotGallery";
+export type { ScreenshotGalleryProps } from "./components/ScreenshotGallery";
 
 // Studio
 export { createZip, createZipAsync, canDeflateRaw, crc32 } from "./studio/zip";

@@ -11,6 +11,7 @@ import { GameAchievements } from "../components/Achievements";
 import { FavoriteButton } from "../components/Favorite";
 import { FollowButton, useFollows } from "../components/Follow";
 import { RelatedGames } from "../components/RelatedGames";
+import { ScreenshotGallery } from "../components/ScreenshotGallery";
 import { ReleaseNotesField } from "../components/ReleaseNotesField";
 import { useModal } from "../components/useModal";
 import { VersionHistory } from "../components/VersionHistory";
@@ -398,6 +399,7 @@ export function GamePage() {
           onPlayRecorded={(plays) => setData((g) => ({ ...(g ?? game), plays }))}
           onScoreSubmitted={() => setLbKey((k) => k + 1)}
           onAchievementUnlocked={(r) => r.new && setAchKey((k) => k + 1)}
+          onGameUpdated={(g) => setData(g)}
         />
         <ClearSaveData gameId={game.id} onCleared={() => setPlayerKey((k) => k + 1)} />
         <div className="pf-gamepage__header">
@@ -435,6 +437,7 @@ export function GamePage() {
         )}
         <VersionHistory game={game} onUpdated={(g) => setData(g)} />
         {(!game.achievements || game.achievements.length > 0) && <GameAchievements gameId={game.id} refreshKey={achKey} />}
+        <ScreenshotGallery game={game} onGameUpdated={(g) => setData(g)} />
         <Comments gameId={game.id} isGameOwner={game.isOwner} />
       </div>
       <aside className="pf-gamepage__side">

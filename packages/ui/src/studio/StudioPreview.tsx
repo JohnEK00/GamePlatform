@@ -1,7 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApi } from "../context/config";
 import { useToast } from "../context/toast";
 import { GAME_IFRAME_SANDBOX } from "../components/GamePlayer";
+import { Spinner } from "../components/common";
+import { ScreenshotTray } from "../components/ScreenshotTray";
+import { useScreenshotCapture } from "../components/useScreenshotCapture";
 import { asManifest, leaderboardOf, manifestForBundle, type StudioProject } from "./project";
 import { isRequestId, parseLeaderboardRequest, sampleLeaderboardView } from "../leaderboard";
 
@@ -66,9 +69,14 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
   const save = useRef<Record<string, unknown> | null>(null);
   const latest = useRef({ onLog, toast });
   latest.current = { onLog, toast };
+  // F005: same capture flow as the player; the tray offers Download / Copy / Remove only (no API calls).
+  const [ready, setReady] = useState(false);
+  const runTitle = String(asManifest(run.current.project.manifest).name ?? "") || "game";
+  const shots = useScreenshotCapture(iframeRef, { mode: "studio", title: runTitle, ready });
 
   useEffect(() => {
     let readySeen = false;
+    setReady(false);
     const log = (e: StudioConsoleEntry) => latest.current.onLog(e);
     const timer = setTimeout(() => {
       if (!readySeen)
@@ -98,6 +106,7 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
           return;
         }
         case "webgame:ready":
+          setReady(true);
           log({ level: "info", message: "Game loaded and running." });
           return;
         case "webgame:error": {
@@ -180,7 +189,25 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
           allow="fullscreen; gamepad; autoplay"
           referrerPolicy="no-referrer"
         />
+        {shots.flashKey > 0 && <div key={shots.flashKey} className="pf-shot-flash" aria-hidden="true" />}
       </div>
+      <div className="pf-studio-preview__bar">
+        <span className="pf-sr-only" aria-live="polite">
+          {shots.announcement}
+        </span>
+        <button
+          type="button"
+          className="pf-iconbtn pf-iconbtn--sm"
+          onClick={shots.capture}
+          disabled={!shots.canCapture}
+          aria-busy={shots.capturing || undefined}
+          aria-label="Take screenshot"
+          title="Screenshot"
+        >
+          {shots.capturing ? <Spinner size={12} label="Capturing screenshot" /> : "📷"}
+        </button>
+      </div>
+      <ScreenshotTray items={shots.items} mode="studio" game={{ title: runTitle }} onRemove={shots.remove} onClear={shots.clear} />
     </div>
   );
 }
