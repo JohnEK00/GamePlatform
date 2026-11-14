@@ -24,18 +24,19 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 |---|---|---|---|
 | F001 | Leaderboards 2.0: daily/weekly boards, time/ascending scores, in-game leaderboard API | M | shipped |
 | F002 | Follow creators and an activity feed | M | shipped |
-| F003 | Trending and "More like this" discovery | S | in progress |
-| F004 | Version changelogs and an "Updated" badge | S | in progress |
-| F013 | Studio: publish updates to an existing game | M | specced |
-| F005 | Screenshot capture and share | S | proposed |
-| F006 | Comment replies and reactions | M | proposed |
-| F007 | In-app notifications | M | proposed |
-| F008 | Collections (curated game lists) | M | proposed |
+| F003 | Trending and "More like this" discovery | S | shipped |
+| F004 | Version changelogs and an "Updated" badge | S | shipped |
+| F013 | Studio: publish updates to an existing game | M | shipped |
+| F005 | Screenshot capture and share | M | specced |
 | F009 | Controls overlay and key remapping | M | proposed |
-| F010 | Desktop offline library | M | proposed |
-| F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
+| F006 | Comment replies and reactions | M | proposed |
 | F012 | Engine bitmap fonts and 9-slice UI widgets | M | proposed |
+| F007 | In-app notifications | M | proposed |
+| F015 | Screenshots in the feed and on profiles | S | proposed |
+| F008 | Collections (curated game lists) | M | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
+| F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
+| F010 | Desktop offline library | M | proposed |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
@@ -48,7 +49,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (follows, activity events, feed and suggestions), frontend (follow button, feed page, profile counts and lists), desktop (View → Feed). No engine changes.
 - **Depends on**: F001 backend (`personalBest`) for the personal-best events only.
 
-### F003: Trending and "More like this" (S, in progress → [spec](features/F003-trending-and-related.md))
+### F003: Trending and "More like this" (S, shipped → [spec](features/F003-trending-and-related.md))
 - **Pitch**:
   - A `sort=trending` option that ranks games by distinct players per day over the last 7 UTC days, with recent days weighted higher. It is built on the deduplicated `play_events`, with owner plays excluded.
   - A "Trending this week" home shelf, and a `playsWeek` count on every game card.
@@ -57,7 +58,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0006_f003.sql`, `trending.rs` snapshot, `/related`), frontend (sort tab, shelves, card highlights), desktop (verification only). No engine changes.
 - **Depends on**: the review-fix play dedupe and rate limit (R2) for the `viewer_key` write; everything else is independent of F002.
 
-### F004: Version changelogs and an "Updated" badge (S, in progress → [spec](features/F004-version-changelogs.md))
+### F004: Version changelogs and an "Updated" badge (S, shipped → [spec](features/F004-version-changelogs.md))
 - **Pitch**:
   - Bundle uploads and replacements take an optional plain-text "What's new" note (up to 1000 chars), which the owner can edit later.
   - The game page shows a "What's new" panel and the version history.
@@ -68,7 +69,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0007_f004.sql`: `game_versions`, `games.last_updated_at`, `activity_events.from_version`; `/versions` endpoints; feed `update` field), frontend (notes fields, `VersionHistory`, badge, feed notes), desktop (verification only). No engine changes.
 - **Depends on**: F002 (shipped) and the R1 bundle replace serialisation. Lands after F003's `0006` migration.
 
-### F013: Studio: publish updates to an existing game (M, specced → [spec](features/F013-studio-publish-updates.md))
+### F013: Studio: publish updates to an existing game (M, shipped → [spec](features/F013-studio-publish-updates.md))
 - **Pitch**:
   - The Studio's Publish dialog gains "Update an existing game": it replaces the bundle with F004 release notes and `expectedVersion`, and asks for confirmation when the project isn't linked to that game's current version.
   - "Open in Studio" (owner) loads the current bundle through a new owner-only `GET /api/games/{id}/bundle`. The Studio's Open menu adds ".zip file…" and "My game…", and a project remembers its linked game.
@@ -77,10 +78,16 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (export endpoint, `Limit::BundleDownload`, CORS expose headers; no migration), frontend (zip reader, Open menu/dialog, Publish modes, link/dirty state, entry points), desktop (session folder registry + `reload_project_folder`).
 - **Depends on**: F004 (`notes`/`expectedVersion`, `ReleaseNotesField`).
 
-### F005: Screenshot capture and share (S, proposed)
-- **Pitch**: a camera button in the player, plus `engine.platform.captureScreenshot()`, grabs the canvas as PNG. Players can download it (desktop: native save) and owners can set it as the thumbnail.
-- **User value**: easy thumbnails for creators, and shareable moments for players.
-- **Areas**: engine (canvas readback via postMessage), frontend (player button, set-thumbnail), desktop (native save path).
+### F005: Screenshot capture and share (M, specced → [spec](features/F005-screenshots.md))
+- **Pitch**:
+  - The engine captures a frame at a fixed point (after the game's draw calls, before the debug and pause overlays), at a predictable resolution, without `preserveDrawingBuffer`.
+  - It is exposed three ways: a 📷 button in the player (parent request), `engine.platform.shareScreenshot()` (game offers a shot to the player), and `engine.captureFrame()` (the game keeps the Blob).
+  - A screenshot tray offers download (native save on desktop), copy, "Post to game page" with a caption, and "Set as thumbnail" for owners.
+  - Each game page gets a Screenshots gallery. Screenshots can be reported and deleted by the author, owner or admin.
+  - The server re-encodes every upload, which strips metadata.
+- **User value**: real thumbnails for creators in one click, shareable moments for players, and community content on game pages.
+- **Areas**: engine (`capture.ts`, messages, examples), backend (migration `0009_f005.sql`: `screenshots` + `reports` CHECK rebuild; `image` crate; `Limit::Screenshot`), frontend (tray, dialogs, gallery, admin), desktop (View → Take Screenshot, Pictures default in `save_file`).
+- **Depends on**: nothing unshipped. It reuses `validate_image`, the N5 `Limit::Image` pattern, the F001 request/reply pattern, `useModal` and `platform.saveFile`.
 
 ### F006: Comment replies and reactions (M, proposed)
 - **Pitch**: one level of threaded replies, a heart reaction on comments, and a "creator" tag on the owner's comments.
@@ -91,6 +98,11 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: a bell menu listing new comments on your games, replies, new followers, and games from creators you follow. Desktop shows native OS notifications.
 - **User value**: creators notice feedback quickly, and players notice new content.
 - **Areas**: backend (notifications table, unread count), frontend (bell, list), desktop (native notifications via a Rust plugin).
+
+### F015: Screenshots in the feed and on profiles (S, proposed; after F005)
+- **Pitch**: a new F002 feed kind `screenshotPosted` (coalesced per author, game and UTC day), and a "Screenshots" tab on profiles (`GET /api/users/{username}/screenshots`), with published games only.
+- **User value**: followers see what their friends play, and players get a personal gallery.
+- **Areas**: backend (activity kind and CHECK rebuild, profile endpoint), frontend (feed item, profile tab). No engine changes.
 
 ### F008: Collections (M, proposed)
 - **Pitch**: users create public, ordered lists of games ("Best platformers"), shown on profiles and shareable at `/c/{id}`.

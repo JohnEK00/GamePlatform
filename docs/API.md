@@ -515,3 +515,84 @@ Studio: publish updates to an existing game (spec: `docs/features/F013-studio-pu
 ### Rate limits
 - Bundle downloads (`GET …/bundle`): 30/hour, per user (`Limit::BundleDownload`). Over the limit → 429 `rate_limited` with `Retry-After`.
 - Bundle replace and create keep the existing 20/hour (`Limit::Upload`).
+
+
+---
+
+## F005 additions
+
+Screenshot capture and share (spec: `docs/features/F005-screenshots.md`). All earlier rules apply, including the review round 2 `Limit::Image` (N5) on thumbnail and avatar uploads.
+
+### Types
+```ts
+type Screenshot = {
+  id: string;
+  gameId: string;
+  author: UserRef;
+  caption: string;           // plain text, 0–140 chars, single line; "" = none
+  imageUrl: string;          // "/media/screenshots/{id}.png" or ".jpg" (server-relative)
+  thumbUrl: string;          // "/media/screenshots/{id}_t.jpg", fits in 480×480
+  width: number;             // of imageUrl, 64–4096
+  height: number;
+  gameVersion: number;       // the game's version when it was posted
+  createdAt: string;         // RFC3339 UTC
+  canDelete: boolean;        // 🔓 the viewer is the author, the game owner or an admin; false when anonymous
+}
+
+type ReportTargetType = "game" | "comment" | "screenshot"
+type Report = { ...v2, targetType: ReportTargetType, targetImageUrl: string | null }
+// targetImageUrl: the screenshot's thumbUrl while it exists; null for other target types and deleted screenshots.
+// targetPreview for screenshots: the caption's first 140 chars, else "Screenshot by {displayName or username}".
+```
+
+### Endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/screenshots | `?page=1&perPage=12` (1–50, clamped) | `Page<Screenshot>`, newest first (`createdAt` desc, then `id`) |
+| POST 🔒 | /api/games/{id}/screenshots | multipart `image` (required, png/jpg/webp ≤ 2MB) + `caption` (optional) | 201 `Screenshot` |
+| DELETE 🔒 | /api/screenshots/{id} | – | 204 |
+
+- **Visibility**: `GET` and `POST` follow `GET /api/games/{id}`. An unknown id → 404, and an unpublished game → 404 unless the viewer is the owner. A non-integer `page`/`perPage` → 400.
+- **`POST` validation, in this order**:
+  1. Auth → 401.
+  2. Visibility → 404.
+  3. `Limit::Screenshot` → 429.
+  4. Multipart:
+     - `image` missing or empty → 422 "image file is required";
+     - a `caption` field larger than 1 KB raw → 422;
+     - unknown fields are ignored.
+  5. `validate_image`: larger than 2 MB → 413; not PNG/JPEG/WebP by magic bytes → 422.
+  6. Caption: trimmed; at most **140** Unicode scalar values; any control character (including `\n` and `\t`) or a bidi control (U+202A–U+202E, U+2066–U+2069) → 422 `validation`.
+  7. The user already has **20** screenshots on this game → 422 `validation` "You can post at most 20 screenshots per game". The insert is guarded, so concurrent posts can't exceed 20.
+  8. More than 2 image decodes running server-wide → 503 `unavailable` with `Retry-After: 5`.
+  9. Dimensions (from the header, before decoding): each side 64–4096 → else 422. A decode failure → 422 "image could not be decoded".
+- **Stored image**: the server decodes and re-encodes every upload and keeps no original bytes.
+  - PNG input → PNG; JPEG/WebP → JPEG quality 90.
+  - Alpha is flattened on black, only the first frame is kept, and no metadata (EXIF, XMP, text chunks, ICC) is kept.
+  - The thumbnail is a JPEG (quality 80) that fits in 480×480 and is never upscaled.
+- **`DELETE`**:
+  - Allowed for the author, the owner of the screenshot's game, or an admin. Anyone else → 403. Unknown id → 404. Anonymous → 401.
+  - It removes the row and files and marks every open report on that screenshot `resolved` with resolution `delete`.
+- **Cascades**: deleting a game (owner or admin) deletes its screenshots and their files.
+
+### Reports (changed)
+| Method | Path | Body | Response |
+|---|---|---|---|
+| POST 🔒 | /api/reports | v2 body; `targetType` may be `"screenshot"` | 201 `Report` |
+| POST 🔒 admin | /api/admin/reports/{id}/resolve | `{ action }` | `Report` |
+
+- **Creating**: for `targetType: "screenshot"`, the screenshot must exist and its game must be visible to the reporter (else 404). `targetGameId` is the screenshot's game. The v2 duplicate rule (409) applies.
+- **Resolving**: for screenshot reports, `delete` deletes the screenshot (same effects as `DELETE /api/screenshots/{id}`), `dismiss` is unchanged, and `unpublish` → 422 `validation` (as for comments).
+- **Lists**: `GET /api/admin/reports` returns `targetImageUrl` on every report.
+
+### Media
+| Path | What |
+|---|---|
+| GET /media/screenshots/{file} | Stored screenshots and thumbnails. Headers: `Access-Control-Allow-Origin: *`, `Cache-Control: public, max-age=31536000, immutable` (a file never changes; ids are never reused), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox`. |
+
+Files stay reachable by direct URL after their game is unpublished, as thumbnails do. The ids are unguessable UUIDs, and listings hide them.
+
+### Rate limits
+- Screenshot posts (`POST …/screenshots`): **10/hour per user** (`Limit::Screenshot`, a separate bucket from `Limit::Image`). Over the limit → 429 `rate_limited` with `Retry-After`.
+- "Set as thumbnail" uses the existing `PUT /api/games/{id}/thumbnail` and its `Limit::Image`.
+- `GET …/screenshots` is an unlimited public read, like comments. `DELETE` is unlimited.

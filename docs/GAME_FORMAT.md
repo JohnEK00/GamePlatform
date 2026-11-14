@@ -233,3 +233,65 @@ Studio: publish updates to an existing game (spec: `docs/features/F013-studio-pu
   - The Studio asks for confirmation when the project wasn't opened from (or last published to) that game at its current version.
 - **Desktop local folders.** A folder opened with "Open local game folder…" can be re-read with "↻ Reload folder" after you edit files on disk. Edits made inside the Studio are **not** written back to the folder. Export a .zip to keep them.
 - The Studio protocol (`/play/studio`) is unchanged. Opened games run only in the sandboxed Studio preview, and Studio sessions still record no plays, scores or achievements.
+
+
+## F005 additions
+
+Screenshot capture and share (spec: `docs/features/F005-screenshots.md`). There are no bundle or `game.json` changes. The new message pairs follow the F001 request/reply pattern.
+
+### Engine API
+```ts
+type ScreenshotOptions = { maxSize?: number };          // longest output side; rounded, clamped 64–4096; default 1920
+type ShareScreenshotOptions = { caption?: string };     // suggestion shown to the player; max 140 code points after sanitising
+
+engine.captureFrame(opts?: ScreenshotOptions): Promise<Blob | null>
+engine.platform.shareScreenshot(opts?: ShareScreenshotOptions): Promise<boolean>
+```
+- **`captureFrame`** returns an `image/png` Blob of the next rendered frame to the **game itself**. Nothing is posted to the parent. It resolves `null` when:
+  - the engine is not `running` (loading, error, destroyed);
+  - another capture is queued or encoding (with a warning);
+  - no frame reaches the capture point within 2000 ms (hidden tab);
+  - the context is lost or the encoder fails;
+  - the PNG is larger than 8 MiB.
+- **`shareScreenshot`** captures the next frame in the same way and offers it to the player. The parent adds it to the player's screenshot tray and **never** uploads or downloads it by itself. It resolves `true` when the parent accepted it. It resolves `false` when:
+  - there is no parent;
+  - it is called less than 3000 ms after the previous share (with a warning);
+  - the capture fails;
+  - the parent replies `accepted: false` or an error;
+  - there is no reply within 5000 ms.
+  The caption is coerced to a string, control and bidi characters are removed, and it is cut to 140 code points.
+- Only one capture (from any of the three sources) is in flight at a time.
+- `destroy()` resolves pending captures with `null` and pending shares with `false`.
+
+### What is captured
+- **Capture point**: inside the frame, after `game.render`, `scenes.render` and the batch flush, and **before** the F3 debug overlay, the host "PAUSED" overlay and the error overlay. None of these appear in screenshots. Everything the game draws (including its own HUD) does.
+- **Output size**: let `w×h` be the logical resolution from `game.json` and `L = max(w, h)`.
+  - `k = max(1, floor(1280 / L))`, and the size is `(w·k) × (h·k)`. Small games are upscaled by an integer factor.
+  - If the longest side is then larger than `maxSize` (default 1920), the image is scaled down to fit, keeping the aspect ratio. Sides are rounded and each is at least 1.
+  - Examples: 320×180 → 1280×720; 800×600 → 800×600; 3840×2160 → 1920×1080.
+  - The size never depends on the window size or `devicePixelRatio`. The source pixels are the canvas backing store, so a small window gives a softer image at the same size.
+- **Sampling**: nearest-neighbour when the backing-to-output ratio is an integer and `smooth` is off (crisp pixel art), bilinear ("high" quality) otherwise.
+- **Format**: PNG, opaque (the context has `alpha: false`).
+
+### Messages
+| Direction | Message |
+|---|---|
+| parent → game | `{ type: "webgame:screenshot-request", requestId: string }` |
+| game → parent | `{ type: "webgame:screenshot", requestId: string, source: "player", image: Blob, width: number, height: number }` (reply to a request) |
+| game → parent | `{ type: "webgame:screenshot", requestId: string, source: "player", error: "unavailable" \| "busy" \| "failed" }` (no `image`) |
+| game → parent | `{ type: "webgame:screenshot", requestId: string, source: "game", image: Blob, width: number, height: number, caption?: string }` (from `shareScreenshot`) |
+| parent → game | `{ type: "webgame:screenshot-result", requestId: string, accepted: boolean, error?: "rate_limited" \| "invalid" \| "unavailable" }` (reply to `source: "game"` only) |
+
+- **Ids**: `requestId` is 1–64 chars. The parent uses `"ps-<n>"`, and the engine uses `"ss-<n>"` for shares. The engine echoes the parent's id on `source: "player"` replies.
+- **Errors**: `unavailable` = the engine is not running or no frame within 2000 ms; `busy` = a capture is already in flight; `failed` = lost context, a security or encoder error, or more than 8 MiB.
+- **Transport**: the image travels as a structured-cloned `Blob` (no transfer list, never a data URL), at most **8 MiB**. `width`/`height` are informational; the parent re-measures.
+- **Origin checks**: as in F001, the engine accepts requests and replies only from `window.parent`, and the parent accepts messages only from its iframe's `contentWindow`.
+
+### Parent behaviour (GamePlayer on /play/{id}, StudioPreview on /play/studio)
+- **Validation**: ignore malformed messages. That includes a bad `requestId`, an unknown `source`, `image` not a `Blob` or larger than 8 MiB, and a `source: "player"` message whose `requestId` is not the parent's in-flight request.
+- **Laundering (mandatory)**: decode the Blob with `createImageBitmap`. Each side must be 1–4096. Draw it to a canvas and re-encode it as PNG. Only this re-encoded PNG may be displayed (object URL), downloaded, copied or uploaded. The game's original Blob is never given an object URL. A blob URL has the parent's origin, so an HTML or SVG payload would otherwise run as the app.
+- **Player requests**: at most one in flight, with a 5000 ms timeout.
+- **Game shares**: at most 1 accepted per 3000 ms and 20 per player mount, else `accepted: false, error: "rate_limited"`. Laundering failure → `error: "invalid"`. The parent sanitises `caption` again (control and bidi characters, 140 code points) and shows it as plain text only.
+- The tray holds at most 12 items in memory. Nothing is persisted, and nothing is uploaded without an explicit user action.
+- **Studio**: captures and shares behave the same, but the tray offers download, copy and remove only. It makes no API calls (Studio rule).
+- **For creators**: a screenshot the player posts is public. Don't draw secrets (codes, tokens) on frames you pass to `shareScreenshot`.

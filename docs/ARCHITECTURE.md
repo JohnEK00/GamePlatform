@@ -289,3 +289,94 @@ Studio: publish updates to an existing game (spec: `docs/features/F013-studio-pu
   - `pick_project_folder` returns `folderId` in its `ProjectIndex`. The new command `reload_project_folder(folderId)` returns a fresh `ProjectIndex` (new binary ticket, same `folderId`) through the existing `read_project_dir(…, Limits::UPLOAD)`.
   - The webview still never supplies or receives a filesystem path. The registry is the allowlist of folders it may re-read.
 - **Ownership**: `export.rs` and the handler belong to backend-dev. `unzip.ts`, `PublishDialog.tsx` and `OpenGameDialog.tsx` belong to frontend-dev. The folder registry and `platform.ts` changes belong to desktop-dev.
+
+
+## F005 additions
+Screenshot capture and share (spec: `docs/features/F005-screenshots.md`).
+- **Capture pipeline**:
+  ```
+  iframe (opaque origin)                                  parent (@webgame/ui)                      backend
+  tick → game.render → scenes.render → flush
+       → [capture point] drawImage(glCanvas → scratch 2D canvas, output size)
+       → debug / pause overlays → endFrame
+  scratch → toBlob(PNG) ── postMessage(webgame:screenshot, Blob ≤ 8 MiB) ──► validate source + id
+                                                                           launder: createImageBitmap → canvas → PNG
+                                                                           tray (memory, ≤ 12)
+                                                                           user clicks Post ── multipart ──► validate_image → decode → re-encode
+                                                                                                             data/screenshots/{id}.{png|jpg}, {id}_t.jpg
+  ```
+- **Why not `preserveDrawingBuffer: true`.** It makes the browser keep (copy) the drawing buffer on every frame instead of swapping or discarding it. That costs bandwidth all the time, mostly on tiled mobile GPUs, to serve a rare user action. The renderer keeps `preserveDrawingBuffer: false`.
+  - The WebGL spec guarantees that the drawing buffer is readable until the frame is composited, that is, within the task that rendered it.
+  - So captures are **queued** and done inside `tick` at a fixed capture point after the game's draw calls are flushed. They never run from a `message` handler between frames, which would read a cleared buffer.
+- **Why `drawImage` and not `readPixels` (primary path).**
+  - `ctx2d.drawImage(glCanvas, …)` copies GPU-side in most browsers and scales and flips in one step.
+  - `gl.readPixels` needs a synchronous GPU→CPU stall, a `4·w·h` byte buffer at backing (DPR) size, a manual row flip and premultiplied-alpha handling.
+  - `readPixels` is only the fallback when `drawImage` of a WebGL canvas throws.
+  - The engine then encodes asynchronously (`OffscreenCanvas.convertToBlob` / `toBlob`) outside the frame.
+- **No tainting.** WebGL refuses cross-origin images without CORS (and the engine already loads with CORS), so the game canvas can't be tainted. A `SecurityError` is still mapped to `failed`.
+- **Trust boundaries.**
+  - Parent: the Blob from the iframe is untrusted (bytes and `type`), and blob URLs inherit the parent's origin. The parent therefore always re-encodes ("launders") through `createImageBitmap` + canvas before it makes any object URL, download, clipboard write or upload.
+  - Server: it trusts nothing from the client. It runs `validate_image` (size, magic bytes), checks the header dimensions, then decodes with `image` crate limits and re-encodes, which strips metadata and defeats polyglots.
+- **Backend**:
+  - `src/screenshots.rs` holds `process_screenshot` (run in `spawn_blocking`) and file helpers.
+  - `src/routes/screenshots.rs` holds the three handlers.
+  - `AppState.image_slots: Arc<Semaphore>` has 2 permits; `try_acquire` fails → 503.
+  - `Limit::Screenshot` (10/hour per user) is checked after the visibility check and before the body is read, following the N5 `Limit::Image` pattern.
+  - New dependency: `image` 0.25 (`png`, `jpeg`, `webp` features only).
+- **Storage**: `data/screenshots/{id}.png|jpg` and `data/screenshots/{id}_t.jpg`, written with temp file + rename. They are served by `ServeDir` under `/media/screenshots` with immutable caching, `nosniff` and `CSP: sandbox`.
+  - `remove_game` deletes the files of the game's screenshots after the row cascade.
+  - `sweep_stale_files` removes screenshot files without a row and stray `.tmp` files at startup.
+- **Data**: migration `backend/migrations/0009_f005.sql` runs after the review-fix `0008_review2.sql`:
+  ```sql
+  CREATE TABLE screenshots (
+      id            TEXT PRIMARY KEY NOT NULL,
+      game_id       TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      author_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      caption       TEXT NOT NULL DEFAULT '',            -- plain text, <= 140 chars (validated in Rust)
+      ext           TEXT NOT NULL CHECK (ext IN ('png', 'jpg')),
+      width         INTEGER NOT NULL CHECK (width BETWEEN 64 AND 4096),
+      height        INTEGER NOT NULL CHECK (height BETWEEN 64 AND 4096),
+      bytes         INTEGER NOT NULL,                    -- stored full-image size
+      game_version  INTEGER NOT NULL,
+      created_at    TEXT NOT NULL                        -- RFC3339 millis Z
+  );
+  CREATE INDEX idx_screenshots_game_created ON screenshots(game_id, created_at DESC, id);
+  CREATE INDEX idx_screenshots_author_game  ON screenshots(author_id, game_id);
+
+  -- Widen reports.target_type to include 'screenshot' (SQLite can't alter a CHECK: rebuild).
+  -- No table references reports, so the rebuild is safe with foreign_keys on.
+  CREATE TABLE reports_new (
+      id              TEXT PRIMARY KEY NOT NULL,
+      target_type     TEXT NOT NULL CHECK (target_type IN ('game', 'comment', 'screenshot')),
+      target_id       TEXT NOT NULL,
+      target_game_id  TEXT NOT NULL,
+      target_preview  TEXT NOT NULL,
+      reason          TEXT NOT NULL,
+      details         TEXT NOT NULL DEFAULT '',
+      reporter_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+      resolution      TEXT,
+      created_at      TEXT NOT NULL,
+      resolved_at     TEXT
+  );
+  INSERT INTO reports_new SELECT id, target_type, target_id, target_game_id, target_preview, reason,
+                                 details, reporter_id, status, resolution, created_at, resolved_at
+  FROM reports;
+  DROP TABLE reports;
+  ALTER TABLE reports_new RENAME TO reports;
+  CREATE INDEX idx_reports_status_created ON reports(status, created_at DESC);
+  CREATE INDEX idx_reports_target         ON reports(target_type, target_id, status);
+  CREATE INDEX idx_reports_reporter       ON reports(reporter_id, target_type, target_id, status);
+  ```
+  The gallery is an index walk on `idx_screenshots_game_created`. The per-user cap count uses `idx_screenshots_author_game`. The admin list joins `screenshots` by primary key for `targetImageUrl`.
+- **UI**:
+  - `src/screenshot.ts` holds `launderImage`, `fitImageForUpload`, `screenshotFileName` and the exported `PLAYER_SCREENSHOT_EVENT = "webgame:player-screenshot"`. Hosts dispatch it as a `window` CustomEvent to trigger a capture in the mounted `GamePlayer` or `StudioPreview`, with no navigation.
+  - New components: `ScreenshotTray`, `ScreenshotDialog`, `ScreenshotGallery`. `GamePlayer` and `StudioPreview` share the capture hook `useScreenshotCapture`.
+- **Desktop**:
+  - View → Take Screenshot (`CmdOrCtrl+Shift+S`, forwarded id `"screenshot"`) dispatches `PLAYER_SCREENSHOT_EVENT`.
+  - `save_file` suggests the OS Pictures folder for image names (then the session's last image folder). It still writes only to the path the user picked.
+- **Ownership**:
+  - `capture.ts` belongs to engine-dev.
+  - `screenshots.rs` and `routes/screenshots.rs` belong to backend-dev.
+  - `screenshot.ts` and the three components belong to frontend-dev.
+  - The menu item and `save.rs` directory hint belong to desktop-dev.
