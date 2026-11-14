@@ -4,7 +4,9 @@ pub mod achievements;
 pub mod auth;
 pub mod comments;
 pub mod favorites;
+pub mod feed;
 pub mod files;
+pub mod follows;
 pub mod games;
 pub mod play;
 pub mod reports;
@@ -59,6 +61,15 @@ pub fn api_router() -> Router<AppState> {
             "/users/{username}/achievements",
             get(achievements::list_user_achievements),
         )
+        // F002 follows + feed
+        .route(
+            "/users/{username}/follow",
+            put(follows::put_follow).delete(follows::delete_follow),
+        )
+        .route("/users/{username}/followers", get(follows::list_followers))
+        .route("/users/{username}/following", get(follows::list_following))
+        .route("/feed", get(feed::get_feed))
+        .route("/feed/suggestions", get(feed::get_suggestions))
         // games
         .route(
             "/games",

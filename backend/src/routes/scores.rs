@@ -375,6 +375,16 @@ pub async fn submit_score(
     .await?;
     prune_scores(&state.db, &game_id, &user.id, asc, now_dt).await?;
 
+    // F002 feed event (best effort): PBs on published games, never for the owner.
+    if personal_best
+        && game.published
+        && game.owner_id != user.id
+        && let Some(mut conn) = crate::activity::acquire(&state.db).await
+    {
+        crate::activity::record_personal_best(&mut conn, &user.id, &game_id, score, prev.is_none())
+            .await;
+    }
+
     // v1 `rank`: this score's rank among other users' all-time bests (competition ranking).
     let better: i64 = sqlx::query_scalar(&format!(
         "SELECT COUNT(*) FROM (SELECT user_id, {agg}(score) AS best FROM scores \

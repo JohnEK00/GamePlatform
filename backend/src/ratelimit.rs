@@ -34,6 +34,10 @@ pub enum Limit {
     Leaderboard,
     /// play recording (`POST …/play`): 30/min, per user or per IP when anonymous
     Play,
+    /// follow + unfollow (`PUT`/`DELETE …/follow`, shared): 60 per 10 min, per user
+    Follow,
+    /// feed reads (`GET /api/feed` + `/api/feed/suggestions`, shared): 60/min, per user
+    Feed,
 }
 
 impl Limit {
@@ -48,6 +52,8 @@ impl Limit {
             Limit::Save => (60, Duration::from_secs(60)),
             Limit::Leaderboard => (120, Duration::from_secs(60)),
             Limit::Play => (30, Duration::from_secs(60)),
+            Limit::Follow => (60, Duration::from_secs(600)),
+            Limit::Feed => (60, Duration::from_secs(60)),
         }
     }
 }

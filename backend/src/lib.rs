@@ -1,5 +1,6 @@
 //! WebGameApp backend: REST API, game hosting and player page.
 
+pub mod activity;
 pub mod auth;
 pub mod bundle;
 pub mod config;

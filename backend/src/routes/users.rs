@@ -12,6 +12,7 @@ use crate::models::{
     GAME_SELECT, GameSummary, USER_COLUMNS, User, game_row_from_row, user_from_row,
 };
 use crate::routes::auth::load_user;
+use crate::routes::follows::{follow_counts, is_following};
 use crate::routes::games::parse_paging;
 use crate::storage::validate_image;
 
@@ -23,6 +24,12 @@ pub struct UserProfile {
     pub games: Vec<GameSummary>,
     /// Number of the user's games visible to the viewer (all pages).
     pub games_total: i64,
+    /// F002: users following this user.
+    pub followers: i64,
+    /// F002: users this user follows.
+    pub following: i64,
+    /// F002: the viewer follows this user (false when anonymous or viewing yourself).
+    pub is_following: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -69,10 +76,18 @@ pub async fn get_user(
     .bind(&user.user_ref.id)
     .fetch_one(&state.db)
     .await?;
+    let (followers, following) = follow_counts(&state.db, &user.user_ref.id).await?;
+    let is_following = match viewer.id() {
+        Some(v) if !is_me => is_following(&state.db, v, &user.user_ref.id).await?,
+        _ => false,
+    };
     Ok(Json(UserProfile {
         user,
         games,
         games_total,
+        followers,
+        following,
+        is_following,
     }))
 }
 

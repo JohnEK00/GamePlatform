@@ -85,7 +85,7 @@ pub async fn unlock_achievement(
     user: AuthUser,
     ApiPath((id, ach_id)): ApiPath<(String, String)>,
 ) -> AppResult<Json<UnlockResponse>> {
-    fetch_visible_game(&state, &id, Some(&user.id)).await?;
+    let game = fetch_visible_game(&state, &id, Some(&user.id)).await?;
     let defined: Option<(i64,)> =
         sqlx::query_as("SELECT 1 FROM achievements WHERE game_id = ? AND ach_id = ?")
             .bind(&id)
@@ -105,6 +105,15 @@ pub async fn unlock_achievement(
     .bind(now_rfc3339())
     .execute(&state.db)
     .await?;
+    let new = res.rows_affected() == 1;
+    // F002 feed event (best effort): first unlocks on published games, never for the owner.
+    if new
+        && game.published
+        && game.owner_id != user.id
+        && let Some(mut conn) = crate::activity::acquire(&state.db).await
+    {
+        crate::activity::record_achievement(&mut conn, &user.id, &id, &ach_id).await;
+    }
     let row = sqlx::query(&format!(
         "{USER_ACH_SELECT} WHERE ua.user_id = ? AND ua.game_id = ? AND ua.ach_id = ?"
     ))
@@ -116,7 +125,7 @@ pub async fn unlock_achievement(
     .ok_or_else(|| AppError::not_found("Achievement"))?;
     Ok(Json(UnlockResponse {
         achievement: user_achievement_from_row(&row)?,
-        new: res.rows_affected() == 1,
+        new,
     }))
 }
 

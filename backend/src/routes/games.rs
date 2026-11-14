@@ -8,6 +8,7 @@ use serde_json::json;
 use sqlx::Row;
 
 use crate::AppState;
+use crate::activity;
 use crate::auth::{AuthUser, MaybeAuthUser};
 use crate::bundle::{self, AchievementMeta, BundleMeta};
 use crate::error::{AppError, AppResult};
@@ -283,8 +284,9 @@ pub async fn create_game_record(
         let mut tx = state.db.begin().await?;
         sqlx::query(
             "INSERT INTO games (id, owner_id, title, description, published, version, entry, \
-             width, height, score_order, score_format, score_label, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+             width, height, score_order, score_format, score_label, created_at, updated_at, \
+             first_published_at) \
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(owner_id)
@@ -299,10 +301,14 @@ pub async fn create_game_record(
         .bind(&meta.leaderboard.label)
         .bind(&now)
         .bind(&now)
+        .bind(new.published.then_some(&now))
         .execute(&mut *tx)
         .await?;
         replace_tags(&mut tx, &id, &new.tags).await?;
         sync_achievements(&mut tx, &id, &meta.achievements).await?;
+        if new.published {
+            activity::record_game_published(&mut tx, &id, owner_id, 1).await;
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -609,6 +615,20 @@ pub async fn update_game(
     if let Some(tags) = tags {
         replace_tags(&mut tx, &id, &tags).await?;
     }
+    // F002: the first publish (ever) emits `gamePublished`; re-publishing never does.
+    if body.published == Some(true) && !game.published {
+        let first = sqlx::query(
+            "UPDATE games SET first_published_at = ? \
+             WHERE id = ? AND published = 1 AND first_published_at IS NULL",
+        )
+        .bind(now_rfc3339())
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+        if first.rows_affected() == 1 {
+            activity::record_game_published(&mut tx, &id, &game.owner_id, game.version).await;
+        }
+    }
     tx.commit().await?;
 
     Ok(Json(build_game(&state, &id, Some(&user.id)).await?))
@@ -681,6 +701,9 @@ pub async fn upload_bundle(
             return Ok(false);
         }
         sync_achievements(&mut tx, &id, &meta.achievements).await?;
+        if game.published {
+            activity::record_game_updated(&mut tx, &id, &game.owner_id, new_version).await;
+        }
         tx.commit().await?;
         Ok(true)
     }
