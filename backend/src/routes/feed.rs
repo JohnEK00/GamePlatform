@@ -142,6 +142,58 @@ fn json_list<T: Serialize>(v: &[T]) -> AppResult<String> {
     serde_json::to_string(v).map_err(|e| AppError::Internal(format!("json: {e}")))
 }
 
+/// Feed page query (N1). Two index-driven branches, each yielding at most `limit + 1` ids
+/// (`?3`) newest first with every filter applied inside the branch:
+///   (a) followed creators: `follows` PK → `idx_activity_actor_id (actor_id, id DESC)`;
+///   (b) favorited games' publish/update events: `idx_favorites_user_game` →
+///       `idx_activity_game_kind (game_id, kind, id DESC)`.
+/// `CROSS JOIN` fixes the join order and `INDEXED BY` the indices, so the plan never depends
+/// on planner statistics. The union is de-duplicated by id and the outer query only joins the
+/// at most `2 · (limit + 1)` picked rows. The work grows with the activity of the creators the
+/// viewer follows and the games they favorited (before the cursor), never with total platform
+/// activity. `tests/review2.rs` asserts the plan.
+/// Binds: ?1 viewer id, ?2 cursor (exclusive, nullable), ?3 limit + 1, ?4 kinds JSON list.
+pub const FEED_SQL: &str = "\
+    WITH picked(id) AS ( \
+      SELECT id FROM ( \
+        SELECT e.id FROM follows f \
+        CROSS JOIN activity_events e INDEXED BY idx_activity_actor_id \
+        CROSS JOIN games g \
+        WHERE f.follower_id = ?1 AND e.actor_id = f.followee_id \
+          AND e.id < COALESCE(?2, 9223372036854775807) \
+          AND e.actor_id <> ?1 \
+          AND e.kind IN (SELECT value FROM json_each(?4)) \
+          AND g.id = e.game_id AND g.published = 1 \
+          AND (e.kind <> 'achievementUnlocked' OR EXISTS ( \
+                SELECT 1 FROM achievements a \
+                WHERE a.game_id = e.game_id AND a.ach_id = e.ach_id)) \
+        ORDER BY e.id DESC LIMIT ?3) \
+      UNION \
+      SELECT id FROM ( \
+        SELECT e.id FROM favorites fv INDEXED BY idx_favorites_user_game \
+        CROSS JOIN activity_events e INDEXED BY idx_activity_game_kind \
+        CROSS JOIN games g \
+        WHERE fv.user_id = ?1 AND e.game_id = fv.game_id \
+          AND e.kind IN ('gamePublished', 'gameUpdated') \
+          AND e.id < COALESCE(?2, 9223372036854775807) \
+          AND e.actor_id <> ?1 \
+          AND e.kind IN (SELECT value FROM json_each(?4)) \
+          AND g.id = e.game_id AND g.published = 1 \
+        ORDER BY e.id DESC LIMIT ?3) \
+    ) \
+    SELECT e.id, e.kind, e.game_id, e.version, e.score, e.first_score, e.ach_id, \
+      e.ach_count, e.created_at, COALESCE(e.from_version, e.version) AS from_version, \
+      EXISTS (SELECT 1 FROM follows f \
+              WHERE f.follower_id = ?1 AND f.followee_id = e.actor_id) AS followed, \
+      a.name AS a_name, a.description AS a_description, a.icon AS a_icon, \
+      u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
+      u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version \
+    FROM picked p \
+    CROSS JOIN activity_events e ON e.id = p.id \
+    CROSS JOIN users u ON u.id = e.actor_id \
+    LEFT JOIN achievements a ON a.game_id = e.game_id AND a.ach_id = e.ach_id \
+    ORDER BY e.id DESC LIMIT ?3";
+
 /// GET /api/feed?cursor=&limit=&kinds= (🔒, `Limit::Feed`).
 pub async fn get_feed(
     State(state): State<AppState>,
@@ -153,33 +205,13 @@ pub async fn get_feed(
     let limit = parse_feed_limit(query.limit.as_deref())?;
     let kinds = parse_kinds(query.kinds.as_deref())?;
 
-    let rows = sqlx::query(
-        "SELECT e.id, e.kind, e.game_id, e.version, e.score, e.first_score, e.ach_id, \
-           e.ach_count, e.created_at, COALESCE(e.from_version, e.version) AS from_version, \
-           (e.actor_id IN (SELECT followee_id FROM follows WHERE follower_id = ?1)) AS followed, \
-           a.name AS a_name, a.description AS a_description, a.icon AS a_icon, \
-           u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
-           u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version \
-         FROM activity_events e \
-         JOIN games g ON g.id = e.game_id \
-         JOIN users u ON u.id = e.actor_id \
-         LEFT JOIN achievements a ON a.game_id = e.game_id AND a.ach_id = e.ach_id \
-         WHERE (e.actor_id IN (SELECT followee_id FROM follows WHERE follower_id = ?1) \
-                OR (e.kind IN ('gamePublished','gameUpdated') \
-                    AND e.game_id IN (SELECT game_id FROM favorites WHERE user_id = ?1))) \
-           AND e.actor_id <> ?1 \
-           AND g.published = 1 \
-           AND (e.kind <> 'achievementUnlocked' OR a.ach_id IS NOT NULL) \
-           AND (?2 IS NULL OR e.id < ?2) \
-           AND e.kind IN (SELECT value FROM json_each(?4)) \
-         ORDER BY e.id DESC LIMIT ?3",
-    )
-    .bind(&user.id)
-    .bind(cursor)
-    .bind(limit + 1)
-    .bind(json_list(&kinds)?)
-    .fetch_all(&state.db)
-    .await?;
+    let rows = sqlx::query(FEED_SQL)
+        .bind(&user.id)
+        .bind(cursor)
+        .bind(limit + 1)
+        .bind(json_list(&kinds)?)
+        .fetch_all(&state.db)
+        .await?;
 
     let has_more = rows.len() as i64 > limit;
     let rows = &rows[..rows.len().min(limit as usize)];

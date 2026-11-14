@@ -154,6 +154,77 @@ pub fn render_studio_html(origin: &str) -> String {
     }}
     return parts.join("/");
   }};
+  // Studio linker (N9): marks comments, string/template text and regex literals (1) so only
+  // import specifiers in real code are rewritten. `${{…}}` inside templates is code. A `/`
+  // starts a regex at the start, after an operator/bracket/`,`/`;`, or after a keyword
+  // such as `return`; otherwise it is division.
+  const codeMask = (src) => {{
+    const n = src.length, mask = new Uint8Array(n), tpl = [];
+    let depth = 0, prev = "", i = 0;
+    const KW = /(?:^|[^\w$])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/;
+    const regexOk = () => prev === "" || /[(,=:[!&|?{{}};+\-*%<>~^]/.test(prev) ||
+      (/[\w$]/.test(prev) && KW.test(src.slice(Math.max(0, i - 32), i).trimEnd()));
+    // Template text from i up to the closing backtick or the next "${{".
+    const tplText = () => {{
+      const s = i;
+      while (i < n && src[i] !== "`" && !(src[i] === "$" && src[i + 1] === "{{")) i += src[i] === "\\" ? 2 : 1;
+      if (i >= n) {{ mask.fill(1, s, n); return; }}
+      if (src[i] === "`") {{ i++; mask.fill(1, s, i); prev = "`"; return; }}
+      mask.fill(1, s, i);
+      i += 2;
+      tpl.push(depth++);
+      prev = "{{";
+    }};
+    while (i < n) {{
+      const c = src[i], d = src[i + 1];
+      if (c === "/" && d === "/") {{
+        const s = i;
+        while (i < n && src[i] !== "\n" && src[i] !== "\r") i++;
+        mask.fill(1, s, i);
+        continue;
+      }}
+      if (c === "/" && d === "*") {{
+        const s = i, e = src.indexOf("*/", i + 2);
+        i = e < 0 ? n : e + 2;
+        mask.fill(1, s, i);
+        continue;
+      }}
+      if (c === "'" || c === '"') {{
+        const s = i++;
+        while (i < n && src[i] !== c && src[i] !== "\n") i += src[i] === "\\" ? 2 : 1;
+        i = Math.min(i + 1, n);
+        mask.fill(1, s, i);
+        prev = c;
+        continue;
+      }}
+      if (c === "`") {{ mask[i++] = 1; tplText(); continue; }}
+      if (c === "/" && regexOk()) {{
+        const s = i++;
+        let cls = false;
+        while (i < n && src[i] !== "\n") {{
+          const ch = src[i];
+          if (ch === "\\") {{ i += 2; continue; }}
+          if (ch === "[") cls = true;
+          else if (ch === "]") cls = false;
+          else if (ch === "/" && !cls) break;
+          i++;
+        }}
+        i = Math.min(i + 1, n);
+        while (i < n && /[\w$]/.test(src[i])) i++;
+        mask.fill(1, s, i);
+        prev = ")";
+        continue;
+      }}
+      if (c === "{{") depth++;
+      else if (c === "}}") {{
+        depth--;
+        if (tpl.length && depth === tpl[tpl.length - 1]) {{ tpl.pop(); i++; tplText(); continue; }}
+      }}
+      if (!/\s/.test(c)) prev = c;
+      i++;
+    }}
+    return mask;
+  }};
   const linkModules = (files, entry) => {{
     const urls = new Map(), state = new Map(), stack = [];
     const fail = (file, message) => {{ const e = new Error(message); e.file = file; throw e; }};
@@ -165,8 +236,9 @@ pub fn render_studio_html(origin: &str) -> String {
       }}
       state.set(file, 1);
       stack.push(file);
-      const src = String(files[file]).replace(new RegExp(SPEC.source, "g"), (m, kw, q, spec) => {{
-        if (!spec.startsWith("./") && !spec.startsWith("../")) return m;
+      const raw = String(files[file]), mask = codeMask(raw);
+      const src = raw.replace(new RegExp(SPEC.source, "g"), (m, kw, q, spec, offset) => {{
+        if (mask[offset] || (!spec.startsWith("./") && !spec.startsWith("../"))) return m;
         const target = resolveSpec(file, spec.replace(/[?#].*$/, ""));
         if (target === null) fail(file, "Import '" + spec + "' points outside the project");
         if (typeof files[target] !== "string" || !isJs(target)) {{

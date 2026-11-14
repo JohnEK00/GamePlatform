@@ -42,6 +42,11 @@ pub enum Limit {
     VersionNotes,
     /// F013 bundle downloads (`GET …/bundle`): 30/hour, per user
     BundleDownload,
+    /// v1 score list reads (`GET …/scores`; own bucket, separate from `Leaderboard`): 120/min,
+    /// per user or per IP when anonymous
+    ScoreList,
+    /// image uploads (`PUT …/thumbnail` + `PUT /api/users/me/avatar`, shared): 20/hour, per user
+    Image,
 }
 
 impl Limit {
@@ -60,6 +65,8 @@ impl Limit {
             Limit::Feed => (60, Duration::from_secs(60)),
             Limit::VersionNotes => (30, Duration::from_secs(600)),
             Limit::BundleDownload => (30, Duration::from_secs(3600)),
+            Limit::ScoreList => (120, Duration::from_secs(60)),
+            Limit::Image => (20, Duration::from_secs(3600)),
         }
     }
 }

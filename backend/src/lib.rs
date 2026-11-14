@@ -62,8 +62,9 @@ impl AppState {
             config: Arc::new(config),
             storage,
         };
-        // F003: refresh the trending snapshot once at startup (failures are logged).
-        trending::ensure_fresh(&state).await;
+        // F003: refresh the trending snapshot once at startup (failures are logged). Later
+        // refreshes run in `trending::spawn_maintenance` (started by `serve`).
+        state.trending.refresh_now(&state.db).await;
         Ok(state)
     }
 }

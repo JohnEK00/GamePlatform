@@ -11,8 +11,10 @@ use crate::extract::{ApiJson, ApiMultipart, ApiPath, ApiQuery};
 use crate::models::{
     GAME_SELECT, GameSummary, USER_COLUMNS, User, game_row_from_row, user_from_row,
 };
+use crate::ratelimit::Limit;
 use crate::routes::auth::load_user;
 use crate::routes::follows::{follow_counts, is_following};
+use crate::routes::games::limit_user;
 use crate::routes::games::parse_paging;
 use crate::storage::validate_image;
 
@@ -141,6 +143,7 @@ pub async fn upload_avatar(
     user: AuthUser,
     ApiMultipart(mut multipart): ApiMultipart,
 ) -> AppResult<Json<User>> {
+    limit_user(&state, Limit::Image, &user.id)?;
     let mut avatar = None;
     while let Some(field) = multipart.next_field().await? {
         if field.name() == Some("avatar") {

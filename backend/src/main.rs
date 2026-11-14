@@ -75,6 +75,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         Ok(n) => tracing::info!(removed = n, "removed stale upload/staging directories"),
         Err(e) => tracing::warn!(error = %e, "startup cleanup of stale directories failed"),
     }
+    // N1/N3: periodic trending refresh + PRAGMA optimize, off the request path.
+    let maintenance = webgame_server::trending::spawn_maintenance(&state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("listening on http://{addr}");
     axum::serve(
@@ -83,6 +85,9 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
+    if let Some(task) = maintenance {
+        task.abort();
+    }
     tracing::info!("server stopped");
     Ok(())
 }

@@ -24,8 +24,9 @@ pub struct Config {
     /// Number of trusted reverse-proxy hops in front of the server (`TRUST_PROXY`; `true` = 1,
     /// off = 0). When > 0 the client IP is the n-th `X-Forwarded-For` entry from the right.
     pub trust_proxy: usize,
-    /// Maximum age of the trending snapshot (`TRENDING_TTL_SECS`, default 600; 0 = refresh on
-    /// every trending/related read).
+    /// Trending refresh cadence (`TRENDING_TTL_SECS`, default 600): a background task refreshes
+    /// the snapshot every TTL. 0 = no background task; every trending/related read refreshes
+    /// inline instead (tests).
     pub trending_ttl: std::time::Duration,
 }
 

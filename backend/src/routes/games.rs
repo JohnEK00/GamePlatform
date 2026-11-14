@@ -762,9 +762,12 @@ pub async fn upload_bundle(
         // One timestamp for `updated_at`, the version row and `last_updated_at`.
         let now = now_rfc3339();
         let mut tx = state.db.begin().await?;
-        let r = sqlx::query(
+        // N10: `published` is read inside the transaction (the owner may have unpublished
+        // since the request read the game); it decides `last_updated_at` and `gameUpdated`.
+        let published: Option<bool> = sqlx::query_scalar(
             "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, score_order = ?, \
-             score_format = ?, score_label = ?, updated_at = ? WHERE id = ? AND version = ?",
+             score_format = ?, score_label = ?, updated_at = ? WHERE id = ? AND version = ? \
+             RETURNING published",
         )
         .bind(new_version)
         .bind(&meta.entry)
@@ -776,14 +779,14 @@ pub async fn upload_bundle(
         .bind(&now)
         .bind(&id)
         .bind(old_version)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        if r.rows_affected() != 1 {
+        let Some(published) = published else {
             return Ok(false);
-        }
+        };
         sync_achievements(&mut tx, &id, &meta.achievements).await?;
         insert_version_row(&mut tx, &id, new_version, &notes, &now).await?;
-        if game.published {
+        if published {
             sqlx::query("UPDATE games SET last_updated_at = ? WHERE id = ?")
                 .bind(&now)
                 .bind(&id)
@@ -910,6 +913,7 @@ pub async fn upload_thumbnail(
     ApiMultipart(mut multipart): ApiMultipart,
 ) -> AppResult<Json<Game>> {
     fetch_owned_game(&state, &id, &user.id).await?;
+    limit_user(&state, Limit::Image, &user.id)?;
     let mut thumb = None;
     while let Some(field) = multipart.next_field().await? {
         if field.name() == Some("thumbnail") {

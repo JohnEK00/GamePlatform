@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use sqlx::SqlitePool;
+use sqlx::SqliteConnection;
 
 use crate::AppState;
 use crate::auth::{AuthUser, MaybeAuthUser};
@@ -69,8 +69,29 @@ pub fn period_bounds(period: Period, now: DateTime<Utc>) -> Option<(String, Stri
 }
 
 // ---------------------------------------------------------------------------
-// Shared "best per user in [start, end)" query
+// Boards from `score_bests` (N2, migration 0008)
 // ---------------------------------------------------------------------------
+
+/// `score_bests` key of the `period` window containing `now`: (`period`, `period_start`).
+/// `period_start` is `""` for `all`, else the window start from [`period_bounds`].
+pub fn period_key(period: Period, now: DateTime<Utc>) -> (&'static str, String) {
+    match period {
+        Period::All => ("all", String::new()),
+        Period::Day => (
+            "day",
+            period_bounds(period, now).map(|b| b.0).unwrap_or_default(),
+        ),
+        Period::Week => (
+            "week",
+            period_bounds(period, now).map(|b| b.0).unwrap_or_default(),
+        ),
+    }
+}
+
+/// `score_bests.rank_score` of a score: smaller is better.
+pub fn rank_score(score: i64, ascending: bool) -> i64 {
+    if ascending { score } else { -score }
+}
 
 pub struct Board {
     /// Best first, at most `limit` entries; `Score.rank` = competition rank in the window.
@@ -81,92 +102,122 @@ pub struct Board {
     pub me: Option<Score>,
 }
 
-/// Each user's best score in the window (`MAX` for desc, `MIN` for asc; ties → earlier
-/// `created_at`), ranked with competition ranking. `limit` may be 0 (only `me` is wanted).
-pub async fn window_board(
-    db: &SqlitePool,
+const BEST_COLS: &str = "b.score_id, b.score, b.rank_score, b.created_at, \
+     u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
+     u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version";
+
+fn score_from_best(row: &sqlx::sqlite::SqliteRow, rank: i64) -> Result<Score, sqlx::Error> {
+    Ok(Score {
+        id: row.try_get("score_id")?,
+        user: user_ref_from_row(row, "u_")?,
+        score: row.try_get("score")?,
+        created_at: row.try_get("created_at")?,
+        rank,
+    })
+}
+
+/// Competition rank of `rank_score` in a window: 1 + players with a strictly better best.
+async fn rank_in_window(
+    conn: &mut SqliteConnection,
     game_id: &str,
-    ascending: bool,
-    bounds: Option<&(String, String)>,
+    key: &(&'static str, String),
+    rank_score: i64,
+    exclude_user: Option<&str>,
+) -> AppResult<i64> {
+    let better: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM score_bests INDEXED BY idx_score_bests_rank \
+         WHERE game_id = ?1 AND period = ?2 AND period_start = ?3 AND rank_score < ?4 \
+           AND (?5 IS NULL OR user_id <> ?5)",
+    )
+    .bind(game_id)
+    .bind(key.0)
+    .bind(&key.1)
+    .bind(rank_score)
+    .bind(exclude_user)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(better + 1)
+}
+
+/// `user_id`'s best in the window with its competition rank.
+async fn my_best(
+    conn: &mut SqliteConnection,
+    game_id: &str,
+    key: &(&'static str, String),
+    user_id: &str,
+) -> AppResult<Option<Score>> {
+    let row = sqlx::query(&format!(
+        "SELECT {BEST_COLS} FROM score_bests b CROSS JOIN users u ON u.id = b.user_id \
+         WHERE b.game_id = ?1 AND b.period = ?2 AND b.period_start = ?3 AND b.user_id = ?4"
+    ))
+    .bind(game_id)
+    .bind(key.0)
+    .bind(&key.1)
+    .bind(user_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+    let rank = rank_in_window(conn, game_id, key, row.try_get("rank_score")?, None).await?;
+    Ok(Some(score_from_best(&row, rank)?))
+}
+
+/// Each user's best score in the `period` window containing `now` (`MAX` for desc, `MIN` for
+/// asc; ties → earlier `created_at`), ranked with competition ranking. Reads `score_bests`:
+/// the entries are an index walk of `limit` rows, ranks and the total are index counts.
+/// `limit` may be 0 (only `me` is wanted; the total is then not computed and is 0).
+pub async fn window_board(
+    conn: &mut SqliteConnection,
+    game_id: &str,
+    period: Period,
+    now: DateTime<Utc>,
     limit: i64,
     me: Option<&str>,
 ) -> AppResult<Board> {
-    // `dir` is one of two static strings, never user input.
-    let dir = if ascending { "ASC" } else { "DESC" };
-    let window = if bounds.is_some() {
-        "AND s.created_at >= ?4 AND s.created_at < ?5"
-    } else {
-        ""
-    };
-    let sql = format!(
-        "WITH w AS ( \
-           SELECT s.id, s.user_id, s.score, s.created_at, s.rowid AS rid, \
-             ROW_NUMBER() OVER (PARTITION BY s.user_id \
-               ORDER BY s.score {dir}, s.created_at ASC, s.rowid ASC) AS rn \
-           FROM scores s WHERE s.game_id = ?1 {window} \
-         ), ranked AS ( \
-           SELECT id, user_id, score, created_at, \
-             RANK() OVER (ORDER BY score {dir}) AS rnk, \
-             ROW_NUMBER() OVER (ORDER BY score {dir}, created_at ASC, rid ASC) AS pos, \
-             COUNT(*) OVER () AS total \
-           FROM w WHERE rn = 1 \
-         ) \
-         SELECT r.id, r.user_id, r.score, r.created_at, r.rnk, r.pos, r.total, \
-           u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
-           u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version \
-         FROM ranked r JOIN users u ON u.id = r.user_id \
-         WHERE r.pos <= ?2 OR r.user_id = ?3 \
-         ORDER BY r.pos"
-    );
-    let mut q = sqlx::query(&sql).bind(game_id).bind(limit).bind(me);
-    if let Some((start, end)) = bounds {
-        q = q.bind(start).bind(end);
-    }
-    let rows = q.fetch_all(db).await?;
-
+    let key = period_key(period, now);
     let mut board = Board {
-        entries: Vec::with_capacity(rows.len()),
+        entries: Vec::new(),
         total_players: 0,
         me: None,
     };
-    for row in &rows {
-        board.total_players = row.try_get("total")?;
-        let user_id: String = row.try_get("user_id")?;
-        let pos: i64 = row.try_get("pos")?;
-        let make = || -> Result<Score, sqlx::Error> {
-            Ok(Score {
-                id: row.try_get("id")?,
-                user: user_ref_from_row(row, "u_")?,
-                score: row.try_get("score")?,
-                created_at: row.try_get("created_at")?,
-                rank: row.try_get("rnk")?,
-            })
-        };
-        if me == Some(user_id.as_str()) {
-            board.me = Some(make()?);
+    if limit > 0 {
+        let rows = sqlx::query(&format!(
+            "SELECT {BEST_COLS} FROM score_bests b INDEXED BY idx_score_bests_rank \
+             CROSS JOIN users u ON u.id = b.user_id \
+             WHERE b.game_id = ?1 AND b.period = ?2 AND b.period_start = ?3 \
+             ORDER BY b.rank_score, b.created_at, b.score_rowid LIMIT ?4"
+        ))
+        .bind(game_id)
+        .bind(key.0)
+        .bind(&key.1)
+        .bind(limit)
+        .fetch_all(&mut *conn)
+        .await?;
+        // The page starts at position 1, so a row's competition rank is the position of the
+        // first row with the same score.
+        let mut prev: Option<(i64, i64)> = None; // (rank_score, rank)
+        for (i, row) in rows.iter().enumerate() {
+            let rs: i64 = row.try_get("rank_score")?;
+            let rank = match prev {
+                Some((p, r)) if p == rs => r,
+                _ => i as i64 + 1,
+            };
+            prev = Some((rs, rank));
+            board.entries.push(score_from_best(row, rank)?);
         }
-        if pos <= limit {
-            board.entries.push(make()?);
-        }
+        board.total_players = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM score_bests INDEXED BY idx_score_bests_rank \
+             WHERE game_id = ?1 AND period = ?2 AND period_start = ?3",
+        )
+        .bind(game_id)
+        .bind(key.0)
+        .bind(&key.1)
+        .fetch_one(&mut *conn)
+        .await?;
+    }
+    if let Some(uid) = me {
+        board.me = my_best(conn, game_id, &key, uid).await?;
     }
     Ok(board)
-}
-
-/// Rank of `user_id`'s best score in the `period` window containing `now`.
-async fn window_rank(
-    db: &SqlitePool,
-    game_id: &str,
-    ascending: bool,
-    period: Period,
-    now: DateTime<Utc>,
-    user_id: &str,
-) -> AppResult<i64> {
-    let bounds = period_bounds(period, now);
-    let board = window_board(db, game_id, ascending, bounds.as_ref(), 0, Some(user_id)).await?;
-    board
-        .me
-        .map(|m| m.rank)
-        .ok_or_else(|| AppError::Internal("submitted score missing from its window".into()))
 }
 
 fn parse_limit(v: Option<&str>) -> AppResult<i64> {
@@ -190,25 +241,22 @@ pub struct ScoresQuery {
 }
 
 /// GET /api/games/{id}/scores: `Leaderboard.entries` for the period (default `all`).
+/// Rate limited like leaderboard reads (`Limit::ScoreList`, 120/min, its own bucket; N2).
 pub async fn list_scores(
     State(state): State<AppState>,
     viewer: MaybeAuthUser,
+    ip: ClientIp,
     ApiPath(game_id): ApiPath<String>,
     ApiQuery(query): ApiQuery<ScoresQuery>,
 ) -> AppResult<Json<Vec<Score>>> {
-    let game = fetch_visible_game(&state, &game_id, viewer.id()).await?;
+    state
+        .limiter
+        .check(Limit::ScoreList, &key_for(viewer.id(), &ip))?;
+    fetch_visible_game(&state, &game_id, viewer.id()).await?;
     let limit = parse_limit(query.limit.as_deref())?;
     let period = Period::parse(query.period.as_deref())?;
-    let bounds = period_bounds(period, Utc::now());
-    let board = window_board(
-        &state.db,
-        &game_id,
-        game.leaderboard.ascending(),
-        bounds.as_ref(),
-        limit,
-        None,
-    )
-    .await?;
+    let mut conn = state.db.acquire().await?;
+    let board = window_board(&mut conn, &game_id, period, Utc::now(), limit, None).await?;
     Ok(Json(board.entries))
 }
 
@@ -238,16 +286,11 @@ pub async fn get_leaderboard(
     let game = fetch_visible_game(&state, &game_id, viewer.id()).await?;
     let limit = parse_limit(query.limit.as_deref())?;
     let period = Period::parse(query.period.as_deref())?;
-    let bounds = period_bounds(period, Utc::now());
-    let board = window_board(
-        &state.db,
-        &game_id,
-        game.leaderboard.ascending(),
-        bounds.as_ref(),
-        limit,
-        viewer.id(),
-    )
-    .await?;
+    let now = Utc::now();
+    let bounds = period_bounds(period, now);
+    let mut conn = state.db.acquire().await?;
+    let board = window_board(&mut conn, &game_id, period, now, limit, viewer.id()).await?;
+    drop(conn);
     let (period_start, period_end) = bounds.unzip();
     Ok(Json(Leaderboard {
         period,
@@ -295,7 +338,7 @@ pub const SCORE_RECENT_DAYS: i64 = 8;
 /// order as [`window_board`]: score (by the game's order), then earlier `created_at`, rowid.
 /// Per user per game this keeps at most 20 + ~10 rows (8 recent days + 2 ISO weeks).
 pub async fn prune_scores(
-    db: &SqlitePool,
+    db: &mut SqliteConnection,
     game_id: &str,
     user_id: &str,
     ascending: bool,
@@ -322,11 +365,13 @@ pub async fn prune_scores(
         .bind(user_id)
         .bind(SCORES_KEPT_PER_USER)
         .bind(cutoff)
-        .execute(db)
+        .execute(&mut *db)
         .await?;
     Ok(r.rows_affected())
 }
 
+/// POST /api/games/{id}/scores. The insert, the `score_bests` upkeep (triggers), pruning and
+/// the rank reads run in one write-first transaction, so the ranks reflect exactly this write.
 pub async fn submit_score(
     State(state): State<AppState>,
     user: AuthUser,
@@ -348,21 +393,13 @@ pub async fn submit_score(
         )));
     }
     let asc = game.leaderboard.ascending();
-    let (agg, better_than) = if asc { ("MIN", "<") } else { ("MAX", ">") };
-
-    // Previous all-time best of this user (before inserting).
-    let prev: Option<i64> = sqlx::query_scalar(&format!(
-        "SELECT {agg}(score) FROM scores WHERE game_id = ? AND user_id = ?"
-    ))
-    .bind(&game_id)
-    .bind(&user.id)
-    .fetch_one(&state.db)
-    .await?;
-    let personal_best = prev.is_none_or(|p| if asc { score < p } else { score > p });
+    let agg = if asc { "MIN" } else { "MAX" };
 
     let id = uuid::Uuid::new_v4().to_string();
     let now_dt = Utc::now();
     let now = now_dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let mut tx = state.db.begin().await?;
+    // Write first: the transaction holds the write lock from here on.
     sqlx::query(
         "INSERT INTO scores (id, game_id, user_id, score, created_at) VALUES (?, ?, ?, ?, ?)",
     )
@@ -371,11 +408,58 @@ pub async fn submit_score(
     .bind(&user.id)
     .bind(score)
     .bind(&now)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
-    prune_scores(&state.db, &game_id, &user.id, asc, now_dt).await?;
 
-    // F002 feed event (best effort): PBs on published games, never for the owner.
+    // Previous all-time best of this user (the other retained scores always include it).
+    let prev: Option<i64> = sqlx::query_scalar(&format!(
+        "SELECT {agg}(score) FROM scores WHERE game_id = ? AND user_id = ? AND id <> ?"
+    ))
+    .bind(&game_id)
+    .bind(&user.id)
+    .bind(&id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let personal_best = prev.is_none_or(|p| if asc { score < p } else { score > p });
+
+    prune_scores(&mut tx, &game_id, &user.id, asc, now_dt).await?;
+
+    // v1 `rank`: this score's rank among other users' all-time bests (competition ranking).
+    let all_key = period_key(Period::All, now_dt);
+    let rank = rank_in_window(
+        &mut tx,
+        &game_id,
+        &all_key,
+        rank_score(score, asc),
+        Some(&user.id),
+    )
+    .await?;
+
+    // Rank of the user's best in each window, after this submit.
+    let mut r = [0i64; 3];
+    for (slot, period) in r.iter_mut().zip([Period::Day, Period::Week, Period::All]) {
+        *slot = my_best(&mut tx, &game_id, &period_key(period, now_dt), &user.id)
+            .await?
+            .map(|m| m.rank)
+            .ok_or_else(|| AppError::Internal("submitted score missing from its window".into()))?;
+    }
+    let ranks = Ranks {
+        day: r[0],
+        week: r[1],
+        all: r[2],
+    };
+
+    let row = sqlx::query(
+        "SELECT id AS u_id, username AS u_username, display_name AS u_display_name, \
+         avatar_ext AS u_avatar_ext, avatar_version AS u_avatar_version FROM users WHERE id = ?",
+    )
+    .bind(&user.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    // F002 feed event (best effort, after the commit): PBs on published games, never for the
+    // owner.
     if personal_best
         && game.published
         && game.owner_id != user.id
@@ -385,33 +469,6 @@ pub async fn submit_score(
             .await;
     }
 
-    // v1 `rank`: this score's rank among other users' all-time bests (competition ranking).
-    let better: i64 = sqlx::query_scalar(&format!(
-        "SELECT COUNT(*) FROM (SELECT user_id, {agg}(score) AS best FROM scores \
-         WHERE game_id = ? AND user_id != ? GROUP BY user_id) WHERE best {better_than} ?"
-    ))
-    .bind(&game_id)
-    .bind(&user.id)
-    .bind(score)
-    .fetch_one(&state.db)
-    .await?;
-
-    // Rank of the user's best in each window, after this submit.
-    let rank_in = |period| window_rank(&state.db, &game_id, asc, period, now_dt, &user.id);
-    let ranks = Ranks {
-        day: rank_in(Period::Day).await?,
-        week: rank_in(Period::Week).await?,
-        all: rank_in(Period::All).await?,
-    };
-
-    let row = sqlx::query(
-        "SELECT id AS u_id, username AS u_username, display_name AS u_display_name, \
-         avatar_ext AS u_avatar_ext, avatar_version AS u_avatar_version FROM users WHERE id = ?",
-    )
-    .bind(&user.id)
-    .fetch_one(&state.db)
-    .await?;
-
     Ok((
         StatusCode::CREATED,
         Json(ScoreSubmitResult {
@@ -420,7 +477,7 @@ pub async fn submit_score(
                 user: user_ref_from_row(&row, "u_")?,
                 score,
                 created_at: now,
-                rank: better + 1,
+                rank,
             },
             personal_best,
             ranks,

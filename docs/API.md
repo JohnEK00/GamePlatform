@@ -596,3 +596,14 @@ Files stay reachable by direct URL after their game is unpublished, as thumbnail
 - Screenshot posts (`POST …/screenshots`): **10/hour per user** (`Limit::Screenshot`, a separate bucket from `Limit::Image`). Over the limit → 429 `rate_limited` with `Retry-After`.
 - "Set as thumbnail" uses the existing `PUT /api/games/{id}/thumbnail` and its `Limit::Image`.
 - `GET …/screenshots` is an unlimited public read, like comments. `DELETE` is unlimited.
+
+
+## Review-fix additions (REVIEW-2026-11-14-2)
+- **`GET /api/games/{id}/scores`:** may return 429 `rate_limited` with `Retry-After`. The limit is 120/min, per user when signed in or per IP when anonymous, in its own bucket (separate from leaderboard reads).
+- **Image uploads:** `PUT /api/games/{id}/thumbnail` and `PUT /api/users/me/avatar` share an Image bucket of 20/hour per user and may return 429. The limit is checked after auth and owner checks, before the body is read.
+- **`TRENDING_TTL_SECS`** (default 600) is the background refresh cadence.
+  - The snapshot is refreshed at startup and then every TTL, alongside `PRAGMA optimize`. A failed refresh is retried after `min(TTL, 60s)`.
+  - `sort=trending` and `/related` read the current snapshot and never refresh it inline.
+  - `0` disables the background task: reads refresh inline instead, with a 60s backoff after a failure. This is for tests and development.
+- **Studio linker:** commented-out imports, and import-like text inside strings or templates, are ignored.
+- **Unchanged:** response shapes, the feed cursor semantics and leaderboard results. Leaderboards are now served from a precomputed `score_bests` table (migration `0008_review2.sql`).
