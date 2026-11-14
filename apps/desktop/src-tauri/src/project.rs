@@ -2,6 +2,10 @@
 //! and validation as bundle uploads (docs/GAME_FORMAT.md) and hands the webview an index plus a one-time
 //! ticket. Text files are inlined in the index; binary files are fetched one by one with
 //! `read_project_file(ticket, path)` (raw bytes, each file once). The webview never supplies a filesystem path.
+//!
+//! F013: every picked folder is remembered in `ProjectFolders` under a random, session-scoped `folderId`
+//! (never the path), so `reload_project_folder(folderId)` can re-read it without a dialog. The registry is
+//! the allowlist of folders the webview may re-read; it is in memory only and bounded (LRU).
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -14,7 +18,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::ipc::Response;
-use tauri::State;
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::new_ticket;
@@ -31,6 +35,10 @@ const MAX_PENDING_PROJECTS: usize = 2;
 const PROJECT_TTL: Duration = Duration::from_secs(5 * 60);
 /// At most this many skipped paths are listed by name (the total count is always reported).
 const MAX_SKIPPED_LISTED: usize = 50;
+/// Picked folders remembered for "Reload folder" at most (least recently used is dropped first).
+const MAX_FOLDERS: usize = 16;
+/// Error for an unknown folder id or a folder that was moved or deleted. The Studio matches "no longer available".
+pub const FOLDER_GONE: &str = "The folder is no longer available. Open it again.";
 
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -47,6 +55,8 @@ impl Limits {
 /// A folder read from disk. `files` excludes game.json; paths are bundle-relative with `/` separators.
 #[derive(Debug)]
 pub struct ProjectData {
+    /// Canonical project root (after the single-wrapper resolution). Never sent to the webview.
+    pub root: PathBuf,
     pub folder: String,
     pub manifest: Value,
     pub files: Vec<(String, Vec<u8>)>,
@@ -211,8 +221,9 @@ pub fn read_project_dir(dir: &Path, limits: Limits) -> Result<ProjectData, Strin
         skipped: Vec::new(),
     };
     walk.walk(&root, "", 0)?;
-    let manifest = walk.manifest.ok_or("No game.json found in the selected folder.")?;
-    Ok(ProjectData { folder, manifest, files: walk.files, skipped: walk.skipped })
+    let Walk { manifest, files, skipped, .. } = walk;
+    let manifest = manifest.ok_or("No game.json found in the selected folder.")?;
+    Ok(ProjectData { root, folder, manifest, files, skipped })
 }
 
 /// Decodes a text file like the browser's `File.text()` (UTF-8, BOM stripped, invalid bytes replaced).
@@ -230,12 +241,14 @@ pub struct IndexEntry {
     text: Option<String>,
 }
 
-/// Returned by `pick_project_folder`.
+/// Returned by `pick_project_folder` and `reload_project_folder`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectIndex {
     /// `None` when there are no non-empty binary files to fetch.
     ticket: Option<String>,
+    /// Opaque, session-scoped handle for `reload_project_folder` (random, not derived from the path).
+    folder_id: String,
     folder: String,
     manifest: Value,
     files: Vec<IndexEntry>,
@@ -296,8 +309,84 @@ impl OpenProjects {
     }
 }
 
+struct FolderEntry {
+    root: PathBuf,
+    /// Last use (registration or lookup), used to evict the least recently used folder.
+    used: u64,
+}
+
+#[derive(Default)]
+struct FolderMap {
+    next: u64,
+    map: HashMap<String, FolderEntry>,
+}
+
+/// Folders the user picked in this session, by random id. In memory only; at most `MAX_FOLDERS` (LRU).
+#[derive(Default)]
+pub struct ProjectFolders(Mutex<FolderMap>);
+
+impl ProjectFolders {
+    fn lock(&self) -> std::sync::MutexGuard<'_, FolderMap> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Remembers a canonical project root and returns a new random id (picking the same folder twice gives two ids).
+    pub fn register(&self, root: PathBuf) -> String {
+        let mut inner = self.lock();
+        while inner.map.len() >= MAX_FOLDERS {
+            let oldest = inner.map.iter().min_by_key(|(_, e)| e.used).map(|(k, _)| k.clone());
+            match oldest {
+                Some(k) => inner.map.remove(&k),
+                None => break,
+            };
+        }
+        let mut id = new_ticket();
+        while inner.map.contains_key(&id) {
+            id = new_ticket();
+        }
+        inner.next += 1;
+        let used = inner.next;
+        inner.map.insert(id.clone(), FolderEntry { root, used });
+        id
+    }
+
+    /// The root for `id`, marking it as recently used.
+    pub fn get(&self, id: &str) -> Option<PathBuf> {
+        let mut inner = self.lock();
+        inner.next += 1;
+        let used = inner.next;
+        let entry = inner.map.get_mut(id)?;
+        entry.used = used;
+        Some(entry.root.clone())
+    }
+
+    pub fn forget(&self, id: &str) {
+        self.lock().map.remove(id);
+    }
+}
+
+/// Re-reads a registered folder with the same limits and validation as a pick. An unknown id, or a folder
+/// that is gone or no longer a directory, gives `FOLDER_GONE` (and the id is forgotten).
+fn reload_data(folders: &ProjectFolders, folder_id: &str) -> Result<ProjectData, String> {
+    let root = folders.get(folder_id).ok_or(FOLDER_GONE)?;
+    let gone = || !fs::metadata(&root).map(|m| m.is_dir()).unwrap_or(false);
+    if gone() {
+        folders.forget(folder_id);
+        return Err(FOLDER_GONE.into());
+    }
+    read_project_dir(&root, Limits::UPLOAD).map_err(|e| {
+        // It may have vanished during the read.
+        if gone() {
+            folders.forget(folder_id);
+            FOLDER_GONE.into()
+        } else {
+            e
+        }
+    })
+}
+
 /// Splits a read folder into the JSON index (texts inline) and the binary files kept behind a ticket.
-fn into_index(data: ProjectData, projects: &OpenProjects) -> ProjectIndex {
+fn into_index(data: ProjectData, folder_id: String, projects: &OpenProjects) -> ProjectIndex {
     let mut entries = Vec::with_capacity(data.files.len());
     let mut binaries = HashMap::new();
     for (path, bytes) in data.files {
@@ -314,6 +403,7 @@ fn into_index(data: ProjectData, projects: &OpenProjects) -> ProjectIndex {
     let skipped_count = data.skipped.len();
     ProjectIndex {
         ticket: (!binaries.is_empty()).then(|| projects.insert(binaries)),
+        folder_id,
         folder: data.folder,
         manifest: data.manifest,
         files: entries,
@@ -327,6 +417,7 @@ fn into_index(data: ProjectData, projects: &OpenProjects) -> ProjectIndex {
 pub async fn pick_project_folder(
     window: tauri::Window,
     projects: State<'_, OpenProjects>,
+    folders: State<'_, ProjectFolders>,
 ) -> Result<Option<ProjectIndex>, String> {
     let data = tauri::async_runtime::spawn_blocking(move || -> Result<Option<ProjectData>, String> {
         let choice = window
@@ -343,7 +434,22 @@ pub async fn pick_project_folder(
     })
     .await
     .map_err(|e| format!("folder picker task failed: {e}"))??;
-    Ok(data.map(|d| into_index(d, &projects)))
+    Ok(data.map(|d| {
+        let id = folders.register(d.root.clone());
+        into_index(d, id, &projects)
+    }))
+}
+
+/// Re-reads a folder picked earlier in this session (no dialog). Returns a fresh index with a new ticket and
+/// the same `folderId`. Errors with `FOLDER_GONE` for an unknown id or a folder that was moved or deleted.
+#[tauri::command]
+pub async fn reload_project_folder(app: tauri::AppHandle, folder_id: String) -> Result<Option<ProjectIndex>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let data = reload_data(&app.state::<ProjectFolders>(), &folder_id)?;
+        Ok(Some(into_index(data, folder_id, &app.state::<OpenProjects>())))
+    })
+    .await
+    .map_err(|e| format!("folder reload task failed: {e}"))?
 }
 
 /// Returns one binary file of an opened project as raw bytes (ArrayBuffer in the webview). Each file once.
@@ -489,6 +595,7 @@ mod tests {
     fn index_inlines_text_and_tickets_binaries_once() {
         let store = OpenProjects::default();
         let data = ProjectData {
+            root: PathBuf::from("/g"),
             folder: "g".into(),
             manifest: serde_json::json!({ "entry": "main.js" }),
             files: vec![
@@ -498,7 +605,8 @@ mod tests {
             ],
             skipped: (0..60).map(|i| format!("f{i}.exe")).collect(),
         };
-        let index = into_index(data, &store);
+        let index = into_index(data, "id".into(), &store);
+        assert_eq!(index.folder_id, "id");
         assert_eq!(index.files[0].text.as_deref(), Some("let x = 1;"));
         assert_eq!(index.files[1], IndexEntry { path: "a.png".into(), size: 3, text: None });
         assert_eq!(index.files[2].size, 0);
@@ -523,5 +631,69 @@ mod tests {
         assert!(store.take_file(&second, "a.png").is_err());
         assert!(store.take_file(&third, "../a.png").is_err());
         assert!(store.take_file(&third, "a.png").is_ok());
+    }
+
+    #[test]
+    fn folder_registry_is_bounded_lru_with_random_ids() {
+        let folders = ProjectFolders::default();
+        let a = folders.register(PathBuf::from("/a"));
+        let a2 = folders.register(PathBuf::from("/a"));
+        assert_ne!(a, a2, "ids are random, not derived from the path");
+        assert_eq!(a.len(), 32);
+        let others: Vec<String> = (2..MAX_FOLDERS).map(|i| folders.register(PathBuf::from(format!("/f{i}")))).collect();
+        assert_eq!(folders.lock().map.len(), MAX_FOLDERS);
+        // Touch `a`, so `a2` is now the least recently used.
+        assert_eq!(folders.get(&a), Some(PathBuf::from("/a")));
+        let newest = folders.register(PathBuf::from("/new"));
+        assert_eq!(folders.lock().map.len(), MAX_FOLDERS);
+        assert!(folders.get(&a2).is_none(), "LRU entry is evicted");
+        assert!(folders.get(&a).is_some());
+        assert!(folders.get(&newest).is_some());
+        assert!(others.iter().all(|id| folders.get(id).is_some()));
+    }
+
+    #[test]
+    fn reload_unknown_id_errors() {
+        let folders = ProjectFolders::default();
+        assert_eq!(reload_data(&folders, "nope").unwrap_err(), FOLDER_GONE);
+        assert!(FOLDER_GONE.contains("no longer available"));
+    }
+
+    #[test]
+    fn reload_reads_new_content_and_keeps_the_id() {
+        let t = TempDir::new("reload");
+        t.write("game.json", MANIFEST);
+        t.write("main.js", b"v1");
+        let folders = ProjectFolders::default();
+        let projects = OpenProjects::default();
+        let d = read_project_dir(&t.0, Limits::UPLOAD).unwrap();
+        let id = folders.register(d.root.clone());
+        t.write("main.js", b"v2");
+        t.write("hero.png", &[1, 2]);
+        let index = into_index(reload_data(&folders, &id).unwrap(), id.clone(), &projects);
+        assert_eq!(index.folder_id, id);
+        assert_eq!(index.files.iter().find(|f| f.path == "main.js").unwrap().text.as_deref(), Some("v2"));
+        assert_eq!(projects.take_file(index.ticket.as_deref().unwrap(), "hero.png").unwrap(), vec![1, 2]);
+        // Validation still applies: an invalid game.json is reported, and the folder stays registered.
+        t.write("game.json", b"{ nope");
+        assert!(reload_data(&folders, &id).unwrap_err().contains("not valid JSON"));
+        assert!(folders.get(&id).is_some());
+    }
+
+    #[test]
+    fn reload_after_deleting_the_folder_errors_and_forgets_the_id() {
+        let t = TempDir::new("gone");
+        t.write("wrapper/game.json", MANIFEST);
+        let folders = ProjectFolders::default();
+        let d = read_project_dir(&t.0, Limits::UPLOAD).unwrap();
+        assert_eq!(d.folder, "wrapper");
+        let id = folders.register(d.root.clone());
+        fs::remove_dir_all(t.0.join("wrapper")).unwrap();
+        assert_eq!(reload_data(&folders, &id).unwrap_err(), FOLDER_GONE);
+        assert!(folders.get(&id).is_none(), "id is forgotten");
+        // A file where the folder was is not a folder either.
+        t.write("wrapper", b"x");
+        let id = folders.register(t.0.join("wrapper"));
+        assert_eq!(reload_data(&folders, &id).unwrap_err(), FOLDER_GONE);
     }
 }

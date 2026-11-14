@@ -1,6 +1,6 @@
 /** Native integrations (Tauri) with browser fallbacks so `npm run dev` works in a plain browser. */
 import { invoke, isTauri as tauriDetected } from "@tauri-apps/api/core";
-import type { StudioProject } from "@webgame/ui";
+import type { LocalProject, StudioProject } from "@webgame/ui";
 
 export const MAX_PICK_BYTES = 60 * 1024 * 1024;
 /** Mirrors `MAX_SAVE_BYTES` in src-tauri/src/save.rs. */
@@ -114,6 +114,8 @@ interface ProjectIndexEntry {
 interface ProjectIndex {
   /** Ticket for the binary files; null when there are none to fetch. */
   ticket: string | null;
+  /** Opaque session-scoped folder handle (never a path). */
+  folderId: string;
   folder: string;
   manifest: object;
   files: ProjectIndexEntry[];
@@ -125,18 +127,10 @@ interface ProjectIndex {
 const READ_CONCURRENCY = 4;
 
 /**
- * `platform.openLocalProject` (desktop only): Rust shows the folder dialog and reads + validates the folder
- * (`pick_project_folder`, same limits as uploads). Text files arrive inline in the index; each binary file is
- * fetched once as a raw ArrayBuffer with `read_project_file(ticket, path)`.
+ * Index → LocalProject: text files arrive inline in the index; each binary file is fetched once as a raw
+ * ArrayBuffer with `read_project_file(ticket, path)`. `localFolder.id` is Rust's opaque session handle.
  */
-export async function openLocalProject(): Promise<StudioProject | null> {
-  let index: ProjectIndex | null;
-  try {
-    index = await invoke<ProjectIndex | null>("pick_project_folder");
-  } catch (e) {
-    throw asError(e);
-  }
-  if (!index) return null;
+async function projectFromIndex(index: ProjectIndex): Promise<LocalProject> {
   const files: StudioProject["files"] = {};
   const binaries: string[] = [];
   for (const f of index.files) {
@@ -163,7 +157,36 @@ export async function openLocalProject(): Promise<StudioProject | null> {
   if (index.skippedCount) {
     console.info(`Opened "${index.folder}": skipped ${index.skippedCount} file(s)`, index.skipped);
   }
-  return { manifest: index.manifest, files };
+  return { manifest: index.manifest, files, localFolder: { id: index.folderId, name: index.folder } };
+}
+
+/**
+ * `platform.openLocalProject` (desktop only): Rust shows the folder dialog and reads + validates the folder
+ * (`pick_project_folder`, same limits as uploads) and remembers it under a random session-scoped id.
+ */
+export async function openLocalProject(): Promise<LocalProject | null> {
+  let index: ProjectIndex | null;
+  try {
+    index = await invoke<ProjectIndex | null>("pick_project_folder");
+  } catch (e) {
+    throw asError(e);
+  }
+  return index ? projectFromIndex(index) : null;
+}
+
+/**
+ * `platform.reloadLocalProject` (desktop only): re-reads a folder picked earlier in this session, with no
+ * dialog and the same validation (`reload_project_folder`). Rejects with "The folder is no longer
+ * available. Open it again." when the id is unknown (e.g. after a restart) or the folder is gone.
+ */
+export async function reloadLocalProject(folderId: string): Promise<LocalProject | null> {
+  let index: ProjectIndex | null;
+  try {
+    index = await invoke<ProjectIndex | null>("reload_project_folder", { folderId });
+  } catch (e) {
+    throw asError(e);
+  }
+  return index ? projectFromIndex(index) : null;
 }
 
 /**

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { WebGameApp, type WebGameConfig } from "@webgame/ui";
 import { OfflineBanner } from "./OfflineBanner";
 import { installNativeIntegrations } from "./nativeMenu";
-import { isTauri, openLocalProject, pickFile, saveFile } from "./platform";
+import { isTauri, openLocalProject, pickFile, reloadLocalProject, saveFile } from "./platform";
 import { DEFAULT_SERVER, readSavedServer, saveServer } from "./server";
 import { ServerContext, type ServerState } from "./ServerContext";
 import { ServerSettings } from "./ServerForm";
@@ -27,7 +27,7 @@ export function App() {
         pickFile,
         extraSettings: <ServerSettings />,
         // Desktop only: in a plain browser the Studio uses <input webkitdirectory> and <a download>.
-        ...(isTauri() ? { openLocalProject, saveFile } : {}),
+        ...(isTauri() ? { openLocalProject, reloadLocalProject, saveFile } : {}),
       },
     }),
     [server],

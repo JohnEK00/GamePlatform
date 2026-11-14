@@ -188,6 +188,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(PickedFiles::default())
         .manage(project::OpenProjects::default())
+        .manage(project::ProjectFolders::default())
         .manage(menu::FullscreenToggle::default())
         .menu(|app| menu::build(app))
         .on_menu_event(menu::handle)
@@ -197,6 +198,7 @@ pub fn run() {
             project::pick_project_folder,
             project::read_project_file,
             project::release_project,
+            project::reload_project_folder,
             save::save_file,
             menu::toggle_fullscreen,
         ])
