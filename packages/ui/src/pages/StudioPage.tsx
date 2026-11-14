@@ -451,10 +451,15 @@ export function StudioPage() {
   const session = useRef({ project, link, dirty, activeLink });
   session.current = { project, link, dirty, activeLink };
 
-  // Autosave (debounced), with the link and dirty flag.
+  // Autosave (debounced), with the link and dirty flag. The timer reads the latest session (not this
+  // effect's closure): a timer scheduled for an older render can fire after an immediate save (publish)
+  // but before React commits and clears it, and must not overwrite that save with stale state.
   useEffect(() => {
     setSaveState("saving");
-    const t = setTimeout(() => setSaveState(saveProjectToStorage(project, { link, dirty }) ? "saved" : "too-large"), 500);
+    const t = setTimeout(() => {
+      const s = session.current;
+      setSaveState(saveProjectToStorage(s.project, { link: s.link, dirty: s.dirty }) ? "saved" : "too-large");
+    }, 500);
     return () => clearTimeout(t);
   }, [project, link, dirty]);
   // Flush on unmount (e.g. navigating to the game page right after a publish).
@@ -1055,7 +1060,10 @@ export function StudioPage() {
           onPublished={(l) => {
             setLink(l);
             setDirty(false);
-            saveProjectToStorage(project, { link: l, dirty: false });
+            // Persist now and update the session ref synchronously: a pending autosave timer, or the
+            // unmount flush when we navigate away in the same batch, must see the new link.
+            session.current = { ...session.current, link: l, dirty: false, activeLink: l.apiBase === apiBaseUrl ? l : null };
+            saveProjectToStorage(session.current.project, { link: l, dirty: false });
           }}
           onUnlink={() => setLink(null)}
           onLinkTitle={(title) => setLink((l) => (l ? { ...l, title } : l))}

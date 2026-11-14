@@ -297,7 +297,8 @@ describe("Studio Publish dialog (F013)", () => {
 describe("Studio Open menu, link and reload (F013)", () => {
   it("unlink button clears the link", async () => {
     setup({ session: { link: linkTo(4) } });
-    await act(async () => fireEvent.click(await screen.findByRole("button", { name: "Unlink from Space Dodge" })));
+    const unlink = await screen.findByRole("button", { name: "Unlink from Space Dodge" });
+    await act(async () => fireEvent.click(unlink));
     expect(chip()).toBeNull();
   });
 

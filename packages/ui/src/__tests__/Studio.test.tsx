@@ -165,7 +165,8 @@ describe("StudioPage", () => {
     const client = new ApiClient({ baseUrl: "" });
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     render(<WebGameApp config={{ apiBaseUrl: "", routerMode: "hash", platform: saveFile ? { saveFile } : undefined }} client={client} />);
-    await act(async () => (await screen.findByRole("button", { name: /Export .zip/ })).click());
+    const exportBtn = await screen.findByRole("button", { name: /Export .zip/ });
+    await act(async () => exportBtn.click());
     // The zip is built asynchronously (DEFLATE via CompressionStream).
     await waitFor(() => expect(saveFile ?? clickSpy).toHaveBeenCalled());
     window.location.hash = "";
