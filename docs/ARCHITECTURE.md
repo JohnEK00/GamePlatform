@@ -144,3 +144,74 @@ Follow creators and an activity feed (spec: `docs/features/F002-follow-and-feed.
 - **UI**: `FollowProvider` (follow-state cache, same pattern as `FavoritesProvider`) is mounted in `WebGameApp`. New routes are `/feed` (auth), `/u/:username/followers` and `/u/:username/following`. Feed items reuse F001's `formatScore`.
 - **Desktop**: the native menu forwards a new `"feed"` id (View → Feed, `CmdOrCtrl+Shift+F`) to the webview, which navigates to `/feed`. There is no other desktop-specific code.
 - **Ownership**: unchanged. `activity.rs`, `routes/follows.rs` and `routes/feed.rs` belong to backend-dev.
+
+
+## F003 additions
+Trending and "More like this" discovery (spec: `docs/features/F003-trending-and-related.md`).
+- **A snapshot, refreshed lazily.**
+  - Trending is computed from `play_events` into a small `game_trending` table, with one row per game that has plays in the window.
+  - The new `backend/src/trending.rs` refreshes it once at startup, and again when a `sort=trending` or `/related` read finds it older than `TRENDING_TTL_SECS` (600s).
+  - Refreshes are single flight: concurrent readers wait for the running refresh, then re-check its age.
+  - A failed refresh is logged, and the stale snapshot is served.
+  - There is no background task, consistent with F001/F002.
+  - `GAME_SELECT` reads `plays_week` from the snapshot by primary key, so every `GameSummary` carries `playsWeek`.
+- **Play identity.**
+  - Counted plays now store `play_events.viewer_key`. These are the plays that pass the review-fix `PlayDedupe` and `Limit::Play`; deduplicated plays write no row (the R2 behaviour).
+  - The key is `u:<userId>` when signed in. Otherwise it is `a:` plus the first 16 hex chars of `SHA-256(JWT_SECRET + "|play|" + clientIp)`, with the same client IP and `TRUST_PROXY` handling as the dedupe.
+  - The trending score counts distinct `viewer_key`s per game per UTC day.
+  - Each refresh nulls keys older than the window, so stored IP hashes live for about 8 days at most.
+- **Data**: migration `backend/migrations/0006_f003.sql` runs after `0004_perf_indices.sql` and F002's `0005_f002.sql`:
+  ```sql
+  ALTER TABLE play_events ADD COLUMN viewer_key TEXT;    -- NULL for rows before F003 and after the purge
+  CREATE INDEX idx_play_events_day_game ON play_events(day, game_id);
+
+  CREATE TABLE game_trending (
+      game_id      TEXT PRIMARY KEY NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      plays_week   INTEGER NOT NULL,                     -- counted non-owner plays in the window
+      score        REAL NOT NULL,                        -- trendingScore (API.md § F003)
+      computed_at  TEXT NOT NULL                         -- RFC3339 millis Z of the refresh
+  );
+  CREATE INDEX idx_game_trending_score ON game_trending(score DESC);
+  ```
+- **Refresh SQL** (normative shape, run in one transaction). Binds: `?1` = the window's first day as `YYYY-MM-DD` (today − 6), `?2` = today, `?3` = now as RFC3339.
+  ```sql
+  DELETE FROM game_trending;
+  INSERT INTO game_trending (game_id, plays_week, score, computed_at)
+  SELECT d.game_id, SUM(d.plays),
+         SUM(d.viewers * (7.0 - (julianday(?2) - julianday(d.day))) / 7.0), ?3
+  FROM (
+      SELECT e.game_id, e.day, COUNT(*) AS plays,
+             COUNT(DISTINCT COALESCE(e.viewer_key, 'row:' || e.id)) AS viewers
+      FROM play_events e JOIN games g ON g.id = e.game_id
+      WHERE e.day >= ?1 AND e.day <= ?2
+        AND (e.user_id IS NULL OR e.user_id <> g.owner_id)
+      GROUP BY e.game_id, e.day
+  ) d
+  GROUP BY d.game_id;
+  UPDATE play_events SET viewer_key = NULL WHERE day < ?1 AND viewer_key IS NOT NULL;
+  ```
+- **Related query.**
+  1. Rust loads the source's tags (at most 8) and their published-game counts `n(tag)`, and computes `weight = 1 / log2(2 + n)` itself. SQLite math functions are not assumed.
+  2. The weights are bound into the candidate query, one `WHEN ?tag THEN ?weight` pair per source tag:
+     ```sql
+     SELECT t.game_id,
+            SUM(CASE t.tag WHEN ?t1 THEN ?w1 /* … one pair per source tag */ ELSE 0 END) AS tag_score,
+            COUNT(*) AS shared,
+            group_concat(t.tag, ',') AS shared_tags,
+            MAX(g.owner_id) AS owner_id
+     FROM game_tags t
+     JOIN games g ON g.id = t.game_id
+     LEFT JOIN game_trending tr ON tr.game_id = g.id
+     WHERE t.tag IN (?t1 /* , … */) AND t.game_id <> ?src AND g.published = 1
+     GROUP BY t.game_id
+     ORDER BY tag_score DESC, shared DESC, COALESCE(MAX(tr.score), 0) DESC,
+              MAX(g.plays) DESC, MAX(g.created_at) DESC, t.game_id
+     LIMIT 100
+     ```
+  3. Rust applies the per-owner cap (2) in rank order, and fills from the trending order if the list is short.
+  4. It then loads the summaries in one `GAME_SELECT … WHERE g.id IN (…)` query and keeps the computed order.
+- **UI**:
+  - `GameCard` gains `highlight?: "trending" | "related"`, which shows a weekly-plays line or the shared tags.
+  - A new `RelatedGames` component sits at the bottom of `GamePage`, and a `TrendingShelf` sits on the home page.
+  - The desktop app inherits all of this through `@webgame/ui`.
+- **Ownership**: `trending.rs` and the `/related` handler belong to backend-dev. `RelatedGames.tsx` belongs to frontend-dev.
