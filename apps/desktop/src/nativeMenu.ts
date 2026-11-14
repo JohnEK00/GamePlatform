@@ -12,6 +12,7 @@ export const MENU_EVENT = "app-menu";
 const ROUTES: Record<string, string> = {
   upload: "/upload",
   settings: "/settings",
+  feed: "/feed",
   docs: "/docs",
   "open-folder": "/studio",
 };

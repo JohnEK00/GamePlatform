@@ -1,6 +1,6 @@
 //! Native application menu. Window actions (reload, fullscreen, devtools, about, quit) run in Rust;
 //! navigation items are forwarded to the webview as a `MENU_EVENT` event whose payload is the item id
-//! (`"upload"`, `"open-folder"`, `"settings"`, `"docs"`), handled in src/nativeMenu.ts.
+//! (`"upload"`, `"open-folder"`, `"settings"`, `"feed"`, `"docs"`), handled in src/nativeMenu.ts.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use tauri_plugin_dialog::DialogExt;
 pub const MENU_EVENT: &str = "app-menu";
 const MAIN_WINDOW: &str = "main";
 /// Ids forwarded to the webview.
-const FORWARDED: &[&str] = &["upload", "open-folder", "settings", "docs"];
+const FORWARDED: &[&str] = &["upload", "open-folder", "settings", "feed", "docs"];
 
 /// The F11 menu accelerator and the webview's F11 key listener can both fire for one key press;
 /// toggles closer together than this are treated as one.
@@ -60,6 +60,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .build()?;
 
     let view = SubmenuBuilder::new(app, "&View")
+        .item(&MenuItemBuilder::with_id("feed", "F&eed").accelerator("CmdOrCtrl+Shift+F").build(app)?)
+        .separator()
         .item(&MenuItemBuilder::with_id("reload", "&Reload").accelerator("CmdOrCtrl+R").build(app)?)
         .item(&MenuItemBuilder::with_id("fullscreen", "Toggle &Fullscreen").accelerator("F11").build(app)?);
     #[cfg(debug_assertions)]
@@ -143,5 +145,10 @@ mod tests {
         assert!(t.should_toggle(start));
         assert!(!t.should_toggle(start + Duration::from_millis(100)), "double fire is ignored");
         assert!(t.should_toggle(start + Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn feed_is_forwarded_to_the_webview() {
+        assert!(FORWARDED.contains(&"feed"));
     }
 }
