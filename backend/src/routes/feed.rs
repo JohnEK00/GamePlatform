@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use crate::AppState;
-use crate::activity::{KIND_ACHIEVEMENT, KIND_PERSONAL_BEST, KINDS};
+use crate::activity::{KIND_ACHIEVEMENT, KIND_GAME_UPDATED, KIND_PERSONAL_BEST, KINDS};
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::extract::ApiQuery;
@@ -22,6 +22,8 @@ use crate::routes::games::limit_user;
 pub const FEED_LIMIT_DEFAULT: i64 = 20;
 pub const FEED_LIMIT_MAX: i64 = 50;
 pub const SUGGESTIONS_MAX: i64 = 6;
+/// F004: at most this many notes per `gameUpdated` item.
+pub const FEED_CHANGES_MAX: usize = 3;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +41,22 @@ pub struct FeedAchievement {
     pub count: i64,
 }
 
+/// F004 `FeedUpdate.changes[]`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedChange {
+    pub version: i64,
+    pub notes: String,
+}
+
+/// F004 `FeedUpdate`: the versions covered by a (possibly coalesced) `gameUpdated` item.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedUpdate {
+    pub from_version: i64,
+    pub changes: Vec<FeedChange>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeedItem {
@@ -51,6 +69,8 @@ pub struct FeedItem {
     pub version: Option<i64>,
     pub score: Option<FeedScore>,
     pub achievement: Option<FeedAchievement>,
+    /// F004: non-null for `gameUpdated` only.
+    pub update: Option<FeedUpdate>,
 }
 
 #[derive(Serialize)]
@@ -135,7 +155,7 @@ pub async fn get_feed(
 
     let rows = sqlx::query(
         "SELECT e.id, e.kind, e.game_id, e.version, e.score, e.first_score, e.ach_id, \
-           e.ach_count, e.created_at, \
+           e.ach_count, e.created_at, COALESCE(e.from_version, e.version) AS from_version, \
            (e.actor_id IN (SELECT followee_id FROM follows WHERE follower_id = ?1)) AS followed, \
            a.name AS a_name, a.description AS a_description, a.icon AS a_icon, \
            u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
@@ -183,6 +203,30 @@ pub async fn get_feed(
         .map(|r| game_row_from_row(r).map(|g| (g.id.clone(), g)))
         .collect::<Result<_, _>>()?;
 
+    // F004: non-empty notes of this page's updated games in one query; sliced per item below.
+    let mut updated_ids: Vec<String> = Vec::new();
+    for r in rows {
+        let kind: String = r.try_get("kind")?;
+        let gid: String = r.try_get("game_id")?;
+        if kind == KIND_GAME_UPDATED && !updated_ids.contains(&gid) {
+            updated_ids.push(gid);
+        }
+    }
+    let mut notes_by_game: HashMap<String, Vec<(i64, String)>> = HashMap::new();
+    if !updated_ids.is_empty() {
+        let note_rows: Vec<(String, i64, String)> = sqlx::query_as(
+            "SELECT game_id, version, notes FROM game_versions \
+             WHERE game_id IN (SELECT value FROM json_each(?)) AND notes <> '' \
+             ORDER BY version DESC",
+        )
+        .bind(json_list(&updated_ids)?)
+        .fetch_all(&state.db)
+        .await?;
+        for (gid, version, notes) in note_rows {
+            notes_by_game.entry(gid).or_default().push((version, notes));
+        }
+    }
+
     let mut items = Vec::with_capacity(rows.len());
     for r in rows {
         let game_id: String = r.try_get("game_id")?;
@@ -221,6 +265,31 @@ pub async fn get_feed(
         } else {
             None
         };
+        let update = if kind == KIND_GAME_UPDATED {
+            let version: i64 = r.try_get::<Option<i64>, _>("version")?.unwrap_or(0);
+            let from_version: i64 = r
+                .try_get::<Option<i64>, _>("from_version")?
+                .unwrap_or(version);
+            let changes = notes_by_game
+                .get(&game_id)
+                .map(|vs| {
+                    vs.iter()
+                        .filter(|(v, _)| (from_version..=version).contains(v))
+                        .take(FEED_CHANGES_MAX)
+                        .map(|(v, n)| FeedChange {
+                            version: *v,
+                            notes: n.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(FeedUpdate {
+                from_version,
+                changes,
+            })
+        } else {
+            None
+        };
         items.push(FeedItem {
             id: id.to_string(),
             actor: user_ref_from_row(r, "u_")?,
@@ -237,6 +306,7 @@ pub async fn get_feed(
             },
             score,
             achievement,
+            update,
             kind,
         });
     }

@@ -38,6 +38,8 @@ pub enum Limit {
     Follow,
     /// feed reads (`GET /api/feed` + `/api/feed/suggestions`, shared): 60/min, per user
     Feed,
+    /// F004 release-notes edits (`PATCH …/versions/{version}`): 30 per 10 min, per user
+    VersionNotes,
 }
 
 impl Limit {
@@ -54,6 +56,7 @@ impl Limit {
             Limit::Play => (30, Duration::from_secs(60)),
             Limit::Follow => (60, Duration::from_secs(600)),
             Limit::Feed => (60, Duration::from_secs(60)),
+            Limit::VersionNotes => (30, Duration::from_secs(600)),
         }
     }
 }

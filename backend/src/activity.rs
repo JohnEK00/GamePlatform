@@ -90,22 +90,27 @@ pub async fn record_game_updated(
         let (now, day) = stamp(now_dt);
         let (cutoff, _) = stamp(now_dt - Duration::hours(UPDATE_COALESCE_HOURS));
         let mut tx = conn.begin().await?;
-        sqlx::query(
-            "DELETE FROM activity_events WHERE game_id = ? AND kind = ? AND created_at >= ?",
+        // F004: remember the lowest version covered by the coalesced rows.
+        let covered: Vec<Option<i64>> = sqlx::query_scalar(
+            "DELETE FROM activity_events WHERE game_id = ? AND kind = ? AND created_at >= ? \
+             RETURNING COALESCE(from_version, version)",
         )
         .bind(game_id)
         .bind(KIND_GAME_UPDATED)
         .bind(cutoff)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await?;
+        let from_version = covered.into_iter().flatten().fold(version, i64::min);
         sqlx::query(
-            "INSERT INTO activity_events (actor_id, kind, game_id, version, day, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO activity_events \
+             (actor_id, kind, game_id, version, from_version, day, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(owner_id)
         .bind(KIND_GAME_UPDATED)
         .bind(game_id)
         .bind(version)
+        .bind(from_version)
         .bind(day)
         .bind(now)
         .execute(&mut *tx)

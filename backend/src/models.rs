@@ -47,6 +47,18 @@ pub struct GameSummary {
     pub favorites: i64,
     /// F003: counted non-owner plays over the last 7 UTC days (trending snapshot).
     pub plays_week: i64,
+    /// F004: latest bundle replace made while the game was published; `None` if none.
+    pub last_updated_at: Option<String>,
+}
+
+/// `GameVersion` (API.md § F004): one row of a game's version history.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameVersion {
+    pub version: i64,
+    pub notes: String,
+    pub created_at: String,
+    pub current: bool,
 }
 
 /// `RelatedGame` (API.md § F003): a summary plus why it was picked.
@@ -113,6 +125,8 @@ pub struct Game {
     pub is_favorite: bool,
     pub achievements: Vec<AchievementDef>,
     pub leaderboard: LeaderboardConfig,
+    /// F004: the current version's history row.
+    pub latest_version: GameVersion,
 }
 
 /// `Game.leaderboard` (API.md § F001): `{ order, format, label }`.
@@ -225,6 +239,7 @@ pub struct GameRow {
     pub updated_at: String,
     pub favorites: i64,
     pub plays_week: i64,
+    pub last_updated_at: Option<String>,
     pub owner: UserRef,
     pub tags: Vec<String>,
     pub leaderboard: LeaderboardConfig,
@@ -234,7 +249,7 @@ pub struct GameRow {
 pub const GAME_SELECT: &str = "SELECT g.id, g.owner_id, g.title, g.description, g.published, \
      g.version, g.entry, g.width, g.height, g.thumbnail_ext, g.thumbnail_version, g.plays, \
      g.rating_sum, g.rating_count, g.created_at, g.updated_at, \
-     g.score_order, g.score_format, g.score_label, \
+     g.score_order, g.score_format, g.score_label, g.last_updated_at, \
      u.id AS o_id, u.username AS o_username, u.display_name AS o_display_name, \
      u.avatar_ext AS o_avatar_ext, u.avatar_version AS o_avatar_version, \
      (SELECT group_concat(tag, ',') FROM (SELECT tag FROM game_tags t WHERE t.game_id = g.id \
@@ -265,6 +280,7 @@ pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
         updated_at: row.try_get("updated_at")?,
         favorites: row.try_get("favorites")?,
         plays_week: row.try_get("plays_week")?,
+        last_updated_at: row.try_get("last_updated_at")?,
         owner: user_ref_from_row(row, "o_")?,
         tags: tags
             .map(|t| {
@@ -311,6 +327,7 @@ impl GameRow {
             updated_at: self.updated_at.clone(),
             favorites: self.favorites,
             plays_week: self.plays_week,
+            last_updated_at: self.last_updated_at.clone(),
         }
     }
 
@@ -320,6 +337,7 @@ impl GameRow {
         viewer: Option<&str>,
         is_favorite: bool,
         achievements: Vec<AchievementDef>,
+        latest_version: GameVersion,
     ) -> Game {
         Game {
             summary: self.summary(),
@@ -333,6 +351,7 @@ impl GameRow {
             is_favorite,
             achievements,
             leaderboard: self.leaderboard.clone(),
+            latest_version,
         }
     }
 

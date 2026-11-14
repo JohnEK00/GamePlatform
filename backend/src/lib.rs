@@ -14,6 +14,7 @@ pub mod routes;
 pub mod seed;
 pub mod storage;
 pub mod trending;
+pub mod versions;
 
 use std::sync::Arc;
 

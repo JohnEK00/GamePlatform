@@ -14,12 +14,13 @@ use crate::bundle::{self, AchievementMeta, BundleMeta};
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiMultipart, ApiPath, ApiQuery};
 use crate::models::{
-    AchievementDef, GAME_SELECT, Game, GameRow, GameSummary, Page, achievement_icon_url,
-    game_row_from_row, now_rfc3339, rating_avg,
+    AchievementDef, GAME_SELECT, Game, GameRow, GameSummary, GameVersion, Page,
+    achievement_icon_url, game_row_from_row, now_rfc3339, rating_avg,
 };
 use crate::ratelimit::{ClientIp, Limit, key_for};
 use crate::storage::validate_image;
 use crate::trending;
+use crate::versions;
 
 pub const TITLE_MAX: usize = 80;
 pub const DESCRIPTION_MAX: usize = 5000;
@@ -115,7 +116,26 @@ pub async fn build_game(state: &AppState, id: &str, viewer: Option<&str>) -> App
     let rating = my_rating(state, id, viewer).await?;
     let fav = is_favorite(state, id, viewer).await?;
     let achievements = achievement_defs(state, id).await?;
-    Ok(row.game(rating, viewer, fav, achievements))
+    let latest = latest_version(state, &row).await?;
+    Ok(row.game(rating, viewer, fav, achievements, latest))
+}
+
+/// F004: the current version's `game_versions` row (synthesised if missing).
+async fn latest_version(state: &AppState, row: &GameRow) -> AppResult<GameVersion> {
+    let found: Option<(String, String)> = sqlx::query_as(
+        "SELECT notes, created_at FROM game_versions WHERE game_id = ? AND version = ?",
+    )
+    .bind(&row.id)
+    .bind(row.version)
+    .fetch_optional(&state.db)
+    .await?;
+    let (notes, created_at) = found.unwrap_or_else(|| (String::new(), row.updated_at.clone()));
+    Ok(GameVersion {
+        version: row.version,
+        notes,
+        created_at,
+        current: true,
+    })
 }
 
 /// Replace the achievement definitions of a game. Unlocks of ids that still exist are kept;
@@ -152,6 +172,27 @@ async fn sync_achievements(
         .execute(&mut *tx)
         .await?;
     }
+    Ok(())
+}
+
+/// F004: write a `game_versions` row (part of the caller's main write, not best effort).
+async fn insert_version_row(
+    tx: &mut sqlx::SqliteConnection,
+    game_id: &str,
+    version: i64,
+    notes: &str,
+    created_at: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT OR REPLACE INTO game_versions (game_id, version, notes, created_at) \
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(game_id)
+    .bind(version)
+    .bind(notes)
+    .bind(created_at)
+    .execute(&mut *tx)
+    .await?;
     Ok(())
 }
 
@@ -260,6 +301,8 @@ pub struct NewGame {
     pub description: String,
     pub tags: Vec<String>,
     pub published: bool,
+    /// F004: version 1's release notes (already parsed with `versions::parse_notes`).
+    pub notes: String,
 }
 
 /// Validate + extract a bundle and insert a new game. Returns the new game id.
@@ -307,6 +350,7 @@ pub async fn create_game_record(
         .await?;
         replace_tags(&mut tx, &id, &new.tags).await?;
         sync_achievements(&mut tx, &id, &meta.achievements).await?;
+        insert_version_row(&mut tx, &id, 1, &new.notes, &now).await?;
         if new.published {
             activity::record_game_published(&mut tx, &id, owner_id, 1).await;
         }
@@ -536,10 +580,12 @@ pub async fn create_game(
     let mut published = true;
     let mut bundle_bytes: Option<Vec<u8>> = None;
     let mut thumbnail: Option<Vec<u8>> = None;
+    let mut notes = String::new();
 
     while let Some(field) = multipart.next_field().await? {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
+            "notes" => notes = versions::read_notes_field(field).await?,
             "title" => {
                 let t = field.text().await?;
                 if !t.trim().is_empty() {
@@ -580,6 +626,7 @@ pub async fn create_game(
         description,
         tags,
         published,
+        notes,
     };
     let id = create_game_record(&state, &user.id, new, bundle_bytes, thumbnail).await?;
     let game = build_game(&state, &id, Some(&user.id)).await?;
@@ -652,11 +699,24 @@ pub async fn upload_bundle(
     let game = fetch_owned_game(&state, &id, &user.id).await?;
     limit_user(&state, Limit::Upload, &user.id)?;
     let mut bundle_bytes = None;
+    let mut notes = String::new();
+    let mut expected_version: Option<i64> = None;
+    // F004: `notes` and `expectedVersion` are validated here, before the claim/extraction.
     while let Some(field) = multipart.next_field().await? {
-        if field.name() == Some("bundle") {
-            let b = field.bytes().await?;
-            check_bundle_size(&b)?;
-            bundle_bytes = Some(b.to_vec());
+        match field.name() {
+            Some("bundle") => {
+                let b = field.bytes().await?;
+                check_bundle_size(&b)?;
+                bundle_bytes = Some(b.to_vec());
+            }
+            Some("notes") => notes = versions::read_notes_field(field).await?,
+            Some("expectedVersion") => {
+                expected_version = Some(versions::parse_positive(
+                    &field.text().await?,
+                    "expectedVersion",
+                )?);
+            }
+            _ => {}
         }
     }
     let bytes = bundle_bytes
@@ -672,6 +732,11 @@ pub async fn upload_bundle(
         .fetch_optional(&state.db)
         .await?;
     let old_version = match current {
+        Some(v) if expected_version.is_some_and(|ev| ev != v) => {
+            return Err(AppError::Conflict(format!(
+                "The game is at v{v}; reload and retry"
+            )));
+        }
         Some(v) if v == game.version => v,
         Some(_) => return Err(conflict()),
         None => return Err(AppError::not_found("Game")),
@@ -690,6 +755,8 @@ pub async fn upload_bundle(
     }
 
     let res: AppResult<bool> = async {
+        // One timestamp for `updated_at`, the version row and `last_updated_at`.
+        let now = now_rfc3339();
         let mut tx = state.db.begin().await?;
         let r = sqlx::query(
             "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, score_order = ?,              score_format = ?, score_label = ?, updated_at = ? WHERE id = ? AND version = ?",
@@ -701,7 +768,7 @@ pub async fn upload_bundle(
         .bind(&meta.leaderboard.order)
         .bind(&meta.leaderboard.format)
         .bind(&meta.leaderboard.label)
-        .bind(now_rfc3339())
+        .bind(&now)
         .bind(&id)
         .bind(old_version)
         .execute(&mut *tx)
@@ -710,7 +777,13 @@ pub async fn upload_bundle(
             return Ok(false);
         }
         sync_achievements(&mut tx, &id, &meta.achievements).await?;
+        insert_version_row(&mut tx, &id, new_version, &notes, &now).await?;
         if game.published {
+            sqlx::query("UPDATE games SET last_updated_at = ? WHERE id = ?")
+                .bind(&now)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
             activity::record_game_updated(&mut tx, &id, &game.owner_id, new_version).await;
         }
         tx.commit().await?;

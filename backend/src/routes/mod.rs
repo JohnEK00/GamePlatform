@@ -16,6 +16,7 @@ pub mod scores;
 pub mod stats;
 pub mod tags;
 pub mod users;
+pub mod versions;
 
 use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::{HeaderValue, Method, header};
@@ -91,6 +92,11 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/games/{id}/thumbnail",
             put(games::upload_thumbnail).layer(image_limit),
+        )
+        .route("/games/{id}/versions", get(versions::list_versions))
+        .route(
+            "/games/{id}/versions/{version}",
+            axum::routing::patch(versions::update_version_notes),
         )
         .route("/games/{id}/play", post(games::record_play))
         .route("/games/{id}/related", get(related::related_games))
