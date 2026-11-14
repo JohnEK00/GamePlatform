@@ -240,6 +240,7 @@ type UserProfileResponse = {      // GET /api/users/{username}; v1 { user, games
   followers: number;              // users following this user
   following: number;              // users this user follows
   isFollowing: boolean;           // 🔓 the viewer follows this user; false when anonymous or viewing yourself
+  gamesTotal: number;             // review-fix R12: games visible to the viewer (the `games` array is one page)
 }
 
 type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked"
