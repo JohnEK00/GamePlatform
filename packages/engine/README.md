@@ -288,7 +288,8 @@ Arcade AABB physics.
 
 | call | posts to `window.parent` |
 |---|---|
-| `submitScore(n)` | `{ type: 'webgame:score', score: n }` (non-finite values are ignored) |
+| `submitScore(n)` | `{ type: 'webgame:score', score: n, requestId: 'sc-<n>' }` (non-finite values are ignored). Returns `Promise<ScoreResultView \| null>`, see [Leaderboards](#leaderboards-f001) |
+| `getLeaderboard(opts?)` | `{ type: 'webgame:leaderboard-get', requestId: 'lb-<n>', period, limit }`. Returns `Promise<LeaderboardView \| null>` |
 | `ready()` | `{ type: 'webgame:ready' }` (called automatically after `load`) |
 | `error(message)` | `{ type: 'webgame:error', message }` (also posted automatically on crashes) |
 | `requestFullscreen()` | `{ type: 'webgame:fullscreen' }` (the parent fullscreens its player wrapper) |
@@ -301,6 +302,41 @@ Messages accepted from the parent (only when `event.source === window.parent`):
 * `webgame:resume`
 * `webgame:mute { muted }`
 * `webgame:load { data }`, the handshake reply (a later one is merged in)
+* `webgame:leaderboard { requestId, leaderboard, error? }` and `webgame:score-result { requestId, result, error? }`,
+  the replies to the two requests below (unknown `requestId`s are ignored)
+
+## Leaderboards (F001)
+
+Optional `game.json` block (all keys optional; checked on upload and by `scripts/pack-examples.mjs`):
+```json
+"leaderboard": { "order": "asc", "format": "time", "label": "Best time" }
+```
+`order` is `"desc"` (higher is better, default) or `"asc"`; `format` is `"number"` (default) or `"time"`
+(integer milliseconds, shown as `m:ss.mmm`); `label` is at most 24 characters.
+
+```js
+// game over
+const result = await engine.platform.submitScore(score);       // posts immediately
+if (result?.personalBest) showNewBest(result.ranks);              // { day, week, all }
+const board = await engine.platform.getLeaderboard({ period: 'week', limit: 5 });
+if (board) for (const e of board.entries) draw(e.rank, e.name, e.display, e.isMe);
+```
+
+* `getLeaderboard({ period?: 'day' | 'week' | 'all' = 'all', limit?: number = 10 })`: `limit` is rounded and
+  clamped to 1–25. It resolves `null` when there is no parent window, on an invalid period (warned), on a reply
+  carrying `error`, after `LEADERBOARD_TIMEOUT_MS` (5000 ms), or when `MAX_PENDING_LEADERBOARD` (4) requests
+  are already pending (warned).
+* `submitScore(n)` still posts synchronously; the promise resolves with the parent's `ScoreResultView`
+  (`{ score, display, rank, personalBest, ranks: { day, week, all } }`), or `null` on `error` (e.g. anonymous
+  player, Studio preview), without a parent, or after `SCORE_RESULT_TIMEOUT_MS` (8000 ms). Ignoring the
+  return value is fine.
+* `LeaderboardView` is `{ period, order, format, label, totalPlayers, entries: [{ rank, name, score, display, isMe }], me: { rank, score, display } | null, sample? }`.
+  `me` is null for anonymous players or when they have no score in the period; `sample: true` marks the
+  Studio preview's fake data. The view is sanitised by the parent: no user ids, avatars or tokens.
+* Destroying the engine resolves every pending request with `null`. Always handle `null`: older hosts never
+  reply.
+* The types `LeaderboardPeriod`, `LeaderboardView`, `ScoreResultView` and `PlatformReply` are exported.
+* The dev harness (`index.html`) and `studio.html` answer with sample boards so the UI can be tested locally.
 
 ## Achievements
 

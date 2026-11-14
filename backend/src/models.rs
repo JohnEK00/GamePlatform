@@ -99,6 +99,23 @@ pub struct Game {
     pub is_owner: bool,
     pub is_favorite: bool,
     pub achievements: Vec<AchievementDef>,
+    pub leaderboard: LeaderboardConfig,
+}
+
+/// `Game.leaderboard` (API.md § F001): `{ order, format, label }`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaderboardConfig {
+    pub order: String,
+    pub format: String,
+    pub label: String,
+}
+
+impl LeaderboardConfig {
+    /// Lower scores are better.
+    pub fn ascending(&self) -> bool {
+        self.order == "asc"
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -196,12 +213,14 @@ pub struct GameRow {
     pub favorites: i64,
     pub owner: UserRef,
     pub tags: Vec<String>,
+    pub leaderboard: LeaderboardConfig,
 }
 
 /// SELECT prefix for [`GameRow`]; append `WHERE ...`.
 pub const GAME_SELECT: &str = "SELECT g.id, g.owner_id, g.title, g.description, g.published, \
      g.version, g.entry, g.width, g.height, g.thumbnail_ext, g.thumbnail_version, g.plays, \
      g.rating_sum, g.rating_count, g.created_at, g.updated_at, \
+     g.score_order, g.score_format, g.score_label, \
      u.id AS o_id, u.username AS o_username, u.display_name AS o_display_name, \
      u.avatar_ext AS o_avatar_ext, u.avatar_version AS o_avatar_version, \
      (SELECT group_concat(tag, ',') FROM (SELECT tag FROM game_tags t WHERE t.game_id = g.id \
@@ -238,6 +257,11 @@ pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
                     .collect()
             })
             .unwrap_or_default(),
+        leaderboard: LeaderboardConfig {
+            order: row.try_get("score_order")?,
+            format: row.try_get("score_format")?,
+            label: row.try_get("score_label")?,
+        },
     })
 }
 
@@ -290,6 +314,7 @@ impl GameRow {
             is_owner: viewer == Some(self.owner_id.as_str()),
             is_favorite,
             achievements,
+            leaderboard: self.leaderboard.clone(),
         }
     }
 

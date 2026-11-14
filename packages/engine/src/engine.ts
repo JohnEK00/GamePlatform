@@ -253,6 +253,10 @@ export class Engine {
         case 'webgame:load':
           this.storage.hydrate(d.data); // later loads merge; non-objects are ignored
           break;
+        case 'webgame:leaderboard':
+        case 'webgame:score-result':
+          this.platform.handleReply(d);
+          break;
       }
     }) as EventListener);
 
@@ -485,6 +489,7 @@ export class Engine {
   destroy(): void {
     this.state = 'destroyed';
     this.storage.flush();
+    this.platform.cancelPending();
     cancelAnimationFrame(this.raf);
     for (const f of this.cleanup.splice(0)) f();
     this.audio.stopAll();

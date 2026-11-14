@@ -283,7 +283,8 @@ pub async fn create_game_record(
         let mut tx = state.db.begin().await?;
         sqlx::query(
             "INSERT INTO games (id, owner_id, title, description, published, version, entry, \
-             width, height, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+             width, height, score_order, score_format, score_label, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(owner_id)
@@ -293,6 +294,9 @@ pub async fn create_game_record(
         .bind(&meta.entry)
         .bind(meta.width)
         .bind(meta.height)
+        .bind(&meta.leaderboard.order)
+        .bind(&meta.leaderboard.format)
+        .bind(&meta.leaderboard.label)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
@@ -626,13 +630,16 @@ pub async fn upload_bundle(
     let res: AppResult<bool> = async {
         let mut tx = state.db.begin().await?;
         let r = sqlx::query(
-            "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, updated_at = ? \
-             WHERE id = ? AND version = ?",
+            "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, score_order = ?, \
+             score_format = ?, score_label = ?, updated_at = ? WHERE id = ? AND version = ?",
         )
         .bind(new_version)
         .bind(&meta.entry)
         .bind(meta.width)
         .bind(meta.height)
+        .bind(&meta.leaderboard.order)
+        .bind(&meta.leaderboard.format)
+        .bind(&meta.leaderboard.label)
         .bind(now_rfc3339())
         .bind(&id)
         .bind(old_version)

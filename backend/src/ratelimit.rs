@@ -30,6 +30,8 @@ pub enum Limit {
     Score,
     /// save PUT: 60/min
     Save,
+    /// leaderboard reads (`GET …/leaderboard`): 120/min, per user or per IP when anonymous
+    Leaderboard,
 }
 
 impl Limit {
@@ -42,6 +44,7 @@ impl Limit {
             Limit::Report => (10, Duration::from_secs(3600)),
             Limit::Score => (60, Duration::from_secs(60)),
             Limit::Save => (60, Duration::from_secs(60)),
+            Limit::Leaderboard => (120, Duration::from_secs(60)),
         }
     }
 }

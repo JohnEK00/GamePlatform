@@ -32,6 +32,29 @@ pub struct AchievementMeta {
     pub icon: Option<String>,
 }
 
+pub const LEADERBOARD_LABEL_MAX: usize = 24;
+
+/// The optional `leaderboard` block of game.json (GAME_FORMAT.md § F001), with defaults applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderboardMeta {
+    /// `"desc"` (higher is better) or `"asc"` (lower is better).
+    pub order: String,
+    /// `"number"` or `"time"` (milliseconds).
+    pub format: String,
+    /// Trimmed, 0-24 chars; `""` = UI default.
+    pub label: String,
+}
+
+impl Default for LeaderboardMeta {
+    fn default() -> Self {
+        Self {
+            order: "desc".into(),
+            format: "number".into(),
+            label: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleMeta {
     pub name: Option<String>,
@@ -39,6 +62,7 @@ pub struct BundleMeta {
     pub width: i64,
     pub height: i64,
     pub achievements: Vec<AchievementMeta>,
+    pub leaderboard: LeaderboardMeta,
 }
 
 fn invalid(msg: impl Into<String>) -> AppError {
@@ -223,6 +247,49 @@ pub fn parse_achievements(v: &Value) -> Result<Vec<AchievementMeta>, AppError> {
     Ok(out)
 }
 
+/// Validate the optional `leaderboard` object of game.json (`v` is the whole manifest).
+/// Absent (or `null`) block/keys take their defaults; unknown keys are ignored.
+pub fn parse_leaderboard(v: &Value) -> Result<LeaderboardMeta, AppError> {
+    let obj = match v.get("leaderboard") {
+        None | Some(Value::Null) => return Ok(LeaderboardMeta::default()),
+        Some(Value::Object(o)) => o,
+        Some(_) => return Err(invalid("game.json: leaderboard must be an object")),
+    };
+    let mut meta = LeaderboardMeta::default();
+    match obj.get("order") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(s)) if s == "desc" || s == "asc" => meta.order = s.clone(),
+        Some(_) => {
+            return Err(invalid(
+                "game.json: leaderboard.order must be \"desc\" or \"asc\"",
+            ));
+        }
+    }
+    match obj.get("format") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(s)) if s == "number" || s == "time" => meta.format = s.clone(),
+        Some(_) => {
+            return Err(invalid(
+                "game.json: leaderboard.format must be \"number\" or \"time\"",
+            ));
+        }
+    }
+    match obj.get("label") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(s)) => {
+            let label = s.trim();
+            if label.chars().count() > LEADERBOARD_LABEL_MAX {
+                return Err(invalid(format!(
+                    "game.json: leaderboard.label must be at most {LEADERBOARD_LABEL_MAX} characters"
+                )));
+            }
+            meta.label = label.to_string();
+        }
+        Some(_) => return Err(invalid("game.json: leaderboard.label must be a string")),
+    }
+    Ok(meta)
+}
+
 pub fn parse_game_json(bytes: &[u8]) -> Result<BundleMeta, AppError> {
     let v: Value = serde_json::from_slice(bytes)
         .map_err(|e| invalid(format!("game.json is not valid JSON: {e}")))?;
@@ -242,12 +309,14 @@ pub fn parse_game_json(bytes: &[u8]) -> Result<BundleMeta, AppError> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     let achievements = parse_achievements(&v)?;
+    let leaderboard = parse_leaderboard(&v)?;
     Ok(BundleMeta {
         name,
         entry,
         width,
         height,
         achievements,
+        leaderboard,
     })
 }
 

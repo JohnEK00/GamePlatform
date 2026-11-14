@@ -101,7 +101,7 @@ describe('Platform & Storage', () => {
     p.ready();
     p.error('boom');
     expect(sent).toEqual([
-      { type: 'webgame:score', score: 1234 },
+      { type: 'webgame:score', score: 1234, requestId: 'sc-1' },
       { type: 'webgame:ready' },
       { type: 'webgame:error', message: 'boom' },
     ]);

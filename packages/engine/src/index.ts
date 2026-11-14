@@ -23,7 +23,10 @@ export { ParticleEmitter } from './particles';
 export type { EmitterConfig, Range } from './particles';
 export { Physics, Body } from './physics';
 export type { BodyOptions, PhysicsOptions, Side } from './physics';
-export { Platform, Storage, ACHIEVEMENT_ID_RE } from './platform';
+export {
+  Platform, Storage, ACHIEVEMENT_ID_RE, LEADERBOARD_TIMEOUT_MS, SCORE_RESULT_TIMEOUT_MS, MAX_PENDING_LEADERBOARD,
+} from './platform';
+export type { LeaderboardPeriod, LeaderboardView, ScoreResultView, PlatformReply } from './platform';
 export { BundleFiles, deriveStorageKey, mimeType, normalizePath } from './files';
 export type { FileMap, FileData } from './files';
 export { DrawCounter, FrameMeter, debugLines } from './debug';

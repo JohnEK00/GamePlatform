@@ -58,6 +58,18 @@ function validateAchievements(list, files) {
   return errs;
 }
 
+/** game.json "leaderboard" (optional) — docs/GAME_FORMAT.md "F001 additions". Unknown keys are ignored. */
+function validateLeaderboard(lb) {
+  if (lb === undefined) return [];
+  if (!lb || typeof lb !== 'object' || Array.isArray(lb)) return ['"leaderboard" must be an object'];
+  const errs = [];
+  if (lb.order !== undefined && lb.order !== 'desc' && lb.order !== 'asc') errs.push('leaderboard.order must be "desc" or "asc"');
+  if (lb.format !== undefined && lb.format !== 'number' && lb.format !== 'time') errs.push('leaderboard.format must be "number" or "time"');
+  if (lb.label !== undefined && (typeof lb.label !== 'string' || lb.label.trim().length > 24))
+    errs.push('leaderboard.label must be a string of at most 24 chars (trimmed)');
+  return errs;
+}
+
 function validateMeta(meta, files, name) {
   const errs = [];
   if (!meta || typeof meta !== 'object') errs.push('game.json must be an object');
@@ -68,6 +80,7 @@ function validateMeta(meta, files, name) {
   for (const k of ['width', 'height'])
     if (!Number.isInteger(meta[k]) || meta[k] < 64 || meta[k] > 4096) errs.push(`"${k}" must be an integer 64–4096`);
   errs.push(...validateAchievements(meta.achievements, files));
+  errs.push(...validateLeaderboard(meta.leaderboard));
   if (errs.length) throw new Error(`${name}: invalid game.json:\n  - ${errs.join('\n  - ')}`);
 }
 
@@ -97,7 +110,7 @@ async function pack(name) {
   mkdirSync(outDir, { recursive: true });
   const out = join(outDir, `${name}.zip`);
   writeFileSync(out, buf);
-  return { out, files: files.length, size: buf.length, title: meta.name, achievements: meta.achievements?.length ?? 0 };
+  return { out, files: files.length, size: buf.length, title: meta.name, achievements: meta.achievements?.length ?? 0, leaderboard: meta.leaderboard };
 }
 
 const only = process.argv.slice(2);
@@ -111,7 +124,7 @@ for (const n of names) {
     const r = await pack(n);
     if (!r) continue;
     count++;
-    console.log(`packed ${r.title.padEnd(16)} → ${relative(root, r.out).split(sep).join('/')}  (${r.files} files, ${(r.size / 1024).toFixed(1)} KB, ${r.achievements} achievements)`);
+    console.log(`packed ${r.title.padEnd(16)} → ${relative(root, r.out).split(sep).join('/')}  (${r.files} files, ${(r.size / 1024).toFixed(1)} KB, ${r.achievements} achievements, leaderboard ${r.leaderboard?.order ?? 'desc'}/${r.leaderboard?.format ?? 'number'}${r.leaderboard?.label ? ` "${r.leaderboard.label}"` : ''})`);
   } catch (e) {
     failed = true;
     console.error(`✗ ${e.message}`);

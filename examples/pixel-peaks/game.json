@@ -6,6 +6,7 @@
   "engine": "1",
   "description": "A tiny pixel-art platformer: run, jump, stomp slimes and collect coins across three levels.",
   "controls": "Arrows/WASD move, Space/Up/Z jump (hold for higher), Down+Jump drops through platforms, M mute. Touch: on-screen buttons.",
+  "leaderboard": { "label": "Points" },
   "achievements": [
     {
       "id": "slime_stomper",

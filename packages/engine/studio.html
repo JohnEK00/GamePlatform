@@ -106,7 +106,20 @@
         case 'webgame:hello': toGame({ type: 'webgame:load', data: null }); return; // studio sessions start fresh
         case 'webgame:ready': log.textContent = 'running from in-memory files'; return;
         case 'webgame:save': log.textContent = 'save (not persisted in studio)'; return;
-        case 'webgame:score': toast(`Would submit score: ${d.score}`); return;
+        case 'webgame:score':
+          toast(`Would submit score: ${d.score}`);
+          if (typeof d.requestId === 'string') toGame({ type: 'webgame:score-result', requestId: d.requestId, result: null, error: 'studio' });
+          return;
+        case 'webgame:leaderboard-get': { // F001: sample board (no API calls in studio)
+          const lb = bundle?.manifest.leaderboard || {};
+          const asc = lb.order === 'asc';
+          const entries = [1, 2, 3, 4, 5].map((i) => {
+            const score = asc ? 25000 + i * 5000 : 6000 - i * 1000;
+            return { rank: i, name: `Player ${i}`, score, display: lb.format === 'time' ? `${Math.floor(score / 60000)}:${String(Math.floor(score / 1000) % 60).padStart(2, '0')}.${String(score % 1000).padStart(3, '0')}` : score.toLocaleString(), isMe: false };
+          });
+          toGame({ type: 'webgame:leaderboard', requestId: d.requestId, leaderboard: { period: d.period, order: asc ? 'asc' : 'desc', format: lb.format === 'time' ? 'time' : 'number', label: lb.label || '', totalPlayers: 5, entries, me: null, sample: true } });
+          return;
+        }
         case 'webgame:achievement': {
           const a = (bundle?.manifest.achievements || []).find((x) => x.id === d.id);
           toast(a ? `Would unlock: ${a.name}` : `Would unlock "${d.id}" — not declared in game.json!`, !a);

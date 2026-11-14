@@ -95,6 +95,7 @@ pub fn api_router() -> Router<AppState> {
             "/games/{id}/scores",
             get(scores::list_scores).post(scores::submit_score),
         )
+        .route("/games/{id}/leaderboard", get(scores::get_leaderboard))
         .route(
             "/games/{id}/favorite",
             put(favorites::put_favorite).delete(favorites::delete_favorite),

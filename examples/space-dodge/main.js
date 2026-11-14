@@ -161,6 +161,9 @@ const game = {
     this.pickups = [];
     this.popups = [];
     this.score = 0;
+    this.board = null; // "This week" top 5 (LeaderboardView) shown on the game-over screen
+    this.serverBest = false; // submitScore result said personalBest
+    this.run = (this.run || 0) + 1; // ignore late replies from a previous run
     this.lives = 3;
     this.combo = 1;
     this.comboTimer = 0;
@@ -420,7 +423,7 @@ const game = {
         this.best = this.score;
         engine.storage.set('best', this.best);
       }
-      engine.platform.submitScore(this.score);
+      this.submitAndLoadBoard(engine);
       return;
     }
     p.inv = 2.2;
@@ -508,14 +511,69 @@ const game = {
     if (this.best > 0) r.drawText(`BEST ${this.best}`, W / 2, 40, { size: 18, align: 'center', color: '#8ea2ff' });
   },
 
+  /**
+   * Submit the score, then show the weekly top 5. Older engines return undefined from submitScore
+   * and have no getLeaderboard, so both are feature-detected. A null result (offline, anonymous,
+   * old host) simply shows nothing extra.
+   */
+  async submitAndLoadBoard(engine) {
+    const run = this.run;
+    const platform = engine.platform;
+    let result = null;
+    try {
+      result = await platform.submitScore(this.score);
+    } catch {
+      result = null;
+    }
+    if (run !== this.run) return;
+    if (result && result.personalBest) this.serverBest = true;
+    if (typeof platform.getLeaderboard !== 'function') return;
+    let board = null;
+    try {
+      board = await platform.getLeaderboard({ period: 'week', limit: 5 });
+    } catch {
+      board = null;
+    }
+    if (run === this.run && board && Array.isArray(board.entries)) this.board = board;
+  },
+
   renderGameOver(engine) {
     const r = engine.renderer;
+    const b = this.board;
+    const y0 = b ? 110 : H / 2 - 70; // compact layout when the board is shown
     r.drawRect(0, 0, W, H, '#000', { alpha: 0.55 });
-    r.drawText('GAME OVER', W / 2, H / 2 - 70, { size: 60, align: 'center', baseline: 'middle', color: '#ff5f5f', shadow: '#000', shadowOffset: 4 });
-    r.drawText(`SCORE ${this.score}`, W / 2, H / 2, { size: 30, align: 'center', baseline: 'middle', color: '#fff' });
-    if (this.newBest) r.drawText('NEW BEST!', W / 2, H / 2 + 40, { size: 22, align: 'center', baseline: 'middle', color: '#ffe14c' });
+    r.drawText('GAME OVER', W / 2, y0, { size: 60, align: 'center', baseline: 'middle', color: '#ff5f5f', shadow: '#000', shadowOffset: 4 });
+    r.drawText(`SCORE ${this.score}`, W / 2, y0 + 70, { size: 30, align: 'center', baseline: 'middle', color: '#fff' });
+    if (this.newBest || this.serverBest) r.drawText('NEW BEST!', W / 2, y0 + 110, { size: 22, align: 'center', baseline: 'middle', color: '#ffe14c' });
+    if (b) this.renderBoard(r, b, 265);
     if (this.overTime > 1 && Math.floor(engine.time * 2) % 2 === 0)
-      r.drawText('PRESS ANY KEY OR TAP TO PLAY AGAIN', W / 2, H / 2 + 100, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });
+      r.drawText('PRESS ANY KEY OR TAP TO PLAY AGAIN', W / 2, b ? H - 40 : H / 2 + 100, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });
+  },
+
+  /** "This week" top 5, my row highlighted; my own row is appended when I'm outside the top. */
+  renderBoard(r, b, y) {
+    const x0 = W / 2 - 170;
+    const x1 = W / 2 + 170;
+    const rowH = 26;
+    const title = b.label ? `THIS WEEK · ${b.label.toUpperCase()}` : 'THIS WEEK';
+    r.drawText(title, W / 2, y, { size: 16, align: 'center', baseline: 'middle', color: '#4cf2ff', letterSpacing: 2 });
+    const rows = b.entries.slice(0, 5).map((e) => ({ rank: e.rank, name: e.name, display: e.display, me: !!e.isMe }));
+    if (b.me && !rows.some((e) => e.me)) rows.push({ rank: b.me.rank, name: 'YOU', display: b.me.display, me: true, gap: true });
+    if (rows.length === 0) {
+      r.drawText('No scores this week yet - be the first!', W / 2, y + 34, { size: 14, align: 'center', baseline: 'middle', color: '#8899aa' });
+      return;
+    }
+    let ry = y + 30;
+    for (const e of rows) {
+      if (e.gap) ry += 8;
+      if (e.me) r.drawRect(x0 - 8, ry - rowH / 2 + 1, x1 - x0 + 16, rowH - 2, '#ffe14c', { alpha: 0.18 });
+      const color = e.me ? '#ffe14c' : '#cfe3ff';
+      const name = String(e.name).length > 18 ? `${String(e.name).slice(0, 17)}…` : String(e.name);
+      r.drawText(`#${e.rank}`, x0, ry, { size: 15, baseline: 'middle', color });
+      r.drawText(name, x0 + 50, ry, { size: 15, baseline: 'middle', color });
+      r.drawText(String(e.display), x1, ry, { size: 15, align: 'right', baseline: 'middle', color });
+      ry += rowH;
+    }
   },
 };
 
