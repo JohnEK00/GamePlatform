@@ -281,6 +281,52 @@ pub struct ScoreSubmitResult {
     pub ranks: Ranks,
 }
 
+/// Scores kept per (game, user) regardless of age: the best N (best first, ties → earlier).
+pub const SCORES_KEPT_PER_USER: i64 = 20;
+/// Scores younger than this are also kept when they are the user's best of their UTC day or
+/// ISO week, so the `day` and `week` windows (both shorter than this) never lose a best.
+pub const SCORE_RECENT_DAYS: i64 = 8;
+
+/// Retention (R12), run after each insert for that (game, user). A score is deleted when it is
+/// outside the user's best [`SCORES_KEPT_PER_USER`] AND (it is older than
+/// [`SCORE_RECENT_DAYS`] OR it is neither the user's best of its UTC day nor of its ISO week).
+/// The user's all-time best (rank 1) and current day/week bests therefore always survive, so
+/// every leaderboard window shows the same result as without pruning. "Best" uses the same
+/// order as [`window_board`]: score (by the game's order), then earlier `created_at`, rowid.
+/// Per user per game this keeps at most 20 + ~10 rows (8 recent days + 2 ISO weeks).
+pub async fn prune_scores(
+    db: &SqlitePool,
+    game_id: &str,
+    user_id: &str,
+    ascending: bool,
+    now: DateTime<Utc>,
+) -> AppResult<u64> {
+    let dir = if ascending { "ASC" } else { "DESC" };
+    let order = format!("ORDER BY score {dir}, created_at ASC, rowid ASC");
+    let cutoff = (now - chrono::Duration::days(SCORE_RECENT_DAYS))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let sql = format!(
+        "DELETE FROM scores WHERE rowid IN ( \
+           SELECT rid FROM ( \
+             SELECT rowid AS rid, created_at, \
+               ROW_NUMBER() OVER ({order}) AS r_all, \
+               ROW_NUMBER() OVER (PARTITION BY substr(created_at, 1, 10) {order}) AS r_day, \
+               ROW_NUMBER() OVER (PARTITION BY date(created_at, 'weekday 0', '-6 days') \
+                 {order}) AS r_week \
+             FROM scores WHERE game_id = ?1 AND user_id = ?2 \
+           ) WHERE r_all > ?3 AND (created_at < ?4 OR (r_day > 1 AND r_week > 1)) \
+         )"
+    );
+    let r = sqlx::query(&sql)
+        .bind(game_id)
+        .bind(user_id)
+        .bind(SCORES_KEPT_PER_USER)
+        .bind(cutoff)
+        .execute(db)
+        .await?;
+    Ok(r.rows_affected())
+}
+
 pub async fn submit_score(
     State(state): State<AppState>,
     user: AuthUser,
@@ -327,6 +373,7 @@ pub async fn submit_score(
     .bind(&now)
     .execute(&state.db)
     .await?;
+    prune_scores(&state.db, &game_id, &user.id, asc, now_dt).await?;
 
     // v1 `rank`: this score's rank among other users' all-time bests (competition ranking).
     let better: i64 = sqlx::query_scalar(&format!(

@@ -434,6 +434,24 @@ fn scan(bytes: &[u8]) -> Result<(BundleMeta, Vec<Entry>), AppError> {
         }
         entries.push(Entry { index, path, size });
     }
+    // A path that is both a file and a parent directory of another file (`x` and `x/y`)
+    // cannot be extracted (R8).
+    let mut dirs = HashSet::new();
+    for e in &entries {
+        let lower = e.path.to_ascii_lowercase();
+        for (i, _) in lower.match_indices('/') {
+            dirs.insert(lower[..i].to_string());
+        }
+    }
+    if let Some(e) = entries
+        .iter()
+        .find(|e| dirs.contains(&e.path.to_ascii_lowercase()))
+    {
+        return Err(invalid(format!(
+            "Bundle contains a file that is also a folder: {}",
+            e.path
+        )));
+    }
 
     let manifest = entries
         .iter()

@@ -124,17 +124,64 @@ pub fn render_studio_html(origin: &str) -> String {
 <script type="module">
   const post = (msg) => {{ try {{ window.parent.postMessage(msg, "*"); }} catch (_) {{}} }};
   const toInt = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : undefined);
+  // blob: URL -> bundle-relative path, for error attribution.
+  const urlToFile = new Map();
   const reportError = (stage, err, pos) => {{
     const msg = {{ type: "webgame:error", message: stage + ": " + String((err && err.message) || err || "unknown error") }};
+    let file = (pos && pos.file) || (err && typeof err.file === "string" ? err.file : undefined);
     let line = pos && toInt(pos.line), column = pos && toInt(pos.column);
     if (line === undefined && err) {{ line = toInt(err.lineNumber); column = toInt(err.columnNumber); }}
     if (line === undefined && err && typeof err.stack === "string") {{
-      const m = /blob:[^\s)]*?:(\d+):(\d+)/.exec(err.stack);
-      if (m) {{ line = Number(m[1]); column = Number(m[2]); }}
+      const m = /(blob:[^\s)]*?):(\d+):(\d+)/.exec(err.stack);
+      if (m) {{ line = Number(m[2]); column = Number(m[3]); file = file || urlToFile.get(m[1]); }}
     }}
+    if (file !== undefined) msg.file = file;
     if (line !== undefined) msg.line = line;
     if (column !== undefined) msg.column = column;
     post(msg);
+  }};
+  // Module linker (GAME_FORMAT.md "Studio multi-file modules"): every JS module reachable
+  // from the entry gets a blob: URL; relative specifiers in static/dynamic imports and
+  // re-exports are rewritten to the dependency's blob URL, dependencies first.
+  const SPEC = /(?<![\w$.])(import\s*\(\s*|from\s*|import\s*)(["'])([^"'\r\n]*)\2/g;
+  const isJs = (p) => /\.m?js$/i.test(p);
+  const resolveSpec = (from, spec) => {{
+    const parts = from.split("/");
+    parts.pop();
+    for (const seg of spec.split("/")) {{
+      if (seg === "..") {{ if (!parts.length) return null; parts.pop(); }}
+      else if (seg !== "." && seg !== "") parts.push(seg);
+    }}
+    return parts.join("/");
+  }};
+  const linkModules = (files, entry) => {{
+    const urls = new Map(), state = new Map(), stack = [];
+    const fail = (file, message) => {{ const e = new Error(message); e.file = file; throw e; }};
+    const visit = (file) => {{
+      if (state.get(file) === 2) return urls.get(file);
+      if (state.get(file) === 1) {{
+        const cycle = stack.slice(stack.indexOf(file)).concat(file).join(" -> ");
+        fail(stack[stack.length - 1], "Import cycle " + cycle + " (cyclic imports cannot run in the Studio preview)");
+      }}
+      state.set(file, 1);
+      stack.push(file);
+      const src = String(files[file]).replace(new RegExp(SPEC.source, "g"), (m, kw, q, spec) => {{
+        if (!spec.startsWith("./") && !spec.startsWith("../")) return m;
+        const target = resolveSpec(file, spec.replace(/[?#].*$/, ""));
+        if (target === null) fail(file, "Import '" + spec + "' points outside the project");
+        if (typeof files[target] !== "string" || !isJs(target)) {{
+          fail(file, "Import '" + spec + "' not found: no JavaScript file '" + target + "' in the project");
+        }}
+        return kw + q + visit(target) + q;
+      }});
+      stack.pop();
+      state.set(file, 2);
+      const url = URL.createObjectURL(new Blob([src], {{ type: "text/javascript" }}));
+      urls.set(file, url);
+      urlToFile.set(url, file);
+      return url;
+    }};
+    return visit(entry);
   }};
   let boot;
   try {{
@@ -152,14 +199,27 @@ pub fn render_studio_html(origin: &str) -> String {
       const manifest = d.manifest || {{}};
       const files = d.files && typeof d.files === "object" ? d.files : {{}};
       const entry = typeof manifest.entry === "string" ? manifest.entry.replace(/^\.\//, "") : "";
-      const src = files[entry] ?? files["./" + entry];
-      if (!entry || src === undefined) {{
+      // Bundle-relative keys without a leading "./".
+      const sources = {{}};
+      for (const [k, v] of Object.entries(files)) {{
+        if (typeof v === "string") sources[k.replace(/^\.\//, "")] = v;
+      }}
+      if (!entry || sources[entry] === undefined) {{
         reportError("Invalid project", new Error("manifest.entry '" + entry + "' is not in files"));
         return;
       }}
-      const url = URL.createObjectURL(new Blob([src], {{ type: "text/javascript" }}));
+      let url;
+      try {{
+        url = linkModules(sources, entry);
+      }} catch (err) {{
+        reportError("Failed to load " + entry, err);
+        return;
+      }}
       let pos;
-      const onError = (e) => {{ if (e && e.filename === url) pos = {{ line: e.lineno, column: e.colno }}; }};
+      const onError = (e) => {{
+        const file = e && urlToFile.get(e.filename);
+        if (file && !pos) pos = {{ file, line: e.lineno, column: e.colno }};
+      }};
       window.addEventListener("error", onError);
       let mod;
       try {{

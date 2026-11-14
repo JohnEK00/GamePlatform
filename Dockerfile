@@ -49,4 +49,8 @@ ENV PORT=8080 \
 VOLUME ["/data"]
 EXPOSE 8080
 USER webgame:webgame
+# The binary checks itself (no curl in the image); it reads PORT like the server does.
+HEALTHCHECK --interval=30s --timeout=6s --start-period=15s --retries=3     CMD ["/app/webgame-server", "healthcheck"]
+# The server handles SIGTERM itself (graceful drain on `docker stop`).
+STOPSIGNAL SIGTERM
 CMD ["/app/webgame-server"]

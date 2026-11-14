@@ -2,6 +2,8 @@
 name = "webgame-server"
 version = "0.1.0"
 edition = "2024"
+# Edition 2024 + let-chains need 1.88; the locked uuid 1.29 needs 1.89.
+rust-version = "1.89"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -15,6 +17,7 @@ serde_json = "1.0.154"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "chrono"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "fs", "limit"] }
 tracing = "0.1.44"

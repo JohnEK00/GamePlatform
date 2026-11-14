@@ -32,6 +32,8 @@ pub enum Limit {
     Save,
     /// leaderboard reads (`GET …/leaderboard`): 120/min, per user or per IP when anonymous
     Leaderboard,
+    /// play recording (`POST …/play`): 30/min, per user or per IP when anonymous
+    Play,
 }
 
 impl Limit {
@@ -45,6 +47,7 @@ impl Limit {
             Limit::Score => (60, Duration::from_secs(60)),
             Limit::Save => (60, Duration::from_secs(60)),
             Limit::Leaderboard => (120, Duration::from_secs(60)),
+            Limit::Play => (30, Duration::from_secs(60)),
         }
     }
 }
@@ -109,6 +112,48 @@ impl RateLimiter {
             let wait = ((1.0 - bucket.tokens) / rate).ceil().max(1.0) as u64;
             Err(AppError::RateLimited { retry_after: wait })
         }
+    }
+}
+
+/// Window within which repeated plays of one game by one viewer count once.
+pub const PLAY_DEDUPE_WINDOW: Duration = Duration::from_secs(600);
+
+/// In-memory "counted recently" set keyed by `(game id, viewer key)`.
+#[derive(Clone, Default)]
+pub struct PlayDedupe {
+    seen: Arc<Mutex<HashMap<(String, String), Instant>>>,
+}
+
+impl PlayDedupe {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `true` if this play should be counted (none counted for the pair within the window);
+    /// records it as counted.
+    pub fn should_count(&self, game_id: &str, viewer: &str) -> bool {
+        self.should_count_at(game_id, viewer, Instant::now())
+    }
+
+    fn should_count_at(&self, game_id: &str, viewer: &str, now: Instant) -> bool {
+        let mut map = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+        if map.len() >= PRUNE_THRESHOLD {
+            map.retain(|_, t| now.saturating_duration_since(*t) < PLAY_DEDUPE_WINDOW);
+        }
+        let key = (game_id.to_string(), viewer.to_string());
+        match map.get(&key) {
+            Some(t) if now.saturating_duration_since(*t) < PLAY_DEDUPE_WINDOW => false,
+            _ => {
+                map.insert(key, now);
+                true
+            }
+        }
+    }
+
+    /// Forget a counted play (used when the DB write fails).
+    pub fn forget(&self, game_id: &str, viewer: &str) {
+        let mut map = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+        map.remove(&(game_id.to_string(), viewer.to_string()));
     }
 }
 
@@ -243,6 +288,17 @@ mod tests {
             client_ip(&parts(&[("x-forwarded-for", "1.1.1.1, ")]), 1),
             "192.0.2.1"
         );
+    }
+
+    #[test]
+    fn play_dedupe_window() {
+        let d = PlayDedupe::new();
+        let t0 = Instant::now();
+        assert!(d.should_count_at("g", "ip:1", t0));
+        assert!(!d.should_count_at("g", "ip:1", t0 + Duration::from_secs(599)));
+        assert!(d.should_count_at("g", "ip:2", t0));
+        assert!(d.should_count_at("h", "ip:1", t0));
+        assert!(d.should_count_at("g", "ip:1", t0 + Duration::from_secs(600)));
     }
 
     #[test]

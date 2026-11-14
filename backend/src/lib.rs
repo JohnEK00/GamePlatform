@@ -6,6 +6,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod extract;
+pub mod locks;
 pub mod models;
 pub mod ratelimit;
 pub mod routes;
@@ -27,6 +28,10 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub storage: Storage,
     pub limiter: ratelimit::RateLimiter,
+    /// Per-game claims serialising bundle replaces (R1).
+    pub bundle_locks: locks::KeyLocks,
+    /// Per-(game, viewer) play-count dedupe window (R2).
+    pub play_dedupe: ratelimit::PlayDedupe,
 }
 
 impl AppState {
@@ -39,6 +44,8 @@ impl AppState {
         Ok(Self {
             db,
             limiter: ratelimit::RateLimiter::new(config.rate_limit),
+            bundle_locks: locks::KeyLocks::new(),
+            play_dedupe: ratelimit::PlayDedupe::new(),
             config: Arc::new(config),
             storage,
         })
@@ -56,6 +63,43 @@ pub async fn apply_admin_roles(db: &SqlitePool, admins: &[String]) -> anyhow::Re
     .execute(db)
     .await?;
     Ok(())
+}
+
+/// Startup cleanup (call before serving, never while requests run): removes `.staging-*`
+/// dirs left by interrupted uploads, and game dirs that have no DB row (an interrupted
+/// create). Returns the number of removed directories.
+pub async fn sweep_stale_files(state: &AppState) -> anyhow::Result<usize> {
+    let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM games")
+        .fetch_all(&state.db)
+        .await?;
+    let known: std::collections::HashSet<String> = ids.into_iter().map(|(i,)| i).collect();
+    let mut removed = 0;
+    let mut games = match tokio::fs::read_dir(state.storage.games_root()).await {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e.into()),
+    };
+    while let Some(entry) = games.next_entry().await? {
+        if !entry.file_type().await?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !known.contains(&name) {
+            if tokio::fs::remove_dir_all(entry.path()).await.is_ok() {
+                removed += 1;
+            }
+            continue;
+        }
+        let mut inner = tokio::fs::read_dir(entry.path()).await?;
+        while let Some(sub) = inner.next_entry().await? {
+            if sub.file_name().to_string_lossy().starts_with(".staging-")
+                && tokio::fs::remove_dir_all(sub.path()).await.is_ok()
+            {
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
 }
 
 /// Build the full application router.

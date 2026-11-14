@@ -312,3 +312,92 @@ Clients must ignore feed items with an unknown `kind` (more kinds may be added l
 - Follow + unfollow (`PUT`/`DELETE …/follow`, shared bucket): 60 per 10 min, per user.
 - Feed reads (`GET /api/feed` and `/api/feed/suggestions`, shared bucket): 60/min, per user.
 - Follower/following lists and profiles: unlimited (as other public reads).
+
+
+---
+
+## F003 additions
+
+Trending and "More like this" discovery (spec: `docs/features/F003-trending-and-related.md`). All earlier rules apply, including the review-fix play dedupe and rate limit on `POST /api/games/{id}/play`.
+
+### Types
+```ts
+type GameSummary = { ...v2, playsWeek: number }   // + playsWeek, on EVERY GameSummary (listings, profile, favorites, feed, related, Game)
+type GameSort = "new" | "popular" | "top" | "favorites" | "trending"
+
+type RelatedGame = GameSummary & {
+  reason: "tags" | "trending";   // "tags": shares >= 1 tag with the source game; "trending": fill-up
+  sharedTags: string[];          // shared tags in the SOURCE game's tag order; [] when reason is "trending"
+}
+```
+- `playsWeek` counts the game's counted (deduplicated) plays by anyone other than its owner, over the 7 UTC days ending today (inclusive).
+  - It comes from a snapshot refreshed at most every `TRENDING_TTL_SECS`, so it is **approximate** and may lag behind `plays`.
+  - It is `0` when the game has no plays in the window, or when the game is newer than the snapshot.
+
+### Trending score (normative)
+For each game, over the window days `d` (today and the 6 previous UTC days, by `play_events.day`):
+- `viewers(d)` is the number of distinct viewers with a counted play that day, excluding the owner's authenticated plays.
+  - A viewer is the signed-in user. For an anonymous play, it is a secret-keyed hash of the client IP, the same identity the play dedupe uses.
+  - Each play recorded before F003 counts as one viewer.
+- `trendingScore = Σ_d viewers(d) × (7 − age(d)) / 7`, where `age(today) = 0`. Today weighs 1, and six days ago weighs 1/7.
+
+`trendingScore` is not exposed. It only orders results.
+
+### Endpoints
+| Method | Path | Query / Body | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games | v1/v2 query; `sort` also accepts `trending` | `Page<GameSummary>` |
+| GET 🔓 | /api/games/{id}/related | `?limit=8` (1–24, clamped) | `RelatedGame[]` (0..limit items) |
+
+- **`sort=trending`**:
+  - Order: `trendingScore` desc, then `playsWeek` desc, `plays` desc, `createdAt` desc, `id`.
+  - It combines with `q`, `tag` and `owner` exactly like the other sorts, and `total` doesn't depend on the sort.
+  - Games with no plays in the window are still listed (score 0), after the scored ones.
+- **Unknown `sort`** → 400 `bad_request` "Unknown sort '…' (expected new, popular, top, favorites or trending)".
+- **`/related`**:
+  - Source visibility follows `GET /api/games/{id}`: an unknown id → 404, and an unpublished game → 404 unless the viewer is the owner.
+  - A non-integer `limit` → 400 `bad_request`.
+  - Results are always **published** games, never the source, and at most **2 per owner** (the source's owner included).
+  - Ranking:
+    1. Games sharing ≥ 1 tag with the source (`reason: "tags"`), ordered by `tagScore` desc, then shared-tag count desc, `trendingScore` desc, `plays` desc, `createdAt` desc, `id`. Here `tagScore = Σ over shared tags of 1 / log2(2 + n(tag))`, where `n(tag)` is the number of published games with that tag. Rarer tags weigh more.
+    2. If fewer than `limit` games share a tag, the rest is filled in `sort=trending` order (`reason: "trending"`, `sharedTags: []`).
+  - The response is the same for every viewer: nothing is personalised beyond source visibility.
+
+### Rate limits
+- No new limits. `/related` and `sort=trending` are unlimited public reads, like other listings.
+- Plays keep the review-fix `Limit::Play` and the 10-minute per-viewer dedupe. Only counted plays enter `playsWeek` and the trending score.
+
+### Backend env
+`TRENDING_TTL_SECS` (default `600`) is the maximum age of the trending snapshot before a `sort=trending` or `/related` read refreshes it.
+- `0` refreshes on every such read (used by tests).
+- The snapshot is also refreshed once at startup.
+- A non-integer value is a startup error.
+
+
+## Review-fix additions (REVIEW-2026-11-14-1)
+
+### `POST /api/games/{id}/play` (R2)
+- **Rate limit:** 30/min, keyed by user when signed in and by client IP otherwise. Over the limit → 429 `rate_limited` with `Retry-After`. `RATE_LIMIT=off` disables it.
+- **Dedupe (always on):** at most one counted play per (game, viewer) per 10 minutes. The viewer key is the same as for the rate limit.
+- **Duplicate calls:** still return `200 { plays }` with the current count, but don't increment `plays` or write a play event.
+- **Scope:** the dedupe is held in memory per process, so it resets when the server restarts.
+
+### `GET /api/users/{username}` (R12)
+- **Paging:** accepts `?page=` (default 1) and `&perPage=` (default 24, clamped 1–100). A non-integer value → 400.
+- **Response:** `{ user, games: GameSummary[] /* one page, newest first */, gamesTotal: number /* games visible to the viewer; includes unpublished for the owner */ }`.
+
+### Score retention (R12)
+- After each submit, that user's scores for that game are pruned.
+- **Kept:** the user's best 20 scores for the game, plus any score younger than 8 days that is the user's best of its UTC day or ISO week.
+- **Effect:** day, week and all-time boards are unchanged by pruning.
+
+### Game and runtime files (R6)
+- **Caching:** responses carry a strong `ETag`. `If-None-Match` → 304 with the same security headers. `Cache-Control: no-cache` stays, so browsers revalidate.
+
+### Bundles (R8)
+- A zip that contains both a file `x` and a folder `x/` (case-insensitive) → 422.
+
+### Ops
+- **Health check:** `webgame-server healthcheck` exits 0 when `GET /api/health` on `127.0.0.1:$PORT` returns 200. The Docker `HEALTHCHECK` uses it.
+- **Shutdown:** graceful on SIGTERM and Ctrl+C.
+- **Startup cleanup:** stale `.staging-*` folders and orphaned game folders are removed.

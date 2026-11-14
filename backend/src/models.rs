@@ -225,7 +225,7 @@ pub const GAME_SELECT: &str = "SELECT g.id, g.owner_id, g.title, g.description, 
      u.avatar_ext AS o_avatar_ext, u.avatar_version AS o_avatar_version, \
      (SELECT group_concat(tag, ',') FROM (SELECT tag FROM game_tags t WHERE t.game_id = g.id \
         ORDER BY t.position, t.tag)) AS tags, \
-     (SELECT COUNT(*) FROM favorites f WHERE f.game_id = g.id) AS favorites \
+     g.favorites_count AS favorites \
      FROM games g JOIN users u ON u.id = g.owner_id";
 
 pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {

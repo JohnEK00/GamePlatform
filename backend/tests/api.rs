@@ -545,13 +545,13 @@ async fn list_search_sort() {
         StatusCode::UNAUTHORIZED
     );
 
-    // Popular.
-    for _ in 0..3 {
+    // Popular. Plays are deduplicated per (game, viewer), so use three different viewers.
+    for who in [None, Some(tok.as_str()), Some(tok2.as_str())] {
         let r = t
             .send(
                 Method::POST,
                 &format!("/api/games/{bid}/play"),
-                None,
+                who,
                 None,
                 vec![],
                 &[],

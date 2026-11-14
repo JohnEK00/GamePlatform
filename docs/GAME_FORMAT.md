@@ -183,3 +183,21 @@ Follow creators and an activity feed (spec: `docs/features/F002-follow-and-feed.
 ## Review-fix additions (REVIEW-2026-11-14-1)
 
 - **Studio multi-file modules (R3):** on `studio-load`, the /play/studio page creates a `blob:` URL for every `.js` file in `files`. It rewrites relative module specifiers (`./` or `../`) in static `import ... from`, `export ... from`, bare `import "..."` and dynamic `import("...")` with string literals, so each one points at the dependency's blob URL. Dependencies are processed first, in topological order. Cycles, missing files and specifiers that escape the bundle are reported as `webgame:error` with a clear message. Non-relative specifiers are left unchanged. Errors carry `file` (the bundle-relative path, mapped back from the blob URL) next to `line`/`column`, so the Studio can attribute errors to the right file.
+
+## F003 additions
+
+Trending and "More like this" discovery (spec: `docs/features/F003-trending-and-related.md`).
+
+**No engine, bundle, `game.json` or message changes.** What creators need to know:
+- **Tags drive "More like this".** The related shelf on each game page ranks other games by the tags they share with yours.
+  - A shared tag counts more when fewer games use it, so specific tags (`platformer`, `roguelike`, `puzzle`) help more than generic ones (`game`, `fun`).
+  - The existing tag limits apply: at most 8 tags, each at most 24 chars, lowercased.
+- **Trending counts players, not reloads.** The Trending sort and the home-page shelf rank games by distinct players per day over the last 7 UTC days, with recent days weighted higher.
+  - Your own signed-in plays of your own game never count.
+  - A play is recorded once per player per game per 10 minutes when the game sends `webgame:ready` (unchanged). Sending it again or reloading does not raise your rank.
+- Studio previews (`/play/studio`) record no plays.
+- **Implementation notes (R3):**
+  - Only modules reachable from the entry are linked.
+  - Rewriting is regex-based, so import-like text inside comments is rewritten too.
+  - Errors use the shape `{ type: "webgame:error", message, file?, line?, column? }`.
+  - Errors raised by the engine runtime itself don't carry `file` yet.

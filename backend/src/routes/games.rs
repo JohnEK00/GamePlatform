@@ -16,7 +16,7 @@ use crate::models::{
     AchievementDef, GAME_SELECT, Game, GameRow, GameSummary, Page, achievement_icon_url,
     game_row_from_row, now_rfc3339, rating_avg,
 };
-use crate::ratelimit::Limit;
+use crate::ratelimit::{ClientIp, Limit, key_for};
 use crate::storage::validate_image;
 
 pub const TITLE_MAX: usize = 80;
@@ -387,15 +387,24 @@ fn like_pattern(s: &str) -> String {
     format!("%{escaped}%")
 }
 
-pub async fn list_games(
-    State(state): State<AppState>,
-    viewer: MaybeAuthUser,
-    ApiQuery(query): ApiQuery<ListQuery>,
-) -> AppResult<Json<Page<GameSummary>>> {
-    let (page, per_page) = parse_paging(query.page.as_deref(), query.per_page.as_deref(), 24)?;
-
+/// `WHERE` clause (over `games g` only, no joins) and its binds for the list filters.
+/// Each shape is index-backed (migration 0004): owner via `idx_games_owner_pub_new` after
+/// resolving the username through `users.username_lower`, tag via `idx_game_tags_tag_game`.
+pub fn list_filter(query: &ListQuery, viewer: Option<&str>) -> AppResult<(String, Vec<String>)> {
     let mut conds: Vec<&str> = Vec::new();
     let mut binds: Vec<String> = Vec::new();
+    let tag = query
+        .tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    // With a tag, drive the query from the tag's games (`+` keeps SQLite from walking the
+    // whole published index instead and probing each game against the tag list).
+    let published = if tag.is_some() {
+        "+g.published = 1"
+    } else {
+        "g.published = 1"
+    };
 
     match query
         .owner
@@ -404,24 +413,19 @@ pub async fn list_games(
         .filter(|s| !s.is_empty())
     {
         Some("me") => {
-            let uid = viewer.id().ok_or_else(AppError::unauthorized)?;
+            let uid = viewer.ok_or_else(AppError::unauthorized)?;
             conds.push("g.owner_id = ?");
             binds.push(uid.to_string());
         }
         Some(username) => {
-            conds.push("g.published = 1");
-            conds.push("u.username_lower = ?");
+            conds.push("g.owner_id = (SELECT id FROM users WHERE username_lower = ?)");
             binds.push(username.to_ascii_lowercase());
+            conds.push("g.published = 1");
         }
-        None => conds.push("g.published = 1"),
+        None => conds.push(published),
     }
-    if let Some(tag) = query
-        .tag
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        conds.push("EXISTS (SELECT 1 FROM game_tags t WHERE t.game_id = g.id AND t.tag = ?)");
+    if let Some(tag) = tag {
+        conds.push("g.id IN (SELECT t.game_id FROM game_tags t WHERE t.tag = ?)");
         binds.push(tag.to_lowercase());
     }
     if let Some(q) = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -434,47 +438,60 @@ pub async fn list_games(
         binds.push(pat.clone());
         binds.push(pat.to_lowercase());
     }
+    Ok((format!("WHERE {}", conds.join(" AND ")), binds))
+}
 
-    let order = match query.sort.as_deref().map(str::trim).unwrap_or("") {
+/// `ORDER BY` for `sort`; each matches an index of migration 0004 column for column.
+pub fn list_order(sort: Option<&str>) -> AppResult<&'static str> {
+    Ok(match sort.map(str::trim).unwrap_or("") {
         "" | "new" => "g.created_at DESC, g.id",
         "popular" => "g.plays DESC, g.created_at DESC, g.id",
-        "favorites" => "favorites DESC, g.created_at DESC, g.id",
-        // Bayesian-style average: pulls games with few ratings toward a prior of 3.0 (weight 2).
-        "top" => {
-            "((g.rating_sum + 6.0) / (g.rating_count + 2.0)) DESC, g.rating_count DESC, \
-             g.created_at DESC, g.id"
-        }
+        "favorites" => "g.favorites_count DESC, g.created_at DESC, g.id",
+        // Bayesian-style average: pulls games with few ratings toward a prior of 3.0 (weight
+        // 2). `rating_score` is the generated column (rating_sum + 6.0) / (rating_count + 2.0).
+        "top" => "g.rating_score DESC, g.rating_count DESC, g.created_at DESC, g.id",
         other => {
             return Err(AppError::BadRequest(format!(
                 "Unknown sort '{other}' (expected new, popular, top or favorites)"
             )));
         }
-    };
+    })
+}
 
-    let where_sql = format!("WHERE {}", conds.join(" AND "));
-
-    let count_sql =
-        format!("SELECT COUNT(*) FROM games g JOIN users u ON u.id = g.owner_id {where_sql}");
-    let mut cq = sqlx::query_scalar::<_, i64>(&count_sql);
-    for b in &binds {
-        cq = cq.bind(b);
-    }
-    let total = cq.fetch_one(&state.db).await?;
+pub async fn list_games(
+    State(state): State<AppState>,
+    viewer: MaybeAuthUser,
+    ApiQuery(query): ApiQuery<ListQuery>,
+) -> AppResult<Json<Page<GameSummary>>> {
+    let (page, per_page) = parse_paging(query.page.as_deref(), query.per_page.as_deref(), 24)?;
+    let (where_sql, binds) = list_filter(&query, viewer.id())?;
+    let order = list_order(query.sort.as_deref())?;
 
     let sql = format!("{GAME_SELECT} {where_sql} ORDER BY {order} LIMIT ? OFFSET ?");
+    let offset = (page - 1) * per_page;
     let mut q = sqlx::query(&sql);
     for b in &binds {
         q = q.bind(b);
     }
-    let rows = q
-        .bind(per_page)
-        .bind((page - 1) * per_page)
-        .fetch_all(&state.db)
-        .await?;
+    let rows = q.bind(per_page).bind(offset).fetch_all(&state.db).await?;
     let items = rows
         .iter()
         .map(|r| game_row_from_row(r).map(|g| g.summary()))
         .collect::<Result<Vec<_>, _>>()?;
+
+    // A short non-empty page (or a short first page) already gives the total; only count
+    // when the page is full or past the end.
+    let n = items.len() as i64;
+    let total = if n < per_page && (n > 0 || page == 1) {
+        offset + n
+    } else {
+        let count_sql = format!("SELECT COUNT(*) FROM games g {where_sql}");
+        let mut cq = sqlx::query_scalar::<_, i64>(&count_sql);
+        for b in &binds {
+            cq = cq.bind(b);
+        }
+        cq.fetch_one(&state.db).await?
+    };
 
     Ok(Json(Page {
         items,
@@ -617,10 +634,26 @@ pub async fn upload_bundle(
         .filter(|b| !b.is_empty())
         .ok_or_else(|| AppError::validation("bundle (zip) is required"))?;
 
+    // R1: one replace per game at a time. A concurrent replace (or one that started from a
+    // version that is no longer current) gets 409 and never touches the live files.
+    let conflict = || AppError::Conflict("The game was updated concurrently; please retry".into());
+    let _claim = state.bundle_locks.try_claim(&id).ok_or_else(conflict)?;
+    let current: Option<i64> = sqlx::query_scalar("SELECT version FROM games WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await?;
+    let old_version = match current {
+        Some(v) if v == game.version => v,
+        Some(_) => return Err(conflict()),
+        None => return Err(AppError::not_found("Game")),
+    };
+
+    // Extract into a unique staging dir; only this request (holding the claim) may then
+    // create `v{new}`.
     let (meta, staging) = extract_bundle(&state, &id, bytes).await?;
-    let old_version = game.version;
     let new_version = old_version + 1;
     let new_dir = state.storage.version_dir(&id, new_version);
+    // A leftover `v{new}` can only come from a crashed earlier attempt (it never went live).
     let _ = tokio::fs::remove_dir_all(&new_dir).await;
     if let Err(e) = tokio::fs::rename(&staging, &new_dir).await {
         let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -630,8 +663,7 @@ pub async fn upload_bundle(
     let res: AppResult<bool> = async {
         let mut tx = state.db.begin().await?;
         let r = sqlx::query(
-            "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, score_order = ?, \
-             score_format = ?, score_label = ?, updated_at = ? WHERE id = ? AND version = ?",
+            "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, score_order = ?,              score_format = ?, score_label = ?, updated_at = ? WHERE id = ? AND version = ?",
         )
         .bind(new_version)
         .bind(&meta.entry)
@@ -655,13 +687,12 @@ pub async fn upload_bundle(
     .await;
     match res {
         Ok(true) => {
+            // Only after the commit: the old version is no longer referenced.
             let _ = tokio::fs::remove_dir_all(state.storage.version_dir(&id, old_version)).await;
         }
         Ok(false) => {
             let _ = tokio::fs::remove_dir_all(&new_dir).await;
-            return Err(AppError::Conflict(
-                "The game was updated concurrently; please retry".into(),
-            ));
+            return Err(conflict());
         }
         Err(e) => {
             let _ = tokio::fs::remove_dir_all(&new_dir).await;
@@ -720,29 +751,55 @@ pub struct PlaysResponse {
     pub plays: i64,
 }
 
+/// POST /api/games/{id}/play. Rate limited (`Limit::Play`, per user or IP), and at most one
+/// play per (game, viewer) is counted per [`crate::ratelimit::PLAY_DEDUPE_WINDOW`] (10 min); a deduplicated call still
+/// returns 200 with the current count.
 pub async fn record_play(
     State(state): State<AppState>,
     viewer: MaybeAuthUser,
+    ip: ClientIp,
     ApiPath(id): ApiPath<String>,
 ) -> AppResult<Json<PlaysResponse>> {
+    let key = key_for(viewer.id(), &ip);
+    state.limiter.check(Limit::Play, &key)?;
     fetch_visible_game(&state, &id, viewer.id()).await?;
-    let now = chrono::Utc::now();
-    let mut tx = state.db.begin().await?;
-    let plays: i64 =
-        sqlx::query_scalar("UPDATE games SET plays = plays + 1 WHERE id = ? RETURNING plays")
+    if !state.play_dedupe.should_count(&id, &key) {
+        let plays: i64 = sqlx::query_scalar("SELECT plays FROM games WHERE id = ?")
             .bind(&id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&state.db)
             .await?
             .ok_or_else(|| AppError::not_found("Game"))?;
-    sqlx::query("INSERT INTO play_events (game_id, user_id, day, created_at) VALUES (?, ?, ?, ?)")
+        return Ok(Json(PlaysResponse { plays }));
+    }
+    let now = chrono::Utc::now();
+    let res: AppResult<i64> = async {
+        let mut tx = state.db.begin().await?;
+        let plays: i64 =
+            sqlx::query_scalar("UPDATE games SET plays = plays + 1 WHERE id = ? RETURNING plays")
+                .bind(&id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or_else(|| AppError::not_found("Game"))?;
+        sqlx::query(
+            "INSERT INTO play_events (game_id, user_id, day, created_at) VALUES (?, ?, ?, ?)",
+        )
         .bind(&id)
         .bind(viewer.id())
         .bind(now.format("%Y-%m-%d").to_string())
         .bind(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
         .execute(&mut *tx)
         .await?;
-    tx.commit().await?;
-    Ok(Json(PlaysResponse { plays }))
+        tx.commit().await?;
+        Ok(plays)
+    }
+    .await;
+    match res {
+        Ok(plays) => Ok(Json(PlaysResponse { plays })),
+        Err(e) => {
+            state.play_dedupe.forget(&id, &key);
+            Err(e)
+        }
+    }
 }
 
 #[derive(Deserialize)]
