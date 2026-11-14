@@ -32,6 +32,9 @@ export {
 } from "./components/GamePlayer";
 export { FavoritesProvider, FavoriteButton, useFavorites } from "./components/Favorite";
 export type { FavoriteButtonProps, FavoriteState, FavoritesApi } from "./components/Favorite";
+export { FollowProvider, FollowButton, useFollows } from "./components/Follow";
+export type { FollowButtonProps, FollowState, FollowsApi } from "./components/Follow";
+export { FeedItem, FeedItemSkeleton, FEED_ITEM_KINDS, isKnownFeedItem, feedScoreDisplay } from "./components/FeedItem";
 export { AchievementIcon, GameAchievements, RecentAchievements } from "./components/Achievements";
 export { ReportDialog, ReportButton, REPORT_REASONS } from "./components/Report";
 export type { ReportDialogProps } from "./components/Report";
@@ -119,6 +122,10 @@ export { FavoritesPage } from "./pages/FavoritesPage";
 export { GameStatsPage } from "./pages/GameStatsPage";
 export { AdminPage } from "./pages/AdminPage";
 export { StudioPage, STUDIO_OPEN_FOLDER_EVENT } from "./pages/StudioPage";
+export { FeedPage, FEED_TAB_KEY } from "./pages/FeedPage";
+export type { FeedTab } from "./pages/FeedPage";
+export { FollowListPage } from "./pages/FollowListPage";
+export type { FollowListMode } from "./pages/FollowListPage";
 
 // Utils
 export { formatCount, formatDate, timeAgo, errorMessage, looksLikeZip, formatScore, formatTimeUntil } from "./util";

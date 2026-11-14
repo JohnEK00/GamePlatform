@@ -2994,3 +2994,215 @@ button.pf-studio__file,
     margin-left: 0;
   }
 }
+
+/* ---------- F002: follows & feed ---------- */
+.pf-follow {
+  min-width: 108px;
+  justify-content: center;
+}
+.pf-follow--compact {
+  min-width: 92px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 0.82rem;
+}
+.pf-follow__plus {
+  font-weight: 700;
+  margin-right: -2px;
+}
+.pf-follow.is-following:hover:not(:disabled),
+.pf-follow.is-following:focus-visible {
+  border-color: rgba(255, 84, 104, 0.5);
+  color: var(--pf-danger);
+  background: rgba(255, 84, 104, 0.08);
+}
+.pf-follow[aria-busy="true"] {
+  opacity: 0.75;
+}
+.pf-profile__stat-link {
+  color: var(--pf-muted);
+  text-decoration: none;
+}
+.pf-profile__stat-link:hover strong,
+.pf-profile__stat-link:focus-visible strong {
+  color: var(--pf-accent);
+}
+.pf-profile__stats {
+  flex-wrap: wrap;
+}
+a.pf-tab {
+  display: inline-block;
+  text-decoration: none;
+}
+.pf-pagehead .pf-tabs {
+  margin-top: 8px;
+}
+
+.pf-feed {
+  max-width: 760px;
+}
+.pf-feed__list {
+  display: grid;
+  gap: 10px;
+}
+.pf-feeditem {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius);
+  background: var(--pf-surface);
+  transition: border-color 0.15s;
+}
+.pf-feeditem:hover {
+  border-color: var(--pf-border-strong);
+}
+.pf-feeditem__avatar {
+  flex: none;
+  line-height: 0;
+}
+.pf-feeditem__body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+.pf-feeditem__text {
+  margin: 0;
+  color: var(--pf-text-2);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.pf-feeditem__text strong {
+  color: var(--pf-text);
+}
+.pf-feeditem__text a {
+  text-decoration: none;
+}
+.pf-feeditem__text a:hover strong {
+  color: var(--pf-accent);
+}
+.pf-feeditem__meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.pf-feeditem__tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--pf-border);
+  background: var(--pf-surface-2);
+  color: var(--pf-muted);
+  font-size: 0.76rem;
+}
+.pf-feeditem__game {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  padding: 6px 12px 6px 6px;
+  border-radius: var(--pf-radius-sm);
+  background: var(--pf-bg-2);
+  border: 1px solid var(--pf-border);
+  color: var(--pf-text);
+  text-decoration: none;
+  justify-self: start;
+}
+.pf-feeditem__game:hover {
+  border-color: var(--pf-accent-2);
+}
+.pf-feeditem__thumb {
+  flex: none;
+  width: 64px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.pf-feeditem__thumb .pf-thumb {
+  aspect-ratio: 16 / 9;
+}
+.pf-feeditem__gametitle {
+  font-weight: 600;
+  font-size: 0.92rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pf-feeditem__ach {
+  flex: none;
+}
+.pf-feeditem--skeleton {
+  pointer-events: none;
+}
+.pf-feed__more {
+  display: flex;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+.pf-suggest {
+  margin-top: 18px;
+}
+.pf-suggest__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.pf-suggest__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+}
+.pf-suggest__user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: var(--pf-text);
+  text-decoration: none;
+}
+.pf-suggest__user:hover strong {
+  color: var(--pf-accent);
+}
+.pf-suggest__info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pf-userlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.pf-userlist__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius);
+  background: var(--pf-surface);
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .pf-feeditem {
+    padding: 12px;
+    gap: 10px;
+  }
+  .pf-feeditem__ach {
+    display: none;
+  }
+  .pf-feed .pf-pagehead--row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

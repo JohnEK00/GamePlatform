@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { isApiError } from "../api/client";
 import type { Game } from "../api/types";
@@ -9,6 +9,7 @@ import { ConfirmDialog, ErrorState, ProgressBar, Skeleton, TagChip, UserLink } f
 import { clearGameSave, discardPendingCloudSave, GamePlayer, hasGameSave } from "../components/GamePlayer";
 import { GameAchievements } from "../components/Achievements";
 import { FavoriteButton } from "../components/Favorite";
+import { FollowButton, useFollows } from "../components/Follow";
 import { ReportButton } from "../components/Report";
 import { useAuth } from "../context/auth";
 import { Leaderboard } from "../components/Leaderboard";
@@ -161,6 +162,53 @@ function ClearSaveData({ gameId, onCleared }: { gameId: string; onCleared: () =>
   );
 }
 
+/**
+ * Compact Follow button for the game's owner. `Game` carries no follow state, so when logged in the owner's profile
+ * is read lazily (unless the FollowProvider cache already knows the user); anonymous viewers get a login prompt.
+ */
+function OwnerFollow({ game }: { game: Game }) {
+  const api = useApi();
+  const { user } = useAuth();
+  const follows = useFollows();
+  const owner = game.owner;
+  const known = follows?.peek(owner.username);
+  const [loaded, setLoaded] = useState<{ username: string; following: boolean; followers: number } | null>(null);
+  const isSelf = !!user && user.username.toLowerCase() === owner.username.toLowerCase();
+  const seed = follows?.seed;
+  const need = !!user && !isSelf && !game.isOwner && !known && loaded?.username !== owner.username;
+
+  useEffect(() => {
+    if (!need) return;
+    let alive = true;
+    api.getUser(owner.username, { perPage: 1 }).then(
+      (p) => {
+        if (!alive || typeof p?.isFollowing !== "boolean") return;
+        setLoaded({ username: owner.username, following: p.isFollowing, followers: p.followers });
+        seed?.(owner.username, { following: p.isFollowing, followers: p.followers });
+      },
+      () => {
+        /* non-critical: the button stays hidden */
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, need, owner.username, seed]);
+
+  if (game.isOwner || isSelf) return null;
+  if (user && !known && loaded?.username !== owner.username) return null;
+  const fallback = known ?? (loaded ? { following: loaded.following, followers: loaded.followers } : { following: false });
+  return (
+    <FollowButton
+      username={owner.username}
+      displayName={owner.displayName}
+      isFollowing={fallback.following}
+      followers={fallback.followers}
+      variant="compact"
+    />
+  );
+}
+
 export function GamePage() {
   const { id = "" } = useParams();
   const api = useApi();
@@ -210,6 +258,7 @@ export function GamePage() {
             <h1 className="pf-gamepage__title">{game.title}</h1>
             <div className="pf-gamepage__byline">
               <UserLink user={game.owner} />
+              <OwnerFollow game={game} />
               <span className="pf-muted">·</span>
               <span className="pf-muted">{formatCount(game.plays)} plays</span>
               <span className="pf-muted">·</span>

@@ -7,6 +7,11 @@ import type {
   CreateReportRequest,
   CreatorStats,
   FavoriteResponse,
+  FeedPage,
+  FeedQuery,
+  FollowResponse,
+  SuggestedCreator,
+  UserRef,
   Game,
   GameAchievement,
   GameStats,
@@ -267,8 +272,9 @@ export class ApiClient {
   }
 
   // ---------- Users ----------
-  getUser(username: string): Promise<UserProfileResponse> {
-    return this.request(`/api/users/${encodeURIComponent(username)}`);
+  /** `query` pages the profile's `games` list (server default 24 per page). */
+  getUser(username: string, query: PageQuery = {}): Promise<UserProfileResponse> {
+    return this.request(`/api/users/${encodeURIComponent(username)}`, { query: { page: query.page, perPage: query.perPage } });
   }
   updateMe(body: UpdateMeRequest): Promise<User> {
     return this.request("/api/users/me", { method: "PATCH", json: body });
@@ -414,6 +420,32 @@ export class ApiClient {
   }
   resolveReport(reportId: string, action: ReportAction): Promise<Report> {
     return this.request(`/api/admin/reports/${encodeURIComponent(reportId)}/resolve`, { method: "POST", json: { action } });
+  }
+
+  // ---------- F002: Follows & feed ----------
+  followUser(username: string): Promise<FollowResponse> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/follow`, { method: "PUT" });
+  }
+  unfollowUser(username: string): Promise<FollowResponse> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/follow`, { method: "DELETE" });
+  }
+  /** Convenience: PUT or DELETE depending on `follow`. */
+  setFollowing(username: string, follow: boolean): Promise<FollowResponse> {
+    return follow ? this.followUser(username) : this.unfollowUser(username);
+  }
+  listFollowers(username: string, query: PageQuery = {}): Promise<Page<UserRef>> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/followers`, { query: { page: query.page, perPage: query.perPage } });
+  }
+  listFollowing(username: string, query: PageQuery = {}): Promise<Page<UserRef>> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/following`, { query: { page: query.page, perPage: query.perPage } });
+  }
+  /** Newest first. `kinds` is sent comma-separated and omitted when empty. */
+  getFeed(query: FeedQuery = {}, signal?: AbortSignal): Promise<FeedPage> {
+    const kinds = query.kinds && query.kinds.length > 0 ? query.kinds.join(",") : undefined;
+    return this.request("/api/feed", { query: { cursor: query.cursor, limit: query.limit, kinds }, signal });
+  }
+  getFeedSuggestions(): Promise<SuggestedCreator[]> {
+    return this.request("/api/feed/suggestions");
   }
 }
 

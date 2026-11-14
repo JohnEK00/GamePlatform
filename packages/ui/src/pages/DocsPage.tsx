@@ -84,6 +84,7 @@ export function DocsPage() {
           <li>Debug overlay</li>
           <li>Game Studio</li>
           <li>Limits &amp; rules</li>
+          <li>Followers &amp; the feed</li>
         </ol>
       </nav>
 
@@ -314,6 +315,32 @@ export function DocsPage() {
             <code>engine.storage</code> for saves.
           </li>
           <li>A missing or invalid <code>game.json</code> is rejected with a validation error on upload.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>11. Your players can follow you</h2>
+        <p>
+          Players can follow you from your profile or any of your game pages. Their <Link to="/feed">feed</Link> then shows your
+          activity. Nothing extra is needed in your code:
+        </p>
+        <ul>
+          <li>
+            <strong>Publishing a game</strong> shows “published {"{game}"}”, once per game, even if you unpublish and re-publish it.
+          </li>
+          <li>
+            <strong>Replacing the bundle</strong> of a published game shows “updated {"{game}"} to v{"{version}"}”, at most once per
+            24 hours. Players who favorited the game see it too.
+          </li>
+          <li>
+            <code>engine.platform.submitScore(n)</code>: a new personal best shows to the <em>player's</em> followers, at most one
+            item per player, game and UTC day (the best one wins).
+          </li>
+          <li>
+            <code>engine.platform.unlockAchievement(id)</code>: first unlocks show to the player's followers, grouped per day
+            (“unlocked Flawless and 2 more”).
+          </li>
+          <li>Your own scores and unlocks on your own games, and Studio previews, never create feed items.</li>
         </ul>
       </section>
 

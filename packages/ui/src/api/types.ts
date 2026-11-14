@@ -102,7 +102,19 @@ export type RegisterRequest = { username: string; email: string; password: strin
 /** `login` is a username or an email. */
 export type LoginRequest = { login: string; password: string };
 
-export type UserProfileResponse = { user: User; games: GameSummary[] };
+export type UserProfileResponse = {
+  user: User;
+  /** The user's games (paged server-side: `?page=&perPage=`, default 24). */
+  games: GameSummary[];
+  /** Total number of games for paging `games` (newer servers only). */
+  gamesTotal?: number;
+  /** F002: users following this user. */
+  followers: number;
+  /** F002: users this user follows. */
+  following: number;
+  /** F002: the viewer follows this user; false when anonymous or viewing yourself. */
+  isFollowing: boolean;
+};
 export type UpdateMeRequest = { displayName?: string; bio?: string };
 
 export type GameSort = "new" | "popular" | "top" | "favorites";
@@ -275,4 +287,60 @@ export type LeaderboardQuery = { period?: LeaderboardPeriod; limit?: number };
 export type ScoreSubmitResult = Score & {
   personalBest: boolean;
   ranks: { day: number; week: number; all: number };
+};
+
+// ---- F002: follows and the activity feed ----
+
+export type FollowResponse = {
+  following: boolean;
+  /** The target's follower count after the change. */
+  followers: number;
+};
+
+export type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked";
+
+export type FeedItem = {
+  /** Opaque cursor value (decimal string). */
+  id: string;
+  /** Clients must ignore unknown kinds (more may be added later). */
+  kind: FeedItemKind;
+  /** The game owner for gamePublished/gameUpdated; the player otherwise. */
+  actor: UserRef;
+  game: GameSummary;
+  /** "favorite": shown only because the viewer favorited the game (gamePublished/gameUpdated only). */
+  reason: "following" | "favorite";
+  /** RFC3339 UTC; for coalesced items, the latest occurrence. */
+  createdAt: string;
+  /** gamePublished/gameUpdated: the game version at event time; else null. */
+  version: number | null;
+  /** personalBest only; else null. */
+  score: {
+    /** The new best. */
+    value: number;
+    /** True when it was the actor's first score on this game. */
+    first: boolean;
+    /** The game's CURRENT config (F001), for formatting. */
+    leaderboard: LeaderboardConfig;
+  } | null;
+  /** achievementUnlocked only. `count`: unlocks by the actor in this game that UTC day (>= 1); the def is the latest. */
+  achievement: (AchievementDef & { count: number }) | null;
+};
+
+export type FeedPage = { items: FeedItem[]; nextCursor: string | null };
+
+export type FeedQuery = {
+  /** A FeedItem.id from a previous page; returns strictly older items. */
+  cursor?: string;
+  /** 1–50, default 20. */
+  limit?: number;
+  /** Empty or absent = all kinds. */
+  kinds?: FeedItemKind[];
+};
+
+export type SuggestedCreator = {
+  user: UserRef;
+  /** "favorited": owns games the viewer favorited. */
+  reason: "favorited" | "popular";
+  /** Their published game count (>= 1). */
+  games: number;
 };

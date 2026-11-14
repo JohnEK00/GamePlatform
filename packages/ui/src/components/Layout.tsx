@@ -85,6 +85,9 @@ function UserMenu() {
           <Link role="menuitem" to="/dashboard">
             My games
           </Link>
+          <Link role="menuitem" to="/feed">
+            Feed
+          </Link>
           <Link role="menuitem" to="/favorites">
             Favorites
           </Link>
@@ -142,6 +145,7 @@ export function Header() {
             <NavLink to="/studio">Studio</NavLink>
             <NavLink to="/docs">Make a game</NavLink>
             {user && <NavLink to="/dashboard">My games</NavLink>}
+            {user && <NavLink to="/feed">Feed</NavLink>}
             {user && <NavLink to="/favorites">Favorites</NavLink>}
             {user?.role === "admin" && <NavLink to="/admin">Admin</NavLink>}
           </nav>
