@@ -8,6 +8,7 @@ pub mod feed;
 pub mod files;
 pub mod follows;
 pub mod games;
+pub mod notifications;
 pub mod play;
 pub mod related;
 pub mod reports;
@@ -75,6 +76,17 @@ pub fn api_router() -> Router<AppState> {
         .route("/users/{username}/following", get(follows::list_following))
         .route("/feed", get(feed::get_feed))
         .route("/feed/suggestions", get(feed::get_suggestions))
+        // F007 notifications (literal paths, so a later `/notifications/{id}` can't clash)
+        .route("/notifications", get(notifications::list))
+        .route(
+            "/notifications/unread-count",
+            get(notifications::unread_count),
+        )
+        .route("/notifications/read", post(notifications::mark_read))
+        .route(
+            "/notifications/settings",
+            get(notifications::get_settings).put(notifications::put_settings),
+        )
         // games
         .route(
             "/games",

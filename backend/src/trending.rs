@@ -200,6 +200,9 @@ pub async fn ensure_fresh(state: &AppState) {
     }
 }
 
+/// F007: minimum interval between notification prunes in [`spawn_maintenance`].
+pub const PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(3600);
+
 /// Background maintenance (N1, N3): every `TRENDING_TTL_SECS` refresh the trending snapshot
 /// (retrying after `min(TTL, FAILURE_BACKOFF)` when it fails) and run `PRAGMA optimize`.
 /// The first run is one TTL after the call (startup already refreshed in `AppState::new`).
@@ -214,6 +217,8 @@ pub fn spawn_maintenance(state: &AppState) -> Option<tokio::task::JoinHandle<()>
     let state = state.clone();
     Some(tokio::spawn(async move {
         let mut wait = ttl;
+        // F007: notification pruning runs at most once per PRUNE_EVERY.
+        let mut last_prune: Option<std::time::Instant> = None;
         loop {
             tokio::time::sleep(wait).await;
             wait = if cache.refresh_now(&db).await {
@@ -224,6 +229,13 @@ pub fn spawn_maintenance(state: &AppState) -> Option<tokio::task::JoinHandle<()>
             crate::db::optimize(&db, false).await;
             // L4: retry `score_bests` rebuilds that failed earlier (a no-op when none).
             let _ = crate::bests::spawn_rebuild(&state).await;
+            if last_prune.is_none_or(|t| t.elapsed() >= PRUNE_EVERY) {
+                last_prune = Some(std::time::Instant::now());
+                match crate::notifications::prune(&db, Utc::now()).await {
+                    Ok(n) => tracing::debug!(deleted = n, "pruned notifications"),
+                    Err(e) => tracing::warn!(error = %e, "notification pruning failed"),
+                }
+            }
         }
     }))
 }

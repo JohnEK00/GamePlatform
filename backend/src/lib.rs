@@ -12,6 +12,7 @@ pub mod export;
 pub mod extract;
 pub mod locks;
 pub mod models;
+pub mod notifications;
 pub mod ratelimit;
 pub mod routes;
 pub mod screenshots;

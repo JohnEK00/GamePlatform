@@ -17,6 +17,7 @@ use crate::models::{
     Comment, CommentContext, CommentListPage, CommentThread, HeartResponse, Page, now_rfc3339,
     user_ref_from_row,
 };
+use crate::notifications::{self as notif, Kind, NewNotification};
 use crate::ratelimit::Limit;
 use crate::routes::games::{fetch_visible_game, limit_user, parse_paging};
 use crate::routes::screenshots::is_admin;
@@ -248,7 +249,7 @@ pub async fn create_comment(
     ApiPath(game_id): ApiPath<String>,
     ApiJson(body): ApiJson<CommentBody>,
 ) -> AppResult<(StatusCode, Json<Comment>)> {
-    fetch_visible_game(&state, &game_id, Some(&user.id)).await?;
+    let game = fetch_visible_game(&state, &game_id, Some(&user.id)).await?;
     limit_user(&state, Limit::Comment, &user.id)?;
     let parent_ref = match body.parent_id {
         None | Some(serde_json::Value::Null) => None,
@@ -335,12 +336,83 @@ pub async fn create_comment(
             }
         }
     }
-    // F007: notify here (top-level → game owner; reply → root author and the replyTo user).
+    notify_new_comment(
+        &state,
+        &game_id,
+        &game.owner_id,
+        &user.id,
+        &id,
+        root.as_deref(),
+        reply_to.as_deref(),
+    )
+    .await;
     let viewer = Viewer::load(&state, Some(&user.id)).await?;
     let comment = load_comment(&state, &viewer, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Comment"))?;
     Ok((StatusCode::CREATED, Json(comment)))
+}
+
+/// F007: a top-level comment notifies the game owner (group per game); a reply notifies the
+/// thread's root author and the `replyTo` user (group per thread), each at most once and never
+/// the poster. Best effort: failures are logged.
+async fn notify_new_comment(
+    state: &AppState,
+    game_id: &str,
+    owner_id: &str,
+    poster: &str,
+    comment_id: &str,
+    root: Option<&str>,
+    reply_to: Option<&str>,
+) {
+    let now = chrono::Utc::now();
+    let Some(root) = root else {
+        let n = NewNotification {
+            recipient_id: owner_id.to_string(),
+            kind: Kind::Comment,
+            group_key: notif::game_group(game_id),
+            game_id: Some(game_id.to_string()),
+            comment_id: None,
+            actor_id: poster.to_string(),
+            event_comment_id: Some(comment_id.to_string()),
+            dedupe_actor: false,
+            now,
+        };
+        notif::notify_pool(&state.db, &n).await;
+        return;
+    };
+    let root_author: Option<String> =
+        match sqlx::query_scalar("SELECT user_id FROM comments WHERE id = ?")
+            .bind(root)
+            .fetch_optional(&state.db)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load thread author for notifications");
+                None
+            }
+        };
+    let mut recipients: Vec<&str> = Vec::with_capacity(2);
+    for r in [root_author.as_deref(), reply_to].into_iter().flatten() {
+        if r != poster && !recipients.contains(&r) {
+            recipients.push(r);
+        }
+    }
+    for r in recipients {
+        let n = NewNotification {
+            recipient_id: r.to_string(),
+            kind: Kind::Reply,
+            group_key: notif::thread_group(root),
+            game_id: Some(game_id.to_string()),
+            comment_id: Some(root.to_string()),
+            actor_id: poster.to_string(),
+            event_comment_id: Some(comment_id.to_string()),
+            dedupe_actor: false,
+            now,
+        };
+        notif::notify_pool(&state.db, &n).await;
+    }
 }
 
 /// `GET /api/comments/{id}`: the comment and its thread.
@@ -480,7 +552,7 @@ pub async fn heart(
     if meta.user_id == user.id {
         return Err(AppError::validation("You can't heart your own comment"));
     }
-    let _changed = sqlx::query(
+    let changed = sqlx::query(
         "INSERT OR IGNORE INTO comment_hearts (comment_id, user_id, created_at) \
          SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM comments WHERE id = ?1)",
     )
@@ -491,7 +563,21 @@ pub async fn heart(
     .await?
     .rows_affected()
         > 0;
-    // F007: notify here when `_changed` (a creator heart → the comment's author).
+    if changed {
+        // F007: every heart notifies the author (coalesced per comment, once per hearter).
+        let n = NewNotification {
+            recipient_id: meta.user_id.clone(),
+            kind: Kind::Heart,
+            group_key: notif::comment_group(&id),
+            game_id: Some(meta.game_id.clone()),
+            comment_id: Some(id.clone()),
+            actor_id: user.id.clone(),
+            event_comment_id: None,
+            dedupe_actor: true,
+            now: chrono::Utc::now(),
+        };
+        notif::notify_pool(&state.db, &n).await;
+    }
     Ok(Json(heart_response(&state, &id, true).await?))
 }
 
@@ -501,11 +587,23 @@ pub async fn unheart(
     user: AuthUser,
     ApiPath(id): ApiPath<String>,
 ) -> AppResult<Json<HeartResponse>> {
-    heart_target(&state, &user, &id).await?;
-    sqlx::query("DELETE FROM comment_hearts WHERE comment_id = ? AND user_id = ?")
+    let meta = heart_target(&state, &user, &id).await?;
+    let removed = sqlx::query("DELETE FROM comment_hearts WHERE comment_id = ? AND user_id = ?")
         .bind(&id)
         .bind(&user.id)
         .execute(&state.db)
-        .await?;
+        .await?
+        .rows_affected()
+        > 0;
+    if removed {
+        notif::retract_pool(
+            &state.db,
+            &meta.user_id,
+            Kind::Heart,
+            &notif::comment_group(&id),
+            &user.id,
+        )
+        .await;
+    }
     Ok(Json(heart_response(&state, &id, false).await?))
 }

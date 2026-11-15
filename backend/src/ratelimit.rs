@@ -52,6 +52,9 @@ pub enum Limit {
     Screenshot,
     /// F006 comment hearts (`PUT`/`DELETE …/heart`, shared): 120 per 10 min, per user
     Heart,
+    /// F007 notification endpoints (list, unread count, mark read, settings GET/PUT, shared):
+    /// 120/min, per user
+    Notifications,
 }
 
 impl Limit {
@@ -74,6 +77,7 @@ impl Limit {
             Limit::Image => (20, Duration::from_secs(3600)),
             Limit::Screenshot => (10, Duration::from_secs(3600)),
             Limit::Heart => (120, Duration::from_secs(600)),
+            Limit::Notifications => (120, Duration::from_secs(60)),
         }
     }
 }

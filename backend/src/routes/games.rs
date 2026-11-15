@@ -318,6 +318,7 @@ pub async fn create_game_record(
 ) -> AppResult<String> {
     let id = uuid::Uuid::new_v4().to_string();
     let game_dir = state.storage.game_dir(&id);
+    let published = new.published;
     let result: AppResult<()> = async {
         let (meta, staging) = extract_bundle(state, &id, bundle_bytes).await?;
         let title = match new.title {
@@ -366,6 +367,12 @@ pub async fn create_game_record(
     if let Err(e) = result {
         let _ = tokio::fs::remove_dir_all(&game_dir).await;
         return Err(e);
+    }
+    if published {
+        // F007: published at creation is the first publish; followers are notified after the
+        // commit, before the request responds.
+        crate::notifications::fan_out_game_published(&state.db, &id, owner_id, chrono::Utc::now())
+            .await;
     }
 
     if let Some((bytes, ext)) = thumbnail {
@@ -678,6 +685,7 @@ pub async fn update_game(
         replace_tags(&mut tx, &id, &tags).await?;
     }
     // F002: the first publish (ever) emits `gamePublished`; re-publishing never does.
+    let mut first_publish = false;
     if body.published == Some(true) && !game.published {
         let first = sqlx::query(
             "UPDATE games SET first_published_at = ? \
@@ -689,9 +697,20 @@ pub async fn update_game(
         .await?;
         if first.rows_affected() == 1 {
             activity::record_game_published(&mut tx, &id, &game.owner_id, game.version).await;
+            first_publish = true;
         }
     }
     tx.commit().await?;
+    if first_publish {
+        // F007: after the commit, awaited before responding.
+        crate::notifications::fan_out_game_published(
+            &state.db,
+            &id,
+            &game.owner_id,
+            chrono::Utc::now(),
+        )
+        .await;
+    }
 
     Ok(Json(build_game(&state, &id, Some(&user.id)).await?))
 }

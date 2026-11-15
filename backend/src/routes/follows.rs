@@ -10,6 +10,7 @@ use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiPath, ApiQuery};
 use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
+use crate::notifications::{self as notif, Kind, NewNotification};
 use crate::ratelimit::Limit;
 use crate::routes::comments::PageQuery;
 use crate::routes::games::{limit_user, parse_paging};
@@ -90,7 +91,7 @@ pub async fn put_follow(
                 "You can follow at most {FOLLOW_CAP} users"
             )));
         }
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO follows (follower_id, followee_id, created_at) VALUES (?, ?, ?) \
              ON CONFLICT (follower_id, followee_id) DO NOTHING",
         )
@@ -98,7 +99,24 @@ pub async fn put_follow(
         .bind(&target)
         .bind(now_rfc3339())
         .execute(&state.db)
-        .await?;
+        .await?
+        .rows_affected()
+            > 0;
+        if inserted {
+            // F007: once per follower while an earlier event of theirs is kept.
+            let n = NewNotification {
+                recipient_id: target.clone(),
+                kind: Kind::Follow,
+                group_key: notif::FOLLOW_GROUP.to_string(),
+                game_id: None,
+                comment_id: None,
+                actor_id: user.id.clone(),
+                event_comment_id: None,
+                dedupe_actor: true,
+                now: chrono::Utc::now(),
+            };
+            notif::notify_pool(&state.db, &n).await;
+        }
     }
     Ok(Json(FollowResponse {
         following: true,
@@ -113,11 +131,23 @@ pub async fn delete_follow(
     ApiPath(username): ApiPath<String>,
 ) -> AppResult<Json<FollowResponse>> {
     let target = target_for(&state, &user, &username).await?;
-    sqlx::query("DELETE FROM follows WHERE follower_id = ? AND followee_id = ?")
+    let removed = sqlx::query("DELETE FROM follows WHERE follower_id = ? AND followee_id = ?")
         .bind(&user.id)
         .bind(&target)
         .execute(&state.db)
-        .await?;
+        .await?
+        .rows_affected()
+        > 0;
+    if removed {
+        notif::retract_pool(
+            &state.db,
+            &target,
+            Kind::Follow,
+            notif::FOLLOW_GROUP,
+            &user.id,
+        )
+        .await;
+    }
     Ok(Json(FollowResponse {
         following: false,
         followers: follower_count(&state.db, &target).await?,
