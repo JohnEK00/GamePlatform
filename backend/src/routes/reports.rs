@@ -13,6 +13,7 @@ use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
 use crate::ratelimit::Limit;
+use crate::routes::comments::remove_comment;
 use crate::routes::games::{fetch_visible_game, limit_user, parse_paging, remove_game};
 use crate::routes::screenshots::remove_screenshot;
 use crate::screenshots::{image_url, thumb_url};
@@ -294,12 +295,9 @@ pub async fn admin_resolve_report(
         }
         ("delete", "game") => remove_game(&state, &report.target_id).await?,
         ("delete", "screenshot") => remove_screenshot(&state, &report.target_id).await?,
-        ("delete", "comment") => {
-            sqlx::query("DELETE FROM comments WHERE id = ?")
-                .bind(&report.target_id)
-                .execute(&state.db)
-                .await?;
-        }
+        // F006: same effects as `DELETE /api/comments/{id}` (replies cascade, open reports on
+        // every deleted comment are resolved).
+        ("delete", "comment") => remove_comment(&state, &report.target_id).await?,
         _ => {}
     }
 

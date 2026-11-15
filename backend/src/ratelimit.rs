@@ -22,7 +22,7 @@ pub enum Limit {
     Auth,
     /// game create + bundle replace: 20/hour
     Upload,
-    /// comments: 30 per 10 min
+    /// comments and F006 replies (shared): 30 per 10 min, per user
     Comment,
     /// reports: 10/hour
     Report,
@@ -50,6 +50,8 @@ pub enum Limit {
     /// F005 screenshot posts (`POST …/screenshots`; own bucket, separate from `Image`): 10/hour,
     /// per user
     Screenshot,
+    /// F006 comment hearts (`PUT`/`DELETE …/heart`, shared): 120 per 10 min, per user
+    Heart,
 }
 
 impl Limit {
@@ -71,6 +73,7 @@ impl Limit {
             Limit::ScoreList => (120, Duration::from_secs(60)),
             Limit::Image => (20, Duration::from_secs(3600)),
             Limit::Screenshot => (10, Duration::from_secs(3600)),
+            Limit::Heart => (120, Duration::from_secs(600)),
         }
     }
 }

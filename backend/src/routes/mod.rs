@@ -114,7 +114,15 @@ pub fn api_router() -> Router<AppState> {
             "/games/{id}/comments",
             get(comments::list_comments).post(comments::create_comment),
         )
-        .route("/comments/{id}", delete(comments::delete_comment))
+        .route(
+            "/comments/{id}",
+            get(comments::get_comment).delete(comments::delete_comment),
+        )
+        .route("/comments/{id}/replies", get(comments::list_replies))
+        .route(
+            "/comments/{id}/heart",
+            put(comments::heart).delete(comments::unheart),
+        )
         // F005 screenshots
         .route(
             "/games/{id}/screenshots",

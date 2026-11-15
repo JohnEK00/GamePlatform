@@ -180,7 +180,7 @@ pub struct Page<T> {
     pub per_page: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Comment {
     pub id: String,
@@ -188,6 +188,57 @@ pub struct Comment {
     pub author: UserRef,
     pub body: String,
     pub created_at: String,
+    /// F006: null for top-level comments, else the id of a top-level comment.
+    pub parent_id: Option<String>,
+    /// F006: replies only, the author of the reply that was answered.
+    pub reply_to: Option<UserRef>,
+    /// F006: the author is the game's current owner.
+    pub is_creator: bool,
+    pub hearts: i64,
+    /// F006: the viewer hearted it (false when anonymous).
+    pub my_heart: bool,
+    /// F006: the game's current owner hearted it.
+    pub creator_heart: bool,
+    /// F006: the viewer is the author, the game owner or an admin (false when anonymous).
+    pub can_delete: bool,
+}
+
+/// F006: a top-level comment with the oldest (at most 3) replies.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentThread {
+    #[serde(flatten)]
+    pub comment: Comment,
+    pub reply_count: i64,
+    pub replies: Vec<Comment>,
+}
+
+/// F006: `Page<CommentThread>` + `totalAll` (comments and replies).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentListPage {
+    pub items: Vec<CommentThread>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+    pub total_all: i64,
+}
+
+/// F006: `GET /api/comments/{id}`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentContext {
+    pub comment: Comment,
+    pub thread: CommentThread,
+}
+
+/// F006: `PUT`/`DELETE /api/comments/{id}/heart`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeartResponse {
+    pub hearted: bool,
+    pub hearts: i64,
+    pub creator_heart: bool,
 }
 
 #[derive(Debug, Serialize)]
