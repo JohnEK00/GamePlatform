@@ -607,3 +607,40 @@ Files stay reachable by direct URL after their game is unpublished, as thumbnail
   - `0` disables the background task: reads refresh inline instead, with a 60s backoff after a failure. This is for tests and development.
 - **Studio linker:** commented-out imports, and import-like text inside strings or templates, are ignored.
 - **Unchanged:** response shapes, the feed cursor semantics and leaderboard results. Leaderboards are now served from a precomputed `score_bests` table (migration `0008_review2.sql`).
+
+
+## F009 additions
+
+Controls overlay and key remapping (spec: `docs/features/F009-controls-and-remapping.md`). All earlier rules apply. No new endpoints and no rate limit changes.
+
+### Types
+```ts
+type GamepadButtonName = "A" | "B" | "X" | "Y" | "LB" | "RB" | "LT" | "RT" | "Back" | "Start" | "LS" | "RS" | "Up" | "Down" | "Left" | "Right"
+type ControlAction = {
+  id: string;                    // ^[a-z0-9_-]{1,32}$, unique per game
+  name: string;                  // 1–40 chars, trimmed, no control or bidi characters
+  keys: string[];                // 0–3 unique bindable codes (GAME_FORMAT.md § F009), e.g. "KeyA", "Space", "Mouse0"
+  gamepad: GamepadButtonName[];  // 0–2 unique; keys.length + gamepad.length >= 1
+}
+type Game = { ...F004, actions: ControlAction[]; controlsHint: string }
+// actions: from game.json `actions` of the CURRENT version, normalised, in declared order; [] when absent.
+// controlsHint: from game.json `controls` (string only), normalised, 0–300 chars; "" when absent or not a string.
+```
+- Only `Game` (the detail object returned by `GET /api/games/{id}`, upload, replace and edit responses) carries the two fields. `GameSummary` is unchanged.
+- Players' remapped keys are stored on the device (ARCHITECTURE § F009), never on the server.
+
+### Changed endpoints
+| Method | Path | Change |
+|---|---|---|
+| POST 🔒 | /api/games | game.json `actions` is validated (GAME_FORMAT § F009). A violation → 422 `validation` with a message naming the path. `controls` is never rejected. |
+| PUT 🔒 | /api/games/{id}/bundle | Same validation. The new version's `actions` and `controlsHint` replace the old ones (a bundle without them clears them). |
+| GET 🔓 | /api/games/{id} | + `actions`, `controlsHint`. |
+| GET | /play/{id} | The `boot` options carry `actions` (the stored list, escaped for `<script>`). `Cache-Control: no-cache` and the CSP are unchanged. |
+| GET | /play/studio | The page passes `manifest.actions` from `webgame:studio-load` to `boot`. |
+
+- `GET /api/games/{id}/bundle` (F013) is unchanged. It returns the stored `game.json` file as uploaded, not the normalised copy.
+- Example 422 messages: `game.json: actions must be an array`, `game.json: at most 32 actions are allowed`, `game.json: actions[0].id must match ^[a-z0-9_-]{1,32}$`, `game.json: actions[1].id "jump" is a duplicate`, `game.json: actions[2].keys[1] "Escape" can't be bound`, `game.json: actions[3].gamepad[0] "Home" is not a gamepad button`, `game.json: actions[4] needs at least one key or gamepad button`.
+
+### Existing games
+- Games uploaded before F009 are backfilled once at backend startup from their stored `game.json` (ARCHITECTURE § F009). Until the backfill has processed a game, it reports `actions: []` and `controlsHint: ""`.
+- A stored `game.json` whose `actions` would now fail validation is backfilled as `actions: []` (no error). The next upload of that bundle gets the 422.

@@ -380,3 +380,47 @@ Screenshot capture and share (spec: `docs/features/F005-screenshots.md`).
   - `screenshots.rs` and `routes/screenshots.rs` belong to backend-dev.
   - `screenshot.ts` and the three components belong to frontend-dev.
   - The menu item and `save.rs` directory hint belong to desktop-dev.
+
+
+## F009 additions
+Controls overlay and key remapping (spec: `docs/features/F009-controls-and-remapping.md`).
+- **Data flow**:
+  ```
+  game.json actions ── upload/replace ──► bundle.rs parse_actions (strict, 422) ──► games.actions_json
+                                                                                     │
+  GET /api/games/{id} ◄── Game.actions / controlsHint ◄──────────────────────────────┤
+  /play/{id} HTML ◄── boot({ …, actions: <escaped JSON literal> }) ◄─────────────────┘
+        │ engine: parseActions (lenient) → defaults
+        ▼
+  iframe (opaque origin) ◄── webgame:controls { overrides: { actionId: codes[] } } ── GamePlayer
+                                                                                       ▲
+                                    ControlsPanel ── writeOverrides ── localStorage webgame.controls.{gameId}
+  ```
+  Defaults travel with the page, so a game opened outside the app (no parent) still has its declared actions. Overrides travel by message, so a remap applies to the running game without a reload.
+- **Overrides live on the device.** No server storage, no new endpoints. Rationale: bindings depend on the physical keyboard, so per-device is the right default. Account sync is a later item.
+  - Key `webgame.controls.{gameId}`, value `{ "v": 1, "overrides": { [actionId]: string[] } }`, at most 4096 bytes serialised. On read, malformed JSON, `v !== 1`, a non-object `overrides` or an oversize value → `{}` and the key is removed.
+  - Only actions whose keys differ from the defaults are stored. Ids that are no longer declared are pruned on the next write. An empty result removes the key.
+  - Key `webgame.controls.hinted.{gameId}` = `"1"` marks the one-time first-play hint as shown.
+  - The Studio keeps overrides in memory only.
+- **Layout privacy.** The parent may call `navigator.keyboard.getLayoutMap()` (top-level only, Chromium/WebView2) for labels in its own UI. The map and labels are never posted into the iframe, so a sandboxed game can't read the player's keyboard layout. In-game labels come from the engine's US-layout table.
+- **Three copies of the key tables.** The bindable key list, gamepad names and validation rules exist in `backend/src/bundle.rs` (strict), `packages/engine/src/actions.ts` (lenient parse, labels) and `packages/ui/src/controls.ts` (Studio validation, labels). GAME_FORMAT § F009 is the single normative source; each area's tests assert the list length (86 codes, 16 buttons) and spot values. A change to the table is a contract change in all three.
+- **Pause reasons.** The engine has a single host pause flag. `GamePlayer` (and `StudioPreview`) keep a set of parent pause reasons (`visibility`, `controls`): `webgame:pause` when the set becomes non-empty, `webgame:resume` when it becomes empty.
+- **Data**: migration `backend/migrations/0010_f009.sql` runs after F005's `0009_f005.sql`:
+  ```sql
+  ALTER TABLE games ADD COLUMN actions_json  TEXT;   -- normalised ControlAction[] as compact JSON; '[]' when none; NULL = not yet backfilled
+  ALTER TABLE games ADD COLUMN controls_hint TEXT;   -- normalised game.json `controls`, <= 300 chars; '' when none; NULL = not yet backfilled
+  ```
+  No index is needed: both are read with the `games` row in `GAME_SELECT` and in the `/play/{id}` lookup. The values are per current version, like `score_order`/`score_format`/`score_label` (F001).
+- **Startup backfill** (`backend/src/controls_backfill.rs`, backend-dev): spawned after migrations, alongside the existing startup tasks.
+  1. `SELECT id, version FROM games WHERE actions_json IS NULL LIMIT 200`, repeated until no rows are left.
+  2. Read `data/games/{id}/v{version}/game.json` (skipped when larger than 1 MiB).
+  3. `parse_actions` (strict; an error stores `[]` and logs at `info`) and `parse_controls_hint`. A missing or unreadable file stores `[]` and `''`.
+  4. `UPDATE games SET actions_json = ?, controls_hint = ? WHERE id = ? AND version = ? AND actions_json IS NULL`, so a concurrent bundle replace wins.
+  It is best effort and idempotent: a failure is logged, and remaining rows are retried at the next start.
+- **UI**: `src/controls.ts` (tables, labels, `validateActions`, overrides store, `PLAYER_CONTROLS_EVENT = "webgame:player-controls"`). Hosts dispatch it as a `window` CustomEvent to open the controls panel of the mounted `GamePlayer` or `StudioPreview` (the F005 pattern). New components: `ControlsPanel`, `KeyCaptureButton`, `ControlsSummary`. The desktop app inherits them through `@webgame/ui`.
+- **Desktop**: View → Controls (`CmdOrCtrl+Shift+K`, forwarded id `"controls"`) dispatches `PLAYER_CONTROLS_EVENT`. No Rust logic beyond the menu entry.
+- **Ownership**:
+  - `actions.ts` and the `input.ts` changes belong to engine-dev.
+  - `parse_actions`, `parse_controls_hint`, `controls_backfill.rs` and the `play.rs` changes belong to backend-dev.
+  - `controls.ts`, the three components and the Studio form belong to frontend-dev.
+  - The menu item belongs to desktop-dev.

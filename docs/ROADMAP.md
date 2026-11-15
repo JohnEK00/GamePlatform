@@ -27,8 +27,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F003 | Trending and "More like this" discovery | S | shipped |
 | F004 | Version changelogs and an "Updated" badge | S | shipped |
 | F013 | Studio: publish updates to an existing game | M | shipped |
-| F005 | Screenshot capture and share | M | specced |
-| F009 | Controls overlay and key remapping | M | proposed |
+| F005 | Screenshot capture and share | M | shipped |
+| F009 | Controls overlay and key remapping | M | specced |
 | F006 | Comment replies and reactions | M | proposed |
 | F012 | Engine bitmap fonts and 9-slice UI widgets | M | proposed |
 | F007 | In-app notifications | M | proposed |
@@ -37,6 +37,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
+| F016 | Gamepad remapping and synced control bindings | M | proposed |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
@@ -78,7 +79,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (export endpoint, `Limit::BundleDownload`, CORS expose headers; no migration), frontend (zip reader, Open menu/dialog, Publish modes, link/dirty state, entry points), desktop (session folder registry + `reload_project_folder`).
 - **Depends on**: F004 (`notes`/`expectedVersion`, `ReleaseNotesField`).
 
-### F005: Screenshot capture and share (M, specced → [spec](features/F005-screenshots.md))
+### F005: Screenshot capture and share (M, shipped → [spec](features/F005-screenshots.md))
 - **Pitch**:
   - The engine captures a frame at a fixed point (after the game's draw calls, before the debug and pause overlays), at a predictable resolution, without `preserveDrawingBuffer`.
   - It is exposed three ways: a 📷 button in the player (parent request), `engine.platform.shareScreenshot()` (game offers a shot to the player), and `engine.captureFrame()` (the game keeps the Blob).
@@ -109,10 +110,15 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: curation as a discovery channel, and a social signal.
 - **Areas**: backend, frontend.
 
-### F009: Controls overlay and key remapping (M, proposed)
-- **Pitch**: game.json declares named actions with default keys. The engine exposes `input.action(name)`, and the player has a controls panel where users remap keys, saved per game.
-- **User value**: accessibility, non-QWERTY layouts, and controls players can discover.
-- **Areas**: engine, backend (game.json validation), frontend (controls panel), examples.
+### F009: Controls overlay and key remapping (M, specced → [spec](features/F009-controls-and-remapping.md))
+- **Pitch**:
+  - game.json declares named `actions` with default keys (up to 3) and gamepad buttons (up to 2), validated on upload (422) and exposed as `Game.actions`. The free-text `controls` string that bundles already carry becomes `Game.controlsHint` (lenient, never 422).
+  - The engine adds `input.actionDown/actionPressed/actionReleased(id)`, `input.actionLabel(id)` for prompts, and `input.axis()` that follows `left/right/up/down` actions.
+  - A ⌨ controls panel in the player and Studio preview: remap keys with live apply (`webgame:controls`), conflict warnings, reset, saved per game on the device. A game-page "Controls" section and a one-time first-play hint.
+  - The Studio game.json form gets a Controls fieldset. Desktop gets View → Controls (`CmdOrCtrl+Shift+K`).
+- **User value**: accessibility and non-QWERTY layouts, and controls players can discover. Existing games get a visible controls hint with no re-upload (startup backfill).
+- **Areas**: engine (`actions.ts`, `input.ts`, message, examples), backend (migration `0010_f009.sql`: `games.actions_json`, `games.controls_hint`; strict/lenient parsing; player page injection; startup backfill; no new crates), frontend (`controls.ts`, `ControlsPanel`, `KeyCaptureButton`, `ControlsSummary`, Studio form, templates), desktop (menu item).
+- **Depends on**: nothing unshipped. Follow-ups: gamepad remapping and account sync of bindings (see F016).
 
 ### F010: Desktop offline library (M, proposed)
 - **Pitch**: "Download for offline" on desktop caches a game's bundle and the engine locally, and plays it from a local player when the server is unreachable.
@@ -133,3 +139,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: for a project opened from a local folder (F013 `localFolder`), "Save to folder" writes Studio edits back to disk through a Rust command limited to the registered folder, and an optional file watcher auto-reloads on external changes.
 - **User value**: desktop creators can mix Studio edits and their own editor without exporting zips or losing edits on reload.
 - **Areas**: desktop (write command scoped to the F013 folder registry, `notify` watcher), frontend (Save button, auto-reload toggle). No backend changes.
+
+### F016: Gamepad remapping and synced control bindings (M, proposed; after F009)
+- **Pitch**: remap gamepad buttons in the F009 controls panel (capture via the parent's Gamepad API), and an opt-in "Sync my controls" that stores overrides per user per game on the server, falling back to the device copy.
+- **User value**: controller players get the same accessibility as keyboard players, and bindings follow the account to the desktop app.
+- **Areas**: engine (accept `gamepad` overrides), backend (small per-user bindings table and endpoints), frontend (gamepad capture, sync toggle).

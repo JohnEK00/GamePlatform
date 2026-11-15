@@ -295,3 +295,106 @@ engine.platform.shareScreenshot(opts?: ShareScreenshotOptions): Promise<boolean>
 - The tray holds at most 12 items in memory. Nothing is persisted, and nothing is uploaded without an explicit user action.
 - **Studio**: captures and shares behave the same, but the tray offers download, copy and remove only. It makes no API calls (Studio rule).
 - **For creators**: a screenshot the player posts is public. Don't draw secrets (codes, tokens) on frames you pass to `shareScreenshot`.
+
+
+## F009 additions
+
+Controls overlay and key remapping (spec: `docs/features/F009-controls-and-remapping.md`). Two optional game.json keys, an engine action API and one new parent → game message. Existing games keep working unchanged.
+
+### `actions` in game.json (optional, strict)
+```json
+"actions": [
+  { "id": "left",  "name": "Move left",  "keys": ["ArrowLeft", "KeyA"], "gamepad": ["Left"] },
+  { "id": "right", "name": "Move right", "keys": ["ArrowRight", "KeyD"], "gamepad": ["Right"] },
+  { "id": "jump",  "name": "Jump",       "keys": ["Space", "ArrowUp", "KeyW"], "gamepad": ["A"] },
+  { "id": "fire",  "name": "Fire",       "keys": ["Mouse0", "KeyZ"] }
+]
+```
+- Absent or `null` → no actions. Otherwise it must be an array of at most **32** objects.
+- `id`: matches `^[a-z0-9_-]{1,32}$`, unique within the list.
+- `name`: string, trimmed, 1–40 chars, no control characters (C0, C1, DEL) and no bidi controls (same set as F004 notes).
+- `keys`: optional array (default `[]`) of at most **3** unique strings from the bindable key table below.
+- `gamepad`: optional array (default `[]`) of at most **2** unique names from the gamepad table below.
+- Each action needs at least one key or gamepad button.
+- Unknown keys inside an action are ignored and dropped from the stored copy.
+- Any violation → 422 `validation` on upload or bundle replace. The message names the path, e.g. `game.json: actions[2].keys[1] "Escape" can't be bound`.
+- Order is significant: it is the display order in the controls panel and in `input.actions`.
+
+### `controls` in game.json (optional, lenient)
+- A free-text controls description, e.g. `"controls": "Arrows move, Space shoots"`. Existing bundles already use it.
+- If it is a string: control characters (including `\n`, `\r`, `\t`) become spaces, bidi controls are removed, runs of whitespace collapse to one space, and the result is trimmed and cut to **300** chars. It is exposed as `Game.controlsHint`.
+- Any other type is ignored. `controls` **never** causes a 422.
+- The Studio and the player show it as plain text.
+
+### Bindable key table (normative)
+`KeyboardEvent.code` values (physical keys), plus mouse buttons:
+
+| Group | Codes | Default label |
+|---|---|---|
+| Letters | `KeyA` … `KeyZ` | `A` … `Z` |
+| Digits | `Digit0` … `Digit9` | `0` … `9` |
+| Numpad | `Numpad0` … `Numpad9`, `NumpadAdd`, `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `NumpadDecimal`, `NumpadEnter` | `Num 0` … `Num 9`, `Num +`, `Num -`, `Num *`, `Num /`, `Num .`, `Num Enter` |
+| Arrows | `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight` | `↑`, `↓`, `←`, `→` |
+| Editing | `Space`, `Enter`, `Backspace` | `Space`, `Enter`, `Backspace` |
+| Modifiers | `ShiftLeft`, `ShiftRight`, `ControlLeft`, `ControlRight`, `AltLeft`, `AltRight` | `Left Shift`, `Right Shift`, `Left Ctrl`, `Right Ctrl`, `Left Alt`, `Right Alt` |
+| Punctuation | `Minus`, `Equal`, `BracketLeft`, `BracketRight`, `Backslash`, `Semicolon`, `Quote`, `Backquote`, `Comma`, `Period`, `Slash`, `IntlBackslash` | `-`, `=`, `[`, `]`, `\`, `;`, `'`, `` ` ``, `,`, `.`, `/`, `Intl \` |
+| Navigation | `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown` | `Insert`, `Delete`, `Home`, `End`, `Page Up`, `Page Down` |
+| Mouse | `Mouse0`, `Mouse1`, `Mouse2` | `Left click`, `Middle click`, `Right click` |
+
+That is 83 keyboard codes and 3 mouse codes (86 in total). Everything else is **not bindable**, notably `Escape`, `Tab`, `F1`–`F24`, `MetaLeft`/`MetaRight`, `CapsLock`, `ContextMenu`, `PrintScreen`, `ScrollLock`, `Pause` and `NumLock`. Mouse codes may be defaults in game.json; the remapping UI assigns keyboard codes only.
+
+### Gamepad buttons (normative)
+`A`, `B`, `X`, `Y`, `LB`, `RB`, `LT`, `RT`, `Back`, `Start`, `LS`, `RS`, `Up`, `Down`, `Left`, `Right` (the existing `GamepadButtons` names without `Home`).
+- Default labels are the names, except `Up`/`Down`/`Left`/`Right` → `D-pad ↑`, `D-pad ↓`, `D-pad ←`, `D-pad →`.
+- Gamepad buttons are read from the first connected gamepad (as `input.axis` does).
+- They are **not** remappable in F009.
+
+### Boot option and pages
+- `boot(canvas, game, { …, actions?: unknown })`. The engine parses `actions` **leniently** with the same rules as above. Invalid entries (or invalid keys/buttons inside an entry) are dropped with a `console.warn` prefixed `[pixelforge] actions:`, and parsing never throws.
+- `/play/{id}`: the backend renders the stored, already validated list: `boot(…, { width: {W}, height: {H}, baseUrl: base, actions: {ACTIONS} })`. `{ACTIONS}` is a JSON literal escaped for `<script>` (`<`, `>`, `&`, U+2028 and U+2029 written as `\uXXXX`). Games without actions get `[]`.
+- `/play/studio`: the page passes `actions: manifest.actions` from `webgame:studio-load` (no server validation; the engine's lenient parse applies).
+
+### Engine API
+```ts
+type GamepadButtonName = "A" | "B" | "X" | "Y" | "LB" | "RB" | "LT" | "RT" | "Back" | "Start" | "LS" | "RS" | "Up" | "Down" | "Left" | "Right";
+type ControlAction = { id: string; name: string; keys: string[]; gamepad: GamepadButtonName[] };
+
+engine.input.actions: readonly ControlAction[]         // effective bindings (defaults + player overrides), manifest order, frozen
+engine.input.defaultActions: readonly ControlAction[]  // as declared (after lenient parsing)
+engine.input.actionDown(id: string): boolean
+engine.input.actionPressed(id: string): boolean
+engine.input.actionReleased(id: string): boolean
+engine.input.actionLabel(id: string): string           // label of the first effective key, else of the first gamepad button, else ""
+engine.input.keyLabel(code: string): string            // default label table; an unknown code returns the code
+```
+- Unknown ids return `false` / `""` and warn once per id.
+- **Edge rules** (per fixed update step, like `wasPressed`). Let `prevDown` be the action's `down` at the previous step:
+  - `down` = any effective key `isDown` **or** any gamepad button `isDown`.
+  - `pressed` = (any effective key `wasPressed` or any gamepad button `wasPressed`) **and not** `prevDown`. Pressing a second bound key while the first is held does not fire `pressed` again.
+  - `released` = **not** `down` **and** (`prevDown` or `pressed`) **and** (any effective key `wasReleased` or any gamepad button `wasReleased`). Releasing one of two held keys does not fire it. A tap within one step reports both `pressed` and `released` (with `down` false), like raw keys.
+- **`input.axis`**: when **both** `left` and `right` actions exist, `axis("horizontal")` uses `actionDown("left")` / `actionDown("right")` plus the left-stick analog value, and the hard-coded Arrows/WASD/D-pad no longer apply. The same holds for `axis("vertical")` with `up` / `down`. Otherwise `axis` is unchanged.
+- **Raw input is not remapped**: `isDown/wasPressed/wasReleased(code)`, `mouse`, `touches`, `gamepad(i)`, `anyPressed()` and `typed` report physical input as before.
+- **Default handling**: on `keydown`, the engine now also calls `preventDefault()` for any keyboard code bound in the effective actions (when neither Ctrl nor Meta is held), in addition to the existing set.
+- Overrides take effect at the next fixed step.
+
+### Message
+| Direction | Message |
+|---|---|
+| parent → game | `{ type: "webgame:controls", overrides: { [actionId: string]: string[] } }` |
+
+- `overrides` must be a plain object with at most 32 own keys, otherwise the whole message is ignored.
+- Each value replaces that action's `keys` (never `gamepad`). Non-array values, unknown action ids and non-bindable codes are ignored, duplicates are removed, and only the first 3 codes are kept. `[]` means "no keys" (gamepad defaults still apply).
+- Each message **replaces** all previous overrides. There is no reply.
+- The engine accepts it only from `window.parent`.
+
+### Parent behaviour (GamePlayer on /play/{id}, StudioPreview on /play/studio)
+- When the game has at least one action, the parent posts `webgame:controls` right after its first `webgame:load` reply to each `webgame:hello` (so restarts receive it), and again after every change in the controls panel.
+- It sends only action ids and key codes. It never sends key labels, the keyboard layout, user data or tokens.
+- `GamePlayer` reads overrides from localStorage (ARCHITECTURE § F009). `StudioPreview` keeps them in memory for the Studio session.
+- Opening the controls panel pauses the game with `webgame:pause`. Closing it sends `webgame:resume` only when no other parent pause reason (a hidden tab) remains.
+
+### For creators
+- Declare every key your game uses as an action, and read actions (`actionPressed("jump")`) instead of codes (`wasPressed("Space")`). Only actions can be remapped by players.
+- Use `actionLabel` in prompts (`Press ${engine.input.actionLabel("jump")} to start`) so they follow the player's bindings. Labels are US-layout names, because the platform does not reveal the player's keyboard layout to games.
+- Name movement actions `left`, `right`, `up` and `down` to make `input.axis()` follow remapping.
+- Keep `controls` for what actions can't describe (mouse aiming, touch gestures). It is shown next to the action list.
