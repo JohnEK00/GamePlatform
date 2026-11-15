@@ -398,3 +398,7 @@ engine.input.keyLabel(code: string): string            // default label table; a
 - Use `actionLabel` in prompts (`Press ${engine.input.actionLabel("jump")} to start`) so they follow the player's bindings. Labels are US-layout names, because the platform does not reveal the player's keyboard layout to games.
 - Name movement actions `left`, `right`, `up` and `down` to make `input.axis()` follow remapping.
 - Keep `controls` for what actions can't describe (mouse aiming, touch gestures). It is shown next to the action list.
+
+## Review-fix additions (REVIEW-2026-11-15-3)
+
+- **Screenshot size rule (L6):** first upscale by the integer `k = max(1, floor(1280 / max(w, h)))`, giving long side `L` and short side `S`. Then scale by `s = max(min(1, maxSize / L), 64 / S)`, keeping the aspect ratio, and round each side and clamp it to 64–4096. The short side is never below 64, even if that pushes the long side past `maxSize`. Game sizes are 64–4096 per side, so every capture is a valid upload.

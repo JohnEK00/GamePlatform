@@ -435,8 +435,9 @@ if (input.wasPressed('KeyP')) engine.platform.shareScreenshot?.({ caption: `Scor
 ```
 
 * **Output size** doesn't depend on the window or `devicePixelRatio`. For the logical `w×h`, `k = max(1, floor(1280 / max(w, h)))`
-  gives `(w·k)×(h·k)` (small games are upscaled by a whole factor). It is then scaled down to fit `maxSize` (default 1920,
-  rounded and clamped to 64–4096). Examples: 320×180 → 1280×720, 800×600 → 800×600, 3840×2160 → 1920×1080.
+  gives `(w·k)×(h·k)` (small games are upscaled by a whole factor). It is then scaled by `max(min(1, maxSize / long), 64 / short)`
+  (`maxSize` default 1920, rounded and clamped to 64–4096), so the short side is never below 64 even if the long side
+  then exceeds `maxSize`; sides are clamped to 64–4096. 4096×128 → 2048×64, 64×4096 → 64×4096. Examples: 320×180 → 1280×720, 800×600 → 800×600, 3840×2160 → 1920×1080.
   `screenshotSize(w, h, maxSize?)` is exported.
 * **Sampling**: nearest-neighbour when the backing-store → output ratio is a whole number and `smooth` is off, bilinear otherwise.
   A small window therefore gives a softer image at the same size.

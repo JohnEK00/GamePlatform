@@ -24,12 +24,19 @@ describe('screenshotSize', () => {
   it.each([
     [320, 180, undefined, 1280, 720],
     [800, 600, undefined, 800, 600],
-    [64, 4096, undefined, 30, 1920],
+    [64, 4096, undefined, 64, 4096], // short side kept at 64 (long side exceeds maxSize)
+    [4096, 64, undefined, 4096, 64],
+    [4096, 128, undefined, 2048, 64], // 1920×60 would be too small → raised to short side 64
+    [2048, 64, 640, 2048, 64],
+    [1000, 100, undefined, 1000, 100],
+    [1000, 100, 64, 640, 64],
+    [64, 64, 64, 64, 64],
+    [10, 5000, undefined, 64, 4096], // out-of-contract input still clamped to 64–4096
     [3840, 2160, undefined, 1920, 1080],
     [160, 144, undefined, 1280, 1152],
     [1280, 720, undefined, 1280, 720],
     [320, 180, 640, 640, 360],
-    [320, 180, 10, 64, 36], // maxSize clamped up to 64
+    [320, 180, 10, 114, 64], // maxSize clamped up to 64; short side raised to 64
     [3840, 2160, 99999, 3840, 2160], // clamped down to 4096 (no scaling needed)
     [320, 180, Number.NaN, 1280, 720], // invalid → 1920
   ])('%ix%i (max %s) → %ix%i', (w, h, max, ew, eh) => {

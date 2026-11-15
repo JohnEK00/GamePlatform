@@ -48,23 +48,22 @@ export function normalizeMaxSize(v: unknown): number {
 
 /**
  * Output size of a screenshot for a logical resolution `w×h`: integer upscale so the longest side
- * approaches 1280 (`k = max(1, floor(1280 / max(w, h)))`), then scale down to fit `maxSize`
- * (normalised, see `normalizeMaxSize`) keeping the aspect ratio. Sides are rounded, at least 1.
+ * approaches 1280 (`k = max(1, floor(1280 / max(w, h)))`), giving `L×S` (long × short); then scale by
+ * `s = max(min(1, maxSize / L), 64 / S)` (maxSize normalised, see `normalizeMaxSize`), keeping the
+ * aspect ratio. The short side therefore never drops below 64 even when that means the long side
+ * exceeds `maxSize`; since game.json sides are 64–4096 (aspect ≤ 64:1) the long side stays ≤ 4096.
+ * Sides are rounded and clamped to 64–4096 (the server's accepted range).
  */
 export function screenshotSize(w: number, h: number, maxSize: number = DEFAULT_SCREENSHOT_SIZE): { width: number; height: number } {
   const lw = Math.max(1, Math.round(Number(w)) || 1);
   const lh = Math.max(1, Math.round(Number(h)) || 1);
   const max = normalizeMaxSize(maxSize);
   const k = Math.max(1, Math.floor(SCREENSHOT_UPSCALE_TARGET / Math.max(lw, lh)));
-  let ow = lw * k;
-  let oh = lh * k;
-  const longest = Math.max(ow, oh);
-  if (longest > max) {
-    const s = max / longest;
-    ow *= s;
-    oh *= s;
-  }
-  return { width: Math.max(1, Math.round(ow)), height: Math.max(1, Math.round(oh)) };
+  const ow = lw * k;
+  const oh = lh * k;
+  const s = Math.max(Math.min(1, max / Math.max(ow, oh)), MIN_SCREENSHOT_SIZE / Math.min(ow, oh));
+  const side = (v: number): number => Math.min(MAX_SCREENSHOT_SIZE, Math.max(MIN_SCREENSHOT_SIZE, Math.round(v * s)));
+  return { width: side(ow), height: side(oh) };
 }
 
 /** True when `a / b` or `b / a` is a whole number (sampling stays crisp with nearest-neighbour). */
