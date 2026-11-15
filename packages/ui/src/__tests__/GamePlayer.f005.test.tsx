@@ -7,6 +7,7 @@ import { GamePlayer } from "../components/GamePlayer";
 import { SCREENSHOT_SHARE_MAX_PER_MOUNT, SCREENSHOT_TRAY_MAX } from "../components/useScreenshotCapture";
 import { PLAYER_SCREENSHOT_EVENT } from "../screenshot";
 import { WebGameProviders } from "../WebGameApp";
+import { blobOf, pngBytes } from "./imageBytes";
 
 const game = { id: "g1", title: "Space Dodge", width: 320, height: 180, playUrl: "/play/g1", version: 3, published: true, isOwner: false };
 const me: User = { id: "u1", username: "bob", displayName: "Bob", avatarUrl: null, bio: "", createdAt: "2026-01-01T00:00:00Z", role: "user" };
@@ -25,7 +26,7 @@ async function flush(ms = 0) {
 }
 
 /** What the "game" sends: the browser would accept anything here, so tests use both real PNG-typed and hostile blobs. */
-const pngFromGame = () => new Blob([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], { type: "image/png" });
+const pngFromGame = () => blobOf(pngBytes(320, 180));
 const htmlFromGame = () => new Blob(["<script>alert(document.cookie)</script>"], { type: "text/html" });
 
 let createUrl: ReturnType<typeof vi.fn>;
@@ -106,15 +107,16 @@ async function requestCapture(win: Window, frameSpy: { mock: { calls: unknown[][
 describe("GamePlayer screenshots (F005)", () => {
   it("is disabled until webgame:ready, then posts a request to the iframe window", async () => {
     const { win, frameSpy } = await setup({ ready: false });
-    expect((cameraButton() as HTMLButtonElement).disabled).toBe(true);
+    expect(cameraButton().getAttribute("aria-disabled")).toBe("true");
     post(win, { type: "webgame:ready" });
     await flush();
-    expect((cameraButton() as HTMLButtonElement).disabled).toBe(false);
+    expect(cameraButton().getAttribute("aria-disabled")).toBe("false");
     const id = await requestCapture(win, frameSpy);
     expect(sent(frameSpy, "webgame:screenshot-request")).toEqual([{ type: "webgame:screenshot-request", requestId: "ps-1" }]);
     expect(id).toBe("ps-1");
-    // One in flight: the button is disabled and a second click sends nothing.
-    expect((cameraButton() as HTMLButtonElement).disabled).toBe(true);
+    // One in flight: the button is aria-disabled (still focusable, review 3 L1a) and a second click sends nothing.
+    expect((cameraButton() as HTMLButtonElement).disabled).toBe(false);
+    expect(cameraButton().getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(cameraButton());
     expect(sent(frameSpy, "webgame:screenshot-request")).toHaveLength(1);
   });
@@ -128,7 +130,7 @@ describe("GamePlayer screenshots (F005)", () => {
     expect(trayItems()).toHaveLength(1);
     expect(container.querySelector(".pf-shot-flash")).toBeTruthy();
     expect(screen.getByText("Screenshot captured")).toBeTruthy();
-    expect((cameraButton() as HTMLButtonElement).disabled).toBe(false);
+    expect(cameraButton().getAttribute("aria-disabled")).toBe("false");
     // The one object URL is for our re-encoded PNG, never for the game's blob.
     expect(createUrl).toHaveBeenCalledTimes(1);
     expect(createUrl.mock.calls[0][0]).not.toBe(raw);
@@ -146,7 +148,7 @@ describe("GamePlayer screenshots (F005)", () => {
     expect(trayItems()).toHaveLength(0);
     expect(createUrl).not.toHaveBeenCalled();
     // Still waiting for the real reply.
-    expect((cameraButton() as HTMLButtonElement).disabled).toBe(true);
+    expect(cameraButton().getAttribute("aria-disabled")).toBe("true");
     other.remove();
   });
 
@@ -176,7 +178,7 @@ describe("GamePlayer screenshots (F005)", () => {
     await flush(1);
     expect(screen.getByText("Couldn't capture a screenshot")).toBeTruthy();
     expect(screen.getByText("This game can't take screenshots right now")).toBeTruthy();
-    expect((cameraButton() as HTMLButtonElement).disabled).toBe(false);
+    expect(cameraButton().getAttribute("aria-disabled")).toBe("false");
     // A late reply to the timed-out request is ignored.
     post(win, { type: "webgame:screenshot", requestId: id, source: "player", image: pngFromGame() });
     await flush();
@@ -230,16 +232,48 @@ describe("GamePlayer screenshots (F005)", () => {
   });
 
   it("replies invalid for a blob that isn't an image, without an object URL", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
     const { win, frameSpy } = await setup();
     post(win, { type: "webgame:screenshot", requestId: "ss-1", source: "game", image: htmlFromGame() });
     await flush();
     expect(sent(frameSpy, "webgame:screenshot-result")).toEqual([{ type: "webgame:screenshot-result", requestId: "ss-1", accepted: false, error: "invalid" }]);
     expect(trayItems()).toHaveLength(0);
     expect(createUrl).not.toHaveBeenCalled();
-    // A failed share doesn't use up the interval.
+    // A failed share uses up its 3 s slot (no refund, review 3 M1).
     post(win, { type: "webgame:screenshot", requestId: "ss-2", source: "game", image: pngFromGame() });
     await flush();
-    expect(sent(frameSpy, "webgame:screenshot-result")[1]).toMatchObject({ requestId: "ss-2", accepted: true });
+    expect(sent(frameSpy, "webgame:screenshot-result")[1]).toEqual({ type: "webgame:screenshot-result", requestId: "ss-2", accepted: false, error: "rate_limited" });
+    await flush(3000);
+    post(win, { type: "webgame:screenshot", requestId: "ss-3", source: "game", image: pngFromGame() });
+    await flush();
+    expect(sent(frameSpy, "webgame:screenshot-result")[2]).toMatchObject({ requestId: "ss-3", accepted: true });
+  });
+
+  it("rejects a decompression-bomb share from its header without decoding, and keeps the slot (review 3, M1)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { win, frameSpy } = await setup();
+    // A tiny PNG whose IHDR claims 30000×30000 (3.35 GiB decoded).
+    post(win, { type: "webgame:screenshot", requestId: "ss-1", source: "game", image: blobOf(pngBytes(30000, 30000)) });
+    await flush();
+    expect(sent(frameSpy, "webgame:screenshot-result")).toEqual([{ type: "webgame:screenshot-result", requestId: "ss-1", accepted: false, error: "invalid" }]);
+    expect(createImageBitmap).not.toHaveBeenCalled();
+    // Back-to-back bombs are throttled, not decoded.
+    for (let i = 2; i <= 5; i++) post(win, { type: "webgame:screenshot", requestId: `ss-${i}`, source: "game", image: blobOf(pngBytes(30000, 30000)) });
+    await flush();
+    const results = sent(frameSpy, "webgame:screenshot-result");
+    expect(results.slice(1).every((r) => r.error === "rate_limited")).toBe(true);
+    expect(createImageBitmap).not.toHaveBeenCalled();
+    expect(createUrl).not.toHaveBeenCalled();
+  });
+
+  it("player captures with an oversized header are rejected without decoding", async () => {
+    const { win, frameSpy } = await setup();
+    const id = await requestCapture(win, frameSpy);
+    post(win, { type: "webgame:screenshot", requestId: id, source: "player", image: blobOf(pngBytes(16384, 16384)) });
+    await flush();
+    expect(screen.getByText("Couldn't capture a screenshot")).toBeTruthy();
+    expect(createImageBitmap).not.toHaveBeenCalled();
+    expect(createUrl).not.toHaveBeenCalled();
   });
 
   it("player captures of a hostile blob show a toast and never get an object URL", async () => {

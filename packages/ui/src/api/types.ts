@@ -330,6 +330,11 @@ export type Report = {
    * screenshots. Older servers omit it; treat a missing value as null.
    */
   targetImageUrl: string | null;
+  /**
+   * Review 3 (L7): the screenshot's full-size imageUrl while it exists (server-relative); null for other target
+   * types and deleted screenshots. Older servers omit it; fall back to `targetImageUrl`.
+   */
+  targetImageFullUrl: string | null;
 };
 
 export type CreateReportRequest = {

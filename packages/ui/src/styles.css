@@ -395,13 +395,14 @@ body {
   white-space: nowrap;
   transition: background 0.15s, border-color 0.15s, transform 0.08s, box-shadow 0.15s;
 }
-.pf-btn:hover:not(:disabled) {
+.pf-btn:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--pf-surface-3);
 }
-.pf-btn:active:not(:disabled) {
+.pf-btn:active:not(:disabled):not([aria-disabled="true"]) {
   transform: translateY(1px);
 }
-.pf-btn:disabled {
+.pf-btn:disabled,
+.pf-btn[aria-disabled="true"] {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -411,14 +412,14 @@ body {
   color: #1a0a00;
   box-shadow: 0 6px 20px -8px rgba(255, 122, 61, 0.7);
 }
-.pf-btn--primary:hover:not(:disabled) {
+.pf-btn--primary:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--pf-accent-hover);
 }
 .pf-btn--ghost {
   background: transparent;
   border-color: var(--pf-border);
 }
-.pf-btn--ghost:hover:not(:disabled) {
+.pf-btn--ghost:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--pf-surface-2);
 }
 .pf-btn--danger {
@@ -426,7 +427,7 @@ body {
   border-color: rgba(255, 84, 104, 0.5);
   color: var(--pf-danger);
 }
-.pf-btn--danger:hover:not(:disabled) {
+.pf-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
   background: rgba(255, 84, 104, 0.12);
 }
 .pf-modal .pf-btn--danger {
@@ -3614,7 +3615,12 @@ a.pf-tab {
 }
 
 /* ---------- F005: screenshots ---------- */
-.pf-iconbtn:disabled {
+/* Programmatic focus target after a delete (review 3, L1c). */
+.pf-shots > .pf-panel__title:focus {
+  outline: none;
+}
+.pf-iconbtn:disabled,
+.pf-iconbtn[aria-disabled="true"] {
   opacity: 0.45;
   cursor: not-allowed;
   background: transparent;

@@ -88,7 +88,7 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
         ) : report.targetType === "screenshot" ? (
           <div className="pf-report-row__shot">
             {report.targetImageUrl ? (
-              <a href={resolveUrl(report.targetImageUrl) ?? undefined} target="_blank" rel="noopener" className="pf-report-row__thumb" title="Open full size">
+              <a href={resolveUrl(report.targetImageFullUrl ?? report.targetImageUrl) ?? undefined} target="_blank" rel="noopener" className="pf-report-row__thumb" title="Open full size">
                 <img src={resolveUrl(report.targetImageUrl) ?? undefined} alt={`Reported screenshot: ${report.targetPreview}`} width={120} />
               </a>
             ) : (

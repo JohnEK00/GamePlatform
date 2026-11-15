@@ -336,12 +336,13 @@ export function PublishDialog({ project, link, apiBase, onClose, onPublished, on
           <button type="button" className="pf-btn pf-btn--ghost" onClick={onClose} disabled={busy}>
             Cancel
           </button>
+          {/* While uploading, the submit button stays focusable (aria-disabled; submit() ignores it) so focus isn't lost (review 3, L1). */}
           {mode === "new" ? (
-            <button type="submit" className="pf-btn pf-btn--primary" disabled={busy || controlsBlocked}>
+            <button type="submit" className="pf-btn pf-btn--primary" disabled={!busy && controlsBlocked} aria-disabled={busy || undefined}>
               {busy ? <Spinner size={14} /> : null} Publish
             </button>
           ) : (
-            <button type="submit" className="pf-btn pf-btn--primary" disabled={busy || updateBlocked || controlsBlocked}>
+            <button type="submit" className="pf-btn pf-btn--primary" disabled={!busy && (updateBlocked || controlsBlocked)} aria-disabled={busy || undefined}>
               {busy ? <Spinner size={14} /> : null} Publish update
             </button>
           )}

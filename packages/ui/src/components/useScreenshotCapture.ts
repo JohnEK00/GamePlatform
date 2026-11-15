@@ -226,8 +226,9 @@ export function useScreenshotCapture(iframeRef: RefObject<HTMLIFrameElement | nu
           reply(false, "rate_limited");
           return;
         }
-        // Reserve the slot now so concurrent shares can't slip through while this one is decoded.
-        const prevLast = sh.lastAt;
+        // Take the slot now, so concurrent shares can't slip through while this one is decoded. A share that then
+        // fails laundering keeps its slot (no refund, review 3 M1): a game can't feed the parent invalid images or
+        // decompression bombs back to back.
         sh.count++;
         sh.lastAt = now;
         const caption = sanitizeScreenshotCaption(data.caption);
@@ -240,8 +241,6 @@ export function useScreenshotCapture(iframeRef: RefObject<HTMLIFrameElement | nu
             latest.current.toast.info(`${title} captured a screenshot`, caption || undefined);
           },
           () => {
-            sh.count--;
-            if (sh.lastAt === now) sh.lastAt = prevLast;
             reply(false, "invalid");
           },
         );

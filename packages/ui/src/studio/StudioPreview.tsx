@@ -65,6 +65,7 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
   const api = useApi();
   const toast = useToast();
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const cameraRef = useRef<HTMLButtonElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   // Snapshot of the project taken when this run started.
   const run = useRef({ id: runId, project });
@@ -254,8 +255,9 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
         <button
           type="button"
           className="pf-iconbtn pf-iconbtn--sm"
+          ref={cameraRef}
           onClick={shots.capture}
-          disabled={!shots.canCapture}
+          aria-disabled={!shots.canCapture}
           aria-busy={shots.capturing || undefined}
           aria-label="Take screenshot"
           title="Screenshot"
@@ -263,7 +265,7 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
           {shots.capturing ? <Spinner size={12} label="Capturing screenshot" /> : "📷"}
         </button>
       </div>
-      <ScreenshotTray items={shots.items} mode="studio" game={{ title: runTitle }} onRemove={shots.remove} onClear={shots.clear} />
+      <ScreenshotTray items={shots.items} mode="studio" game={{ title: runTitle }} onRemove={shots.remove} onClear={shots.clear} emptyFocusRef={cameraRef} />
       {controlsOpen && showControls && (
         <ControlsPanel
           mode="studio"

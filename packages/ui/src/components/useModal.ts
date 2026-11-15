@@ -33,6 +33,11 @@ export type UseModalOptions = {
   initialFocus?: string;
   /** When false, Escape does nothing (e.g. while a request is in flight). Default true. */
   canClose?: boolean;
+  /**
+   * Where focus goes on close when the opener is gone (e.g. the item the dialog deleted). Read when the dialog
+   * closes, so it can look at the updated DOM. Without it (or when it returns null) focus would drop to <body>.
+   */
+  returnFocus?: () => HTMLElement | null | undefined;
 };
 
 // Open modals, innermost last: only the top one reacts to Escape / Tab.
@@ -111,7 +116,11 @@ export function useModal<T extends HTMLElement = HTMLElement>(open: boolean, onC
       document.removeEventListener("focusin", onFocusIn);
       const i = stack.indexOf(token);
       if (i >= 0) stack.splice(i, 1);
-      if (opener && opener.isConnected) opener.focus();
+      if (opener && opener.isConnected && opener !== document.body) opener.focus();
+      else {
+        const fallback = latest.current.opts.returnFocus?.();
+        if (fallback && fallback.isConnected) fallback.focus();
+      }
     };
   }, [open]);
 

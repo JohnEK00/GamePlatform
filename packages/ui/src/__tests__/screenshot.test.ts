@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   fitImageForUpload,
+  imageDimensionsOk,
+  isBelowUploadMinimum,
   launderImage,
+  readImageHeader,
+  sniffImage,
   PLAYER_SCREENSHOT_EVENT,
   sanitizeScreenshotCaption,
   screenshotFileName,
@@ -9,6 +13,7 @@ import {
   type ImageCodec,
 } from "../screenshot";
 import * as api from "../index";
+import { blobOf, jpegBytes, pngBytes, webpVp8Bytes, webpVp8lBytes, webpVp8xBytes } from "./imageBytes";
 
 const MB = 1024 * 1024;
 
@@ -73,6 +78,27 @@ describe("fitImageForUpload", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it("never shrinks the short side under 64 px (review 3, L6)", async () => {
+    // 1920×180: 0.75 steps would reach 135, 101, 76, 57 → the last one is clamped to 64 and then it stops.
+    const { codec, calls } = fakeCodec(() => 3 * MB, { width: 1920, height: 180 });
+    await expect(fitImageForUpload(new Blob([new Uint8Array(3 * MB)], { type: "image/png" }), 2 * MB, codec)).rejects.toThrow(/too large/);
+    const heights = calls.map((c) => c[2]);
+    expect(Math.min(...heights)).toBe(64);
+    expect(heights).toEqual([180, 180, 135, 135, 101, 101, 76, 76, 64, 64]);
+    expect(calls.at(-1)?.[1]).toBe(Math.round((1920 * 64) / 180));
+  });
+
+  it("doesn't shrink an image whose short side is already 64 px or less", async () => {
+    const { codec, calls } = fakeCodec(() => 3 * MB, { width: 4096, height: 40 });
+    await expect(fitImageForUpload(new Blob([new Uint8Array(3 * MB)], { type: "image/png" }), 2 * MB, codec)).rejects.toThrow(/too large/);
+    expect(calls.map((c) => [c[1], c[2]])).toEqual([
+      [4096, 40],
+      [4096, 40],
+    ]);
+    expect(isBelowUploadMinimum(4096, 40)).toBe(true);
+    expect(isBelowUploadMinimum(64, 64)).toBe(false);
+  });
+
   it("re-encodes a small non-PNG", async () => {
     const { codec } = fakeCodec(() => 10);
     const out = await fitImageForUpload(new Blob([new Uint8Array(10)], { type: "image/gif" }), 2 * MB, codec);
@@ -83,7 +109,7 @@ describe("fitImageForUpload", () => {
 describe("launderImage", () => {
   it("decodes and re-encodes to a new PNG", async () => {
     const { codec, calls, close } = fakeCodec(() => 50, { width: 320, height: 180 });
-    const src = new Blob(["<svg onload=alert(1)>"], { type: "image/png" });
+    const src = blobOf(pngBytes(320, 180));
     const out = await launderImage(src, codec);
     expect(out.blob).not.toBe(src);
     expect(out.blob.type).toBe("image/png");
@@ -107,7 +133,7 @@ describe("launderImage", () => {
       { width: 10, height: 5000 },
     ]) {
       const { codec, close } = fakeCodec(() => 1, dims);
-      await expect(launderImage(new Blob(["x"]), codec)).rejects.toThrow(/dimensions/);
+      await expect(launderImage(blobOf(pngBytes(10, 10)), codec)).rejects.toThrow(/dimensions/);
       expect(close).toHaveBeenCalled();
     }
   });
@@ -117,7 +143,85 @@ describe("launderImage", () => {
       decode: async () => ({ width: 10, height: 10, source: {} as CanvasImageSource, close: () => {} }),
       encode: async () => null,
     };
-    await expect(launderImage(new Blob(["x"]), codec)).rejects.toThrow();
+    await expect(launderImage(blobOf(pngBytes(10, 10)), codec)).rejects.toThrow();
+  });
+
+  it("rejects a decompression bomb from its header, without decoding (review 3, M1)", async () => {
+    // A ~40-byte PNG claiming 30000×30000 (3.35 GiB decoded).
+    const { codec } = fakeCodec(() => 1);
+    await expect(launderImage(blobOf(pngBytes(30000, 30000)), codec)).rejects.toThrow(/dimensions/);
+    await expect(launderImage(blobOf(pngBytes(4097, 1)), codec)).rejects.toThrow(/dimensions/);
+    await expect(launderImage(blobOf(jpegBytes(16384, 16384), "image/jpeg"), codec)).rejects.toThrow(/dimensions/);
+    await expect(launderImage(blobOf(webpVp8xBytes(16384, 16384), "image/webp"), codec)).rejects.toThrow(/dimensions/);
+    expect(codec.decode).not.toHaveBeenCalled();
+  });
+
+  it("never calls createImageBitmap for an oversized header (browser codec)", async () => {
+    const cib = vi.fn(async () => ({ width: 30000, height: 30000, close: vi.fn() }));
+    vi.stubGlobal("createImageBitmap", cib);
+    try {
+      await expect(launderImage(blobOf(pngBytes(30000, 30000)))).rejects.toThrow(/dimensions/);
+      await expect(launderImage(new Blob(["<svg onload=alert(1)>"], { type: "image/png" }))).rejects.toThrow(/PNG, JPEG or WebP/);
+      expect(cib).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects unknown formats and malformed headers without decoding", async () => {
+    const { codec } = fakeCodec(() => 1);
+    const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 1, 0, 1, 0, 0, 0, 0]);
+    const truncatedPng = pngBytes(10, 10).slice(0, 20);
+    const notIhdr = pngBytes(10, 10);
+    notIhdr[12] = 0x58; // "XHDR"
+    for (const bytes of [gif, truncatedPng, notIhdr, new TextEncoder().encode("<svg onload=alert(1)>"), new Uint8Array(0)]) {
+      await expect(launderImage(blobOf(bytes), codec)).rejects.toThrow(/PNG, JPEG or WebP/);
+    }
+    expect(codec.decode).not.toHaveBeenCalled();
+  });
+
+  it("decodes a well-formed in-range JPEG and WebP", async () => {
+    const { codec } = fakeCodec(() => 5, { width: 100, height: 80 });
+    await expect(launderImage(blobOf(jpegBytes(100, 80), "image/jpeg"), codec)).resolves.toMatchObject({ width: 100, height: 80 });
+    await expect(launderImage(blobOf(webpVp8Bytes(100, 80), "image/webp"), codec)).resolves.toMatchObject({ width: 100, height: 80 });
+    expect(codec.decode).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("readImageHeader", () => {
+  it("reads PNG, JPEG (SOF0/1/2) and WebP (VP8, VP8L, VP8X) dimensions", () => {
+    expect(readImageHeader(pngBytes(320, 180))).toEqual({ format: "png", width: 320, height: 180 });
+    expect(readImageHeader(jpegBytes(1920, 1080))).toEqual({ format: "jpeg", width: 1920, height: 1080 });
+    expect(readImageHeader(jpegBytes(640, 480, 0xc1))).toEqual({ format: "jpeg", width: 640, height: 480 });
+    expect(readImageHeader(jpegBytes(640, 480, 0xc2))).toEqual({ format: "jpeg", width: 640, height: 480 });
+    expect(readImageHeader(webpVp8Bytes(800, 600))).toEqual({ format: "webp", width: 800, height: 600 });
+    expect(readImageHeader(webpVp8lBytes(4096, 1))).toEqual({ format: "webp", width: 4096, height: 1 });
+    expect(readImageHeader(webpVp8xBytes(30000, 20000))).toEqual({ format: "webp", width: 30000, height: 20000 });
+  });
+
+  it("refuses other JPEG frame types, SOS before a frame, and truncated data", () => {
+    expect(readImageHeader(jpegBytes(10, 10, 0xc3))).toBeNull(); // lossless
+    expect(readImageHeader(jpegBytes(10, 10, 0xc9))).toBeNull(); // arithmetic
+    expect(readImageHeader(new Uint8Array([0xff, 0xd8, 0xff, 0xda, 0, 2]))).toBeNull();
+    expect(readImageHeader(jpegBytes(10, 10).slice(0, 30))).toBeNull();
+    const badLen = jpegBytes(10, 10);
+    badLen[4] = 0;
+    badLen[5] = 1; // APP0 length < 2
+    expect(readImageHeader(badLen)).toBeNull();
+    const vp8 = webpVp8Bytes(10, 10);
+    vp8[23] = 0; // bad start code
+    expect(readImageHeader(vp8)).toBeNull();
+    expect(readImageHeader(webpVp8Bytes(10, 10).slice(0, 29))).toBeNull();
+  });
+
+  it("dimension rules: 1–4096 per side and at most 4096² pixels", async () => {
+    expect(imageDimensionsOk(4096, 4096)).toBe(true);
+    expect(imageDimensionsOk(1, 1)).toBe(true);
+    expect(imageDimensionsOk(0, 10)).toBe(false);
+    expect(imageDimensionsOk(4097, 1)).toBe(false);
+    expect(imageDimensionsOk(1.5, 10)).toBe(false);
+    await expect(sniffImage(blobOf(pngBytes(0, 10)))).rejects.toThrow(/dimensions/);
+    await expect(sniffImage(blobOf(pngBytes(4096, 4096)))).resolves.toEqual({ format: "png", width: 4096, height: 4096 });
   });
 });
 

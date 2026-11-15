@@ -8,6 +8,7 @@ import { ConfirmDialog, Spinner } from "../components/common";
 import { errorMessage, formatBytes, useDocumentTitle } from "../util";
 import { CodeEditor, type CodeEditorHandle } from "../studio/CodeEditor";
 import { StudioPreview, type StudioConsoleEntry } from "../studio/StudioPreview";
+import { MAX_OPEN_ZIP_BYTES } from "../studio/unzip";
 import { STUDIO_TEMPLATES } from "../studio/templates";
 import { OpenGameDialog } from "../studio/OpenGameDialog";
 import { PublishDialog } from "../studio/PublishDialog";
@@ -582,6 +583,12 @@ export function StudioPage() {
   // ---- Open → .zip file ----
   const onZipPicked = async (file: File | null | undefined) => {
     if (!file) return;
+    if (file.size > MAX_OPEN_ZIP_BYTES) {
+      // Refuse before reading anything into memory.
+      toast.error("Couldn't open the .zip", `The file is ${formatBytes(file.size)}; a project .zip may be at most ${formatBytes(MAX_OPEN_ZIP_BYTES)}.`);
+      if (zipInputRef.current) zipInputRef.current.value = "";
+      return;
+    }
     try {
       const { project: p, skipped } = await projectFromZip(await file.arrayBuffer());
       loadProject(p, `“${file.name}”`, { link: null });

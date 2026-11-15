@@ -53,8 +53,16 @@ export {
   browserImageCodec,
   SCREENSHOT_MAX_BLOB_BYTES,
   SCREENSHOT_CAPTION_MAX,
+  SCREENSHOT_MAX_SIDE,
+  SCREENSHOT_MAX_PIXELS,
+  SCREENSHOT_MIN_UPLOAD_SIDE,
+  SCREENSHOT_UPLOAD_MAX_BYTES,
+  readImageHeader,
+  sniffImage,
+  imageDimensionsOk,
+  isBelowUploadMinimum,
 } from "./screenshot";
-export type { ImageCodec, DecodedImage, LaunderedImage } from "./screenshot";
+export type { ImageCodec, DecodedImage, LaunderedImage, ImageHeader } from "./screenshot";
 export {
   useScreenshotCapture,
   SCREENSHOT_REQUEST_TIMEOUT_MS,
@@ -144,7 +152,7 @@ export {
   withLeaderboard,
 } from "./studio/project";
 export type { StudioProject, StudioManifest, StudioAchievement, StudioLeaderboard, StudioLink, StudioSession, LocalProject, ProjectEntry } from "./studio/project";
-export { readZip, canInflateRaw } from "./studio/unzip";
+export { readZip, canInflateRaw, MAX_OPEN_ZIP_BYTES } from "./studio/unzip";
 export type { ReadZipLimits, ZipEntryData } from "./studio/unzip";
 export { PublishDialog } from "./studio/PublishDialog";
 export type { PublishDialogProps, PublishMode } from "./studio/PublishDialog";

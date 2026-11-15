@@ -146,16 +146,19 @@ describe("AdminPage screenshot reports (F005)", () => {
     createdAt: "2026-11-14T15:30:12Z",
     resolvedAt: null,
     targetImageUrl: "/media/screenshots/s1_t.jpg",
+    targetImageFullUrl: "/media/screenshots/s1.png",
   };
 
   it("renders the thumbnail, the preview and Dismiss/Delete only", async () => {
-    await setup((c) => vi.spyOn(c, "listReports").mockResolvedValue({ items: [base, { ...base, id: "r2", targetId: "s2", targetImageUrl: null }], total: 2, page: 1, perPage: 25 }), {
+    await setup((c) => vi.spyOn(c, "listReports").mockResolvedValue({ items: [base, { ...base, id: "r2", targetId: "s2", targetImageUrl: null, targetImageFullUrl: null }], total: 2, page: 1, perPage: 25 }), {
       user: admin,
       children: <AdminPage />,
     });
     const img = (await screen.findByRole("img", { name: /Reported screenshot/ })) as HTMLImageElement;
     expect(img.getAttribute("src")).toBe("http://api.test/media/screenshots/s1_t.jpg");
     const link = img.closest("a")!;
+    // "Open full size" opens the full image, not the thumbnail (review 3, L7).
+    expect(link.getAttribute("href")).toBe("http://api.test/media/screenshots/s1.png");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener");
     expect(screen.getAllByText("Screenshot by Alice")).toHaveLength(2);
@@ -165,5 +168,15 @@ describe("AdminPage screenshot reports (F005)", () => {
     expect(screen.queryByRole("button", { name: "Unpublish" })).toBeNull();
     fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
     expect(screen.getByText("Delete this screenshot?")).toBeTruthy();
+  });
+
+  it("falls back to the thumbnail URL when targetImageFullUrl is null or missing (older servers)", async () => {
+    const { targetImageFullUrl: _omit, ...old } = base;
+    await setup((c) => vi.spyOn(c, "listReports").mockResolvedValue({ items: [old as typeof base], total: 1, page: 1, perPage: 25 }), {
+      user: admin,
+      children: <AdminPage />,
+    });
+    const img = await screen.findByRole("img", { name: /Reported screenshot/ });
+    expect(img.closest("a")!.getAttribute("href")).toBe("http://api.test/media/screenshots/s1_t.jpg");
   });
 });

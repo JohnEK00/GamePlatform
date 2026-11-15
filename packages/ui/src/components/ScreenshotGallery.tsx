@@ -18,7 +18,19 @@ export type ScreenshotGalleryProps = {
   onGameUpdated?: (g: Game) => void;
 };
 
-type State = { items: Screenshot[]; total: number; page: number; loading: boolean; error: unknown };
+type State = { items: Screenshot[]; total: number; loading: boolean; error: unknown };
+
+/**
+ * Pages to request for the rows starting at `offset` with OFFSET paging (review 3, L2). After a local delete the
+ * server list has shifted up, so `offset` (= items shown) is no longer a page boundary; fetching only the next page
+ * would skip the rows that moved up into the current one. So: the page containing `offset`, plus the one after it
+ * when `offset` is mid-page (and that page can exist). Rows already shown are de-duplicated by id.
+ */
+export function pagesForOffset(offset: number, total: number, perPage = SCREENSHOT_GALLERY_PER_PAGE): number[] {
+  const first = Math.floor(offset / perPage) + 1;
+  if (offset % perPage === 0 || first * perPage >= total) return [first];
+  return [first, first + 1];
+}
 
 function Lightbox({
   items,
@@ -28,6 +40,7 @@ function Lightbox({
   onClose,
   onDeleted,
   onGameUpdated,
+  returnFocus,
 }: {
   items: Screenshot[];
   index: number;
@@ -36,6 +49,7 @@ function Lightbox({
   onClose: () => void;
   onDeleted: (s: Screenshot) => void;
   onGameUpdated?: (g: Game) => void;
+  returnFocus: () => HTMLElement | null;
 }) {
   const api = useApi();
   const toast = useToast();
@@ -43,7 +57,7 @@ function Lightbox({
   const uid = useId();
   const [confirm, setConfirm] = useState<null | "delete" | "thumb">(null);
   const [busy, setBusy] = useState(false);
-  const ref = useModal<HTMLDivElement>(true, onClose, { canClose: !busy });
+  const ref = useModal<HTMLDivElement>(true, onClose, { canClose: !busy, returnFocus });
   const s = items[index];
   if (!s) return null;
   const who = s.author.displayName || s.author.username;
@@ -107,14 +121,21 @@ function Lightbox({
           <span className="pf-muted">v{s.gameVersion}</span>
         </div>
         <div className="pf-shot-dialog__actions">
-          <button type="button" className="pf-btn pf-btn--sm pf-btn--ghost" onClick={() => onIndex(index - 1)} disabled={index === 0} aria-label="Previous screenshot">
+          {/* aria-disabled (not disabled) at the ends, so focus and the arrow keys keep working (review 3, L1b). */}
+          <button
+            type="button"
+            className="pf-btn pf-btn--sm pf-btn--ghost"
+            onClick={() => index > 0 && onIndex(index - 1)}
+            aria-disabled={index === 0}
+            aria-label="Previous screenshot"
+          >
             ←
           </button>
           <button
             type="button"
             className="pf-btn pf-btn--sm pf-btn--ghost"
-            onClick={() => onIndex(index + 1)}
-            disabled={index >= items.length - 1}
+            onClick={() => index < items.length - 1 && onIndex(index + 1)}
+            aria-disabled={index >= items.length - 1}
             aria-label="Next screenshot"
           >
             →
@@ -172,23 +193,36 @@ function Lightbox({
 export function ScreenshotGallery({ game, onGameUpdated }: ScreenshotGalleryProps) {
   const api = useApi();
   const { user, loading: authLoading } = useAuth();
-  const [st, setSt] = useState<State>({ items: [], total: 0, page: 0, loading: true, error: null });
+  const [st, setSt] = useState<State>({ items: [], total: 0, loading: true, error: null });
   const [open, setOpen] = useState<number | null>(null);
   const gen = useRef(0);
+  const gridRef = useRef<HTMLUListElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  // Grid position of the open item, kept for the focus fallback after a delete.
+  const lastOpen = useRef(0);
+  if (open !== null) lastOpen.current = open;
   const gameId = game.id;
   const viewer = user?.id ?? null;
 
+  /** `offset` 0 reloads from the top; otherwise loads the rows from `offset` on (see {@link pagesForOffset}). */
   const load = useCallback(
-    (page: number) => {
-      const g = page === 1 ? ++gen.current : gen.current;
+    (offset: number, total = 0) => {
+      const g = offset === 0 ? ++gen.current : gen.current;
       setSt((s) => ({ ...s, loading: true, error: null }));
-      api.listScreenshots(gameId, { page, perPage: SCREENSHOT_GALLERY_PER_PAGE }).then(
-        (r) => {
+      const pages = offset === 0 ? [1] : pagesForOffset(offset, total);
+      Promise.all(pages.map((page) => api.listScreenshots(gameId, { page, perPage: SCREENSHOT_GALLERY_PER_PAGE }))).then(
+        (rs) => {
           if (g !== gen.current) return;
           setSt((s) => {
-            const base = page === 1 ? [] : s.items;
-            const seen = new Set(base.map((x) => x.id));
-            return { items: [...base, ...r.items.filter((x) => !seen.has(x.id))], total: r.total, page, loading: false, error: null };
+            const merged = offset === 0 ? [] : [...s.items];
+            const seen = new Set(merged.map((x) => x.id));
+            for (const r of rs)
+              for (const x of r.items)
+                if (!seen.has(x.id)) {
+                  seen.add(x.id);
+                  merged.push(x);
+                }
+            return { items: merged, total: rs[rs.length - 1].total, loading: false, error: null };
           });
         },
         (e: unknown) => {
@@ -204,13 +238,13 @@ export function ScreenshotGallery({ game, onGameUpdated }: ScreenshotGalleryProp
   useEffect(() => {
     if (authLoading) return;
     setOpen(null);
-    load(1);
+    load(0);
   }, [load, viewer, authLoading]);
 
   useEffect(() => {
     const onChanged = (e: Event) => {
       const d = (e as CustomEvent<{ gameId?: string }>).detail;
-      if (!d || d.gameId === gameId) load(1);
+      if (!d || d.gameId === gameId) load(0);
     };
     window.addEventListener(SCREENSHOTS_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(SCREENSHOTS_CHANGED_EVENT, onChanged);
@@ -221,15 +255,23 @@ export function ScreenshotGallery({ game, onGameUpdated }: ScreenshotGalleryProp
     setOpen(null);
   };
 
+  // After a delete, focus the item that took its place, else the previous one, else the section heading.
+  const returnFocus = () => {
+    const buttons = gridRef.current?.querySelectorAll<HTMLElement>(".pf-shots__item");
+    if (buttons && buttons.length) return buttons[Math.min(lastOpen.current, buttons.length - 1)];
+    return headingRef.current;
+  };
+
   const { items, total, loading, error } = st;
   const hasMore = items.length < total;
+  const loadMore = () => load(items.length, total);
   return (
     <section className="pf-panel pf-shots" id={SCREENSHOTS_SECTION_ID} aria-labelledby={`${SCREENSHOTS_SECTION_ID}-title`}>
-      <h2 className="pf-panel__title" id={`${SCREENSHOTS_SECTION_ID}-title`}>
+      <h2 className="pf-panel__title" id={`${SCREENSHOTS_SECTION_ID}-title`} ref={headingRef} tabIndex={-1}>
         Screenshots{total > 0 ? <span className="pf-tab__count">{total}</span> : null}
       </h2>
       {error && items.length === 0 ? (
-        <LoadError message={`Couldn't load screenshots: ${errorMessage(error)}`} onRetry={() => load(1)} />
+        <LoadError message={`Couldn't load screenshots: ${errorMessage(error)}`} onRetry={() => load(0)} />
       ) : loading && items.length === 0 ? (
         <div className="pf-shots__grid" aria-hidden="true">
           {[0, 1, 2].map((i) => (
@@ -240,7 +282,7 @@ export function ScreenshotGallery({ game, onGameUpdated }: ScreenshotGalleryProp
         <p className="pf-muted pf-shots__empty">No screenshots yet. Press 📷 while playing to capture one.</p>
       ) : (
         <>
-          <ul className="pf-shots__grid">
+          <ul className="pf-shots__grid" ref={gridRef}>
             {items.map((s, i) => (
               <li key={s.id}>
                 <button
@@ -255,10 +297,10 @@ export function ScreenshotGallery({ game, onGameUpdated }: ScreenshotGalleryProp
               </li>
             ))}
           </ul>
-          {error && <LoadError message={`Couldn't load more: ${errorMessage(error)}`} onRetry={() => load(st.page + 1)} />}
+          {error && <LoadError message={`Couldn't load more: ${errorMessage(error)}`} onRetry={loadMore} />}
           {hasMore && !error && (
             <div className="pf-shots__more">
-              <button type="button" className="pf-btn pf-btn--sm" onClick={() => load(st.page + 1)} disabled={loading}>
+              <button type="button" className="pf-btn pf-btn--sm" onClick={() => !loading && loadMore()} aria-disabled={loading}>
                 {loading ? <Spinner size={12} /> : null} Load more
               </button>
             </div>
@@ -274,6 +316,7 @@ export function ScreenshotGallery({ game, onGameUpdated }: ScreenshotGalleryProp
           onClose={() => setOpen(null)}
           onDeleted={onDeleted}
           onGameUpdated={onGameUpdated}
+          returnFocus={returnFocus}
         />
       )}
     </section>

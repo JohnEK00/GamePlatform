@@ -5,6 +5,12 @@
 import { crc32 } from "./zip";
 import { MAX_BUNDLE_UNCOMPRESSED_BYTES, MAX_PROJECT_FILES, normalizeProjectPath } from "./project";
 
+/**
+ * Largest .zip the Studio reads into memory (review 3, L10): the server's bundle-download cap (64 MiB). Checked on
+ * `File.size` before `arrayBuffer()`, so picking a multi-GB file by mistake can't exhaust the tab's memory.
+ */
+export const MAX_OPEN_ZIP_BYTES = 64 * 1024 * 1024;
+
 export type ReadZipLimits = {
   /** Maximum number of file entries (directories don't count). Default MAX_PROJECT_FILES (2000). */
   maxEntries?: number;

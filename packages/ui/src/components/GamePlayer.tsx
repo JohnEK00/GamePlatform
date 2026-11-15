@@ -211,6 +211,7 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
   const navigate = useNavigate();
   const wrapRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const cameraRef = useRef<HTMLButtonElement>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
@@ -784,8 +785,10 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           <button
             type="button"
             className="pf-iconbtn"
+            ref={cameraRef}
             onClick={shots.capture}
-            disabled={!shots.canCapture}
+            // aria-disabled, not disabled: the button keeps focus while a capture runs (review 3, L1a).
+            aria-disabled={!shots.canCapture}
             aria-busy={shots.capturing || undefined}
             aria-label="Take screenshot"
             title="Screenshot"
@@ -811,6 +814,7 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
         onRemove={shots.remove}
         onClear={shots.clear}
         onGameUpdated={onGameUpdated}
+        emptyFocusRef={cameraRef}
       />
       {controlsOpen && showControls && (
         // Inside the player wrapper so it also shows in fullscreen.

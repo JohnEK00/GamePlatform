@@ -332,6 +332,21 @@ describe("Studio Open menu, link and reload (F013)", () => {
     expect(chip()).toBeNull();
   });
 
+  it("refuses a .zip over 64 MiB before reading it (review 3, L10)", async () => {
+    const big = new File([new Uint8Array(4)], "huge.zip");
+    Object.defineProperty(big, "size", { value: 64 * 1024 * 1024 + 1 });
+    const read = vi.spyOn(big, "arrayBuffer");
+    const pickFile = vi.fn(async () => big);
+    setup({ platform: { pickFile } });
+    await screen.findByRole("heading", { name: "Studio" });
+    await openMenuItem(".zip file…");
+    const replace = screen.queryByRole("dialog", { name: "Replace the current project?" });
+    if (replace) await act(async () => fireEvent.click(within(replace).getByRole("button", { name: "Replace" })));
+    await waitFor(() => expect(pickFile).toHaveBeenCalled());
+    expect(await screen.findByText(/a project \.zip may be at most 64\.0 MB/)).toBeTruthy();
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("My game… is disabled when logged out, and opens the game list when signed in", async () => {
     setup({ signedIn: false });
     await screen.findByRole("heading", { name: "Studio" });

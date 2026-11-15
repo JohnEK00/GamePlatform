@@ -7,9 +7,11 @@ import { useToast } from "../context/toast";
 import {
   codePointLength,
   fitImageForUpload,
+  isBelowUploadMinimum,
   launderImage,
   sanitizeScreenshotCaption,
   SCREENSHOT_CAPTION_MAX,
+  SCREENSHOT_MIN_UPLOAD_SIDE,
   screenshotFileName,
 } from "../screenshot";
 import { downloadBlob } from "../studio/project";
@@ -77,14 +79,19 @@ export type ScreenshotDialogProps = {
   /** After "Set as thumbnail" succeeded. */
   onGameUpdated?: (g: Game) => void;
   onPosted?: (s: Screenshot) => void;
+  /** Focus target on close when the opener is gone (after Remove); see `useModal`'s `returnFocus`. */
+  returnFocus?: () => HTMLElement | null | undefined;
 };
+
+/** The caption counter is announced only from this many code points before the limit (review 3, L1e). */
+const CAPTION_ANNOUNCE_FROM = 20;
 
 function canCopyImages(): boolean {
   return typeof navigator !== "undefined" && typeof navigator.clipboard?.write === "function" && typeof ClipboardItem !== "undefined";
 }
 
 /** A tray item's actions: caption, Download, Copy, Post to game page, Set as thumbnail, Remove (F005 § 2.2). */
-export function ScreenshotDialog({ item, index, mode, game, onRemove, onClose, onGameUpdated, onPosted }: ScreenshotDialogProps) {
+export function ScreenshotDialog({ item, index, mode, game, onRemove, onClose, onGameUpdated, onPosted, returnFocus }: ScreenshotDialogProps) {
   const api = useApi();
   const platform = usePlatform();
   const toast = useToast();
@@ -93,13 +100,15 @@ export function ScreenshotDialog({ item, index, mode, game, onRemove, onClose, o
   const [caption, setCaption] = useState(() => sanitizeScreenshotCaption(item.caption));
   const [busy, setBusy] = useState<null | "post" | "thumb" | "download">(null);
   const [confirmThumb, setConfirmThumb] = useState(false);
-  const ref = useModal<HTMLDivElement>(true, onClose, { canClose: busy === null && !confirmThumb });
+  const ref = useModal<HTMLDivElement>(true, onClose, { canClose: busy === null && !confirmThumb, returnFocus });
 
   const isStudio = mode === "studio";
   const owner = !!game.isOwner;
   const showPost = !isStudio && !!game.id && (game.published !== false || owner);
   const showThumb = !isStudio && !!game.id && owner;
   const alt = caption.trim() || `Screenshot of ${game.title}`;
+  // The server refuses a side under 64 px (review 3, L6): explain it here instead of failing with a generic 422.
+  const tooSmall = isBelowUploadMinimum(item.width, item.height);
 
   const download = async () => {
     const name = screenshotFileName(game.title, new Date(item.capturedAt));
@@ -127,7 +136,7 @@ export function ScreenshotDialog({ item, index, mode, game, onRemove, onClose, o
   };
 
   const post = async () => {
-    if (!game.id) return;
+    if (!game.id || tooSmall) return;
     const gameId = game.id;
     setBusy("post");
     try {
@@ -188,14 +197,24 @@ export function ScreenshotDialog({ item, index, mode, game, onRemove, onClose, o
               disabled={busy !== null}
               autoComplete="off"
             />
-            <span className="pf-field__hint" aria-live="polite">
+            <span className="pf-field__hint" aria-hidden="true">
               {len}/{SCREENSHOT_CAPTION_MAX}
+            </span>
+            {/* Announced only near the limit, not on every keystroke. */}
+            <span className="pf-sr-only" aria-live="polite">
+              {SCREENSHOT_CAPTION_MAX - len <= CAPTION_ANNOUNCE_FROM ? `${SCREENSHOT_CAPTION_MAX - len} characters left` : ""}
             </span>
           </div>
         )}
         {showPost && (
           <p className="pf-muted pf-small pf-shot-dialog__hint">
-            {!user ? "Sign in to post" : game.published === false ? "Visible after you publish" : "Visible to everyone on the game page"}
+            {tooSmall
+              ? `Too small to post: each side must be at least ${SCREENSHOT_MIN_UPLOAD_SIDE} px`
+              : !user
+                ? "Sign in to post"
+                : game.published === false
+                  ? "Visible after you publish"
+                  : "Visible to everyone on the game page"}
           </p>
         )}
         <div className="pf-shot-dialog__actions">
@@ -212,8 +231,8 @@ export function ScreenshotDialog({ item, index, mode, game, onRemove, onClose, o
               type="button"
               className="pf-btn pf-btn--sm pf-btn--primary"
               onClick={() => void post()}
-              disabled={!user || busy !== null}
-              title={!user ? "Sign in to post" : undefined}
+              disabled={!user || tooSmall || busy !== null}
+              title={tooSmall ? `Each side must be at least ${SCREENSHOT_MIN_UPLOAD_SIDE} px` : !user ? "Sign in to post" : undefined}
             >
               {busy === "post" ? <Spinner size={12} /> : null} Post to game page
             </button>
