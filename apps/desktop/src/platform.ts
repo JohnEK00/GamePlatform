@@ -1,6 +1,6 @@
 /** Native integrations (Tauri) with browser fallbacks so `npm run dev` works in a plain browser. */
 import { invoke, isTauri as tauriDetected } from "@tauri-apps/api/core";
-import type { LocalProject, StudioProject } from "@webgame/ui";
+import type { LocalProject, OsNotifications, StudioProject } from "@webgame/ui";
 
 export const MAX_PICK_BYTES = 60 * 1024 * 1024;
 /** Mirrors `MAX_SAVE_BYTES` in src-tauri/src/save.rs. */
@@ -202,3 +202,66 @@ export async function saveFile(suggestedName: string, data: Blob): Promise<boole
     throw asError(e);
   }
 }
+
+/** F007: per-device opt-in for OS notifications ("1" = on; the key is removed when off). */
+export const OS_NOTIFICATIONS_KEY = "webgame.desktop.osNotifications";
+
+export function readOsNotificationsEnabled(): boolean {
+  if (!isTauri()) return false;
+  try {
+    return localStorage.getItem(OS_NOTIFICATIONS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeOsNotificationsEnabled(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(OS_NOTIFICATIONS_KEY, "1");
+    else localStorage.removeItem(OS_NOTIFICATIONS_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** `"unsupported"` = built without the `os-notifications` Cargo feature (or a plain browser). */
+export type OsNotificationsStatus = "granted" | "denied" | "prompt" | "unsupported";
+
+function asStatus(v: unknown): OsNotificationsStatus {
+  return v === "granted" || v === "denied" || v === "prompt" ? v : "unsupported";
+}
+
+export async function osNotificationsStatus(): Promise<OsNotificationsStatus> {
+  if (!isTauri()) return "unsupported";
+  try {
+    return asStatus(await invoke<string>("os_notifications_status"));
+  } catch {
+    return "unsupported";
+  }
+}
+
+/** Asks the OS for permission where it needs one; resolves with the resulting state. */
+export async function requestOsNotifications(): Promise<OsNotificationsStatus> {
+  if (!isTauri()) return "unsupported";
+  try {
+    return asStatus(await invoke<string>("request_os_notifications"));
+  } catch {
+    return "denied";
+  }
+}
+
+/**
+ * `platform.osNotifications`: the UI decides when and what; Rust (`show_os_notification`) sanitises,
+ * length-limits and rate-limits, and shows it. Best effort: never rejects.
+ */
+export const osNotifications: OsNotifications = {
+  isEnabled: readOsNotificationsEnabled,
+  async show({ title, body }) {
+    if (!isTauri()) return;
+    try {
+      await invoke<boolean>("show_os_notification", { title, body });
+    } catch {
+      /* best effort */
+    }
+  },
+};

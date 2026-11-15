@@ -16,6 +16,7 @@ const ROUTES: Record<string, string> = {
   upload: "/upload",
   settings: "/settings",
   feed: "/feed",
+  notifications: "/notifications",
   docs: "/docs",
   "open-folder": "/studio",
 };

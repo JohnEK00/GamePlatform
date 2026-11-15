@@ -44,3 +44,12 @@
   max-width: 640px;
   margin: 12px auto 4px;
 }
+
+/* F007: "Show desktop notifications" in Settings (OsNotificationSetting.tsx). */
+.pfd-os-notifications {
+  margin-top: 16px;
+}
+.pfd-os-notifications__text {
+  display: grid;
+  gap: 1px;
+}

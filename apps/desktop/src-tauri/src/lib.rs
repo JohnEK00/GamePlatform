@@ -4,9 +4,10 @@
 //! `pick_file` shows the dialog, reads the chosen file and hands the frontend a one-time ticket;
 //! `read_picked` exchanges that ticket for the bytes. The webview never supplies a filesystem path.
 //! The same pattern is used for local game folders (`project`) and native "Save as" (`save`).
-//! `menu` builds the native application menu.
+//! `menu` builds the native application menu. `notify` shows native OS notifications (F007; `os-notifications` feature).
 
 mod menu;
+mod notify;
 mod project;
 mod save;
 
@@ -183,9 +184,15 @@ fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    // Used from Rust only (notify.rs); no notification:* permission is granted to the webview.
+    #[cfg(feature = "os-notifications")]
+    let builder = builder
+        .plugin(tauri_plugin_notification::init())
+        .manage(notify::ShowBucket::default());
+    builder
         .manage(PickedFiles::default())
         .manage(project::OpenProjects::default())
         .manage(project::ProjectFolders::default())
@@ -202,6 +209,9 @@ pub fn run() {
             project::reload_project_folder,
             save::save_file,
             menu::toggle_fullscreen,
+            notify::os_notifications_status,
+            notify::request_os_notifications,
+            notify::show_os_notification,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pixelforge Arcade");

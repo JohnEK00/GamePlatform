@@ -28,11 +28,22 @@ Desktop shell that mounts `<WebGameApp>` from `@webgame/ui` (hash router) inside
   raw IPC body (no JSON number array) with the suggested name percent-encoded in the `x-file-name` header. Rust
   sanitises the name, shows the save dialog filtered by its extension and writes only to the chosen path (≤ 100 MB).
   Returns `true` (saved) / `false` (cancelled).
+- **OS notifications** (F007, `platform.osNotifications`, opt-in per device): Settings shows "Show desktop
+  notifications" (`src/OsNotificationSetting.tsx`, off by default, stored as
+  `localStorage["webgame.desktop.osNotifications"] = "1"`, key removed when off). Turning it on calls
+  `request_os_notifications` (the OS is asked only where it requires it); "denied" keeps it off with "Notifications are
+  blocked in your system settings." The UI decides when and what to show (window unfocused, newer than its device
+  watermark, summary text only) and calls `show_os_notification(title, body)` (`src-tauri/src/notify.rs`), which strips
+  control and bidi characters, requires title 1–64 / body 1–240 characters, and allows 5 per 60 s (token bucket; over the
+  limit nothing is shown). `os_notifications_status` returns `granted | denied | prompt`, or `unsupported` in builds
+  without the `os-notifications` Cargo feature, where the setting is not rendered. Clicking a toast uses the platform
+  default (focus/open the app); there is no deep link.
 - **Native menu** (`src-tauri/src/menu.rs`):
   - File → Upload game (`#/upload`), Open local game folder… (Ctrl+O; on `#/studio` it dispatches the
     `STUDIO_OPEN_FOLDER_EVENT` window event from @webgame/ui, otherwise it sets `window.__webgameStudioOpenPending`
     and navigates to `#/studio`, so loading goes through the Studio's normal Open folder flow), Settings (`#/settings`), Quit
-  - View → Reload (Ctrl+R), Toggle Fullscreen (F11), Toggle Developer Tools (debug builds only)
+  - View → Feed (Ctrl+Shift+F, `#/feed`), Notifications (Ctrl+Shift+N, `#/notifications`), Take Screenshot
+    (Ctrl+Shift+S), Controls (Ctrl+Shift+K), Reload (Ctrl+R), Toggle Fullscreen (F11), Toggle Developer Tools (debug builds only)
   - Help → Make a game (`#/docs`), About (name + version dialog)
 
   Reload, fullscreen, devtools, about and quit run in Rust. Navigation items are emitted to the webview as the
@@ -65,21 +76,49 @@ The backend's default `CORS_ORIGINS` already includes `http://localhost:1420`, `
 ```sh
 npm run build -w @webgame/desktop               # typecheck + Vite build → apps/desktop/dist
 cd apps/desktop/src-tauri && cargo build        # debug binary (target/debug/pixelforge-arcade.exe)
-cd apps/desktop/src-tauri && cargo test         # unit tests: picker tickets, folder validation (temp dirs), save names, F11 debounce
+cd apps/desktop/src-tauri && cargo test         # unit tests: picker tickets, folder validation (temp dirs), save names, F11 debounce, notification sanitising/rate limit
 npm run tauri -w @webgame/desktop -- build      # release bundles (MSI/NSIS) in src-tauri/target/release/bundle
 ```
+
+### OS notifications and disk use (`os-notifications` feature)
+
+`tauri-plugin-notification` is an optional dependency behind the default-on Cargo feature `os-notifications`.
+Build without it (no OS notifications; the Settings toggle is hidden) on space-constrained machines:
+
+```sh
+cd apps/desktop/src-tauri && cargo build --no-default-features
+npm run tauri -w @webgame/desktop -- dev -- --no-default-features
+```
+
+Measured on Windows (x86_64-pc-windows-msvc, slim dev profile, `CARGO_INCREMENTAL=0`), each after `cargo clean`
+and `cargo build`:
+
+| | `target/debug` | `cargo tree -d -e normal \| wc -l` |
+|---|---|---|
+| without the plugin (`--no-default-features`) | 1158.5 MB | 356 |
+| with the plugin (default) | 1206.1 MB | 388 |
+| delta | **+47.6 MB** | +32 |
+
+No second `windows`/`windows-sys`/`windows-core` version is added: `tauri-winrt-notification` reuses `windows` 0.62
+(already built for tao/WebView2). It does enable extra `windows` features, so switching between the two feature sets
+in one target dir rebuilds `windows`, `webview2-com`, `tao`, `wry` and `tauri` under a new hash. The old copies stay,
+and alternating builds can temporarily add about 350 MB until `cargo clean`. The only new duplicate on Windows is
+`cpufeatures` 0.2/0.3 (via `rand` 0.10); the other extra lines come from Linux/macOS-only crates (`zbus`, `notify-rust`,
+`mac-notification-sys`).
 
 ## Layout
 
 ```
 apps/desktop/
 ├─ index.html, vite.config.ts     Vite (port 1420, strictPort, envPrefix VITE_/TAURI_)
-├─ src/                           main.tsx, App.tsx, platform.ts (pickFile, openLocalProject, saveFile),
+├─ src/                           main.tsx, App.tsx, platform.ts (pickFile, openLocalProject, saveFile, osNotifications),
+│                                 OsNotificationSetting.tsx (desktop notifications toggle),
 │                                 nativeMenu.ts (menu events, F11), server.ts (setting + health),
 │                                 ServerForm.tsx (settings panel), OfflineBanner.tsx, desktop.css
 ├─ app-icon.png, scripts/gen-icon.mjs   icon source (regenerate all icons: npm run icons -w @webgame/desktop)
 └─ src-tauri/                     Rust crate: lib.rs (plugins + pick_file/read_picked), project.rs (folder reading),
-                                  save.rs (save_file), menu.rs (native menu, fullscreen), tauri.conf.json,
+                                  save.rs (save_file), menu.rs (native menu, fullscreen), notify.rs (OS notifications),
+                                  tauri.conf.json,
                                   capabilities/, icons/
 ```
 
@@ -87,7 +126,8 @@ apps/desktop/
 
 - Capabilities (`capabilities/default.json`) are least privilege: only `core:event:allow-listen` /
   `core:event:allow-unlisten` (menu events). Dialogs, menu, fullscreen and window state are used from Rust only,
-  so no dialog/window/window-state permissions are granted to the webview.
+  so no dialog/window/window-state permissions are granted to the webview. `tauri-plugin-notification` is likewise used
+  from Rust only: no `notification:*` permission and no `@tauri-apps/plugin-notification` npm package.
 - The webview never passes filesystem paths: every read or write goes to a file/folder the user chose in a native
   dialog that Rust opened.
 
