@@ -4,6 +4,7 @@ pub mod activity;
 pub mod auth;
 pub mod bundle;
 pub mod config;
+pub mod controls_backfill;
 pub mod db;
 pub mod error;
 pub mod export;

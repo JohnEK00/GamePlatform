@@ -331,9 +331,9 @@ pub async fn create_game_record(
         let mut tx = state.db.begin().await?;
         sqlx::query(
             "INSERT INTO games (id, owner_id, title, description, published, version, entry, \
-             width, height, score_order, score_format, score_label, created_at, updated_at, \
-             first_published_at) \
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             width, height, score_order, score_format, score_label, actions_json, \
+             controls_hint, created_at, updated_at, first_published_at) \
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(owner_id)
@@ -346,6 +346,8 @@ pub async fn create_game_record(
         .bind(&meta.leaderboard.order)
         .bind(&meta.leaderboard.format)
         .bind(&meta.leaderboard.label)
+        .bind(meta.actions_json())
+        .bind(&meta.controls_hint)
         .bind(&now)
         .bind(&now)
         .bind(new.published.then_some(&now))
@@ -766,7 +768,8 @@ pub async fn upload_bundle(
         // since the request read the game); it decides `last_updated_at` and `gameUpdated`.
         let published: Option<bool> = sqlx::query_scalar(
             "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, score_order = ?, \
-             score_format = ?, score_label = ?, updated_at = ? WHERE id = ? AND version = ? \
+             score_format = ?, score_label = ?, actions_json = ?, controls_hint = ?, \
+             updated_at = ? WHERE id = ? AND version = ? \
              RETURNING published",
         )
         .bind(new_version)
@@ -776,6 +779,8 @@ pub async fn upload_bundle(
         .bind(&meta.leaderboard.order)
         .bind(&meta.leaderboard.format)
         .bind(&meta.leaderboard.label)
+        .bind(meta.actions_json())
+        .bind(&meta.controls_hint)
         .bind(&now)
         .bind(&id)
         .bind(old_version)

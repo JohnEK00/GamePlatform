@@ -53,6 +53,17 @@ pub fn js_string_content(s: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
+/// F009: escape JSON text for use as a JS literal inside an HTML `<script>`: the same escapes
+/// as [`js_string_content`] (`<`, `>`, `&`, U+2028, U+2029 → `\uXXXX`). In valid JSON these
+/// characters only occur inside strings, where the escapes are equivalent.
+pub fn js_json_literal(json: &str) -> String {
+    json.replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
 /// Percent-encode a relative URL path, keeping `/` separators.
 pub fn encode_path(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
@@ -75,10 +86,12 @@ pub fn render_player_html(
     version: i64,
     width: i64,
     height: i64,
+    actions_json: &str,
 ) -> String {
     let origin = js_string_content(origin);
     let id = js_string_content(id);
     let entry = js_string_content(&encode_path(entry));
+    let actions = js_json_literal(actions_json);
     format!(
         r#"<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -88,7 +101,7 @@ pub fn render_player_html(
   import {{ boot }} from "{origin}/runtime/engine.js";
   const base = "{origin}/games/{id}/files/";
   const mod = await import(base + "{entry}?v={version}");
-  await boot(document.getElementById("game"), mod.default, {{ width: {width}, height: {height}, baseUrl: base }});
+  await boot(document.getElementById("game"), mod.default, {{ width: {width}, height: {height}, baseUrl: base, actions: {actions} }});
 </script></body></html>
 "#
     )
@@ -306,6 +319,7 @@ pub fn render_studio_html(origin: &str) -> String {
       try {{
         await boot(document.getElementById("game"), mod.default, {{
           width: num(manifest.width, 800), height: num(manifest.height, 600), baseUrl: "about:blank", files,
+          actions: manifest.actions,
         }});
       }} catch (err) {{
         // boot() already posted webgame:error before rethrowing; don't report it twice.
@@ -379,6 +393,8 @@ pub async fn play_page(
         }
     }
     let origin = page_origin(&state, &headers)?;
+    // F009: re-serialise the parsed list so a NULL or unparsable column renders `[]`.
+    let actions_json = serde_json::to_string(&game.actions()).unwrap_or_else(|_| "[]".into());
     let html = render_player_html(
         &origin,
         &game.id,
@@ -386,6 +402,7 @@ pub async fn play_page(
         game.version,
         game.width,
         game.height,
+        &actions_json,
     );
     player_response(&origin, html)
 }

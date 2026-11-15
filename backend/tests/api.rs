@@ -935,7 +935,7 @@ async fn play_page_and_files() {
         "  import { boot } from \"https://localhost:8080/runtime/engine.js\";".to_string(),
         format!("  const base = \"https://localhost:8080/games/{id}/files/\";"),
         "  const mod = await import(base + \"main.js?v=1\");".to_string(),
-        "  await boot(document.getElementById(\"game\"), mod.default, { width: 800, height: 600, baseUrl: base });".to_string(),
+        "  await boot(document.getElementById(\"game\"), mod.default, { width: 800, height: 600, baseUrl: base, actions: [] });".to_string(),
         "</script></body></html>".to_string(),
         String::new(),
     ]

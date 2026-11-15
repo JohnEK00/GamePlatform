@@ -14,6 +14,12 @@ curl http://localhost:8080/api/health
 
 Migrations in `migrations/` are embedded and applied at startup. The data dir and the SQLite file are created on first run.
 
+Startup tasks (`serve`), in order:
+- apply `ADMIN_USERNAMES` roles and refresh the F003 trending snapshot;
+- sweep stale upload/staging dirs, orphan game dirs and orphan screenshot files (F005);
+- **F009 controls backfill** (`src/controls_backfill.rs`, spawned in the background): games whose `actions_json` is still `NULL` (stored before `0010_f009.sql`) get `actions_json` / `controls_hint` from their current `game.json`, in batches of 200. A stored `actions` that fails the strict rules becomes `[]` (logged at `info`), a missing or > 1 MiB file becomes `[]` / `""`. Idempotent and version-guarded; failures are logged and retried at the next start. Until a row is processed it reports `actions: []`, `controlsHint: ""`;
+- the periodic trending/`PRAGMA optimize` maintenance task.
+
 `/runtime/engine.js` is served from `ENGINE_DIST`. Build the engine first with `npm run build:engine` from the repo root. Until you do, that route returns 503 with a message telling you how to fix it.
 
 ## Environment

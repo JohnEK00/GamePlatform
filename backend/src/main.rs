@@ -75,6 +75,9 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         Ok(n) => tracing::info!(removed = n, "removed stale upload/staging directories"),
         Err(e) => tracing::warn!(error = %e, "startup cleanup of stale directories failed"),
     }
+    // F009: fill actions/controls hint of games stored before 0010_f009.sql (best effort,
+    // in the background; requests see `[]`/`""` until a row is processed).
+    let _backfill = webgame_server::controls_backfill::spawn_backfill(&state);
     // N1/N3: periodic trending refresh + PRAGMA optimize, off the request path.
     let maintenance = webgame_server::trending::spawn_maintenance(&state);
     let listener = tokio::net::TcpListener::bind(addr).await?;

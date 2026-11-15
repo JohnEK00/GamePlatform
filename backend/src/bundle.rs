@@ -55,6 +55,120 @@ impl Default for LeaderboardMeta {
     }
 }
 
+pub const MAX_ACTIONS: usize = 32;
+pub const MAX_ACTION_KEYS: usize = 3;
+pub const MAX_ACTION_GAMEPAD: usize = 2;
+pub const ACTION_ID_MAX: usize = 32;
+pub const ACTION_NAME_MAX: usize = 40;
+pub const CONTROLS_HINT_MAX: usize = 300;
+
+/// Bindable `KeyboardEvent.code` values plus mouse buttons (GAME_FORMAT.md § F009, normative):
+/// 83 keyboard codes and 3 mouse codes.
+pub const BINDABLE_KEYS: &[&str] = &[
+    "KeyA",
+    "KeyB",
+    "KeyC",
+    "KeyD",
+    "KeyE",
+    "KeyF",
+    "KeyG",
+    "KeyH",
+    "KeyI",
+    "KeyJ",
+    "KeyK",
+    "KeyL",
+    "KeyM",
+    "KeyN",
+    "KeyO",
+    "KeyP",
+    "KeyQ",
+    "KeyR",
+    "KeyS",
+    "KeyT",
+    "KeyU",
+    "KeyV",
+    "KeyW",
+    "KeyX",
+    "KeyY",
+    "KeyZ",
+    "Digit0",
+    "Digit1",
+    "Digit2",
+    "Digit3",
+    "Digit4",
+    "Digit5",
+    "Digit6",
+    "Digit7",
+    "Digit8",
+    "Digit9",
+    "Numpad0",
+    "Numpad1",
+    "Numpad2",
+    "Numpad3",
+    "Numpad4",
+    "Numpad5",
+    "Numpad6",
+    "Numpad7",
+    "Numpad8",
+    "Numpad9",
+    "NumpadAdd",
+    "NumpadSubtract",
+    "NumpadMultiply",
+    "NumpadDivide",
+    "NumpadDecimal",
+    "NumpadEnter",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Space",
+    "Enter",
+    "Backspace",
+    "ShiftLeft",
+    "ShiftRight",
+    "ControlLeft",
+    "ControlRight",
+    "AltLeft",
+    "AltRight",
+    "Minus",
+    "Equal",
+    "BracketLeft",
+    "BracketRight",
+    "Backslash",
+    "Semicolon",
+    "Quote",
+    "Backquote",
+    "Comma",
+    "Period",
+    "Slash",
+    "IntlBackslash",
+    "Insert",
+    "Delete",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "Mouse0",
+    "Mouse1",
+    "Mouse2",
+];
+
+/// Gamepad button names (GAME_FORMAT.md § F009): the engine's `GamepadButtons` without `Home`.
+pub const GAMEPAD_BUTTONS: &[&str] = &[
+    "A", "B", "X", "Y", "LB", "RB", "LT", "RT", "Back", "Start", "LS", "RS", "Up", "Down", "Left",
+    "Right",
+];
+
+/// One declared action (GAME_FORMAT.md § F009), normalised. Serialised as-is into
+/// `games.actions_json` (API `ControlAction`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ControlActionMeta {
+    pub id: String,
+    pub name: String,
+    pub keys: Vec<String>,
+    pub gamepad: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleMeta {
     pub name: Option<String>,
@@ -63,6 +177,22 @@ pub struct BundleMeta {
     pub height: i64,
     pub achievements: Vec<AchievementMeta>,
     pub leaderboard: LeaderboardMeta,
+    /// F009: normalised `actions` (strict).
+    pub actions: Vec<ControlActionMeta>,
+    /// F009: normalised `controls` (lenient), 0-300 chars.
+    pub controls_hint: String,
+}
+
+impl BundleMeta {
+    /// Compact JSON of [`BundleMeta::actions`] for `games.actions_json` (`[]` when none).
+    pub fn actions_json(&self) -> String {
+        actions_to_json(&self.actions)
+    }
+}
+
+/// Compact JSON of a normalised action list (`[]` when empty).
+pub fn actions_to_json(actions: &[ControlActionMeta]) -> String {
+    serde_json::to_string(actions).unwrap_or_else(|_| "[]".into())
 }
 
 fn invalid(msg: impl Into<String>) -> AppError {
@@ -290,6 +420,183 @@ pub fn parse_leaderboard(v: &Value) -> Result<LeaderboardMeta, AppError> {
     Ok(meta)
 }
 
+fn valid_action_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= ACTION_ID_MAX
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// A user-supplied value quoted for an error message (JSON-escaped, at most 40 chars).
+fn quoted(s: &str) -> String {
+    let short: String = s.chars().take(40).collect();
+    let short = if short.len() < s.len() {
+        format!("{short}…")
+    } else {
+        short
+    };
+    serde_json::to_string(&short).unwrap_or_else(|_| "\"\"".into())
+}
+
+/// A `keys` / `gamepad` list of one action: optional (absent or `null` → `[]`), at most `max`
+/// unique strings from `table`.
+fn parse_binding_list(
+    obj: &serde_json::Map<String, Value>,
+    at: &str,
+    field: &str,
+    max: usize,
+    table: &[&str],
+    not_allowed: &str,
+) -> Result<Vec<String>, AppError> {
+    let list = match obj.get(field) {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(a)) => a,
+        Some(_) => return Err(invalid(format!("{at}.{field} must be an array"))),
+    };
+    if list.len() > max {
+        return Err(invalid(format!(
+            "{at}.{field} must have at most {max} entries"
+        )));
+    }
+    let mut out: Vec<String> = Vec::with_capacity(list.len());
+    for (j, item) in list.iter().enumerate() {
+        let s = item
+            .as_str()
+            .ok_or_else(|| invalid(format!("{at}.{field}[{j}] must be a string")))?;
+        if !table.contains(&s) {
+            return Err(invalid(format!(
+                "{at}.{field}[{j}] {} {not_allowed}",
+                quoted(s)
+            )));
+        }
+        if out.iter().any(|k| k == s) {
+            return Err(invalid(format!(
+                "{at}.{field}[{j}] {} is a duplicate",
+                quoted(s)
+            )));
+        }
+        out.push(s.to_string());
+    }
+    Ok(out)
+}
+
+/// F009: validate the optional `actions` array of game.json (`v` is the whole manifest),
+/// strictly (GAME_FORMAT.md § F009). The first violation is a 422 `validation` naming the
+/// path. Unknown keys inside an action are dropped.
+pub fn parse_actions(v: &Value) -> Result<Vec<ControlActionMeta>, AppError> {
+    let list = match v.get("actions") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(a)) => a,
+        Some(_) => return Err(invalid("game.json: actions must be an array")),
+    };
+    if list.len() > MAX_ACTIONS {
+        return Err(invalid(format!(
+            "game.json: at most {MAX_ACTIONS} actions are allowed"
+        )));
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(list.len());
+    for (i, item) in list.iter().enumerate() {
+        let at = format!("game.json: actions[{i}]");
+        let obj = item
+            .as_object()
+            .ok_or_else(|| invalid(format!("{at} must be an object")))?;
+        let id = obj
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| valid_action_id(id))
+            .ok_or_else(|| {
+                invalid(format!(
+                    "{at}.id must match ^[a-z0-9_-]{{1,{ACTION_ID_MAX}}}$"
+                ))
+            })?;
+        if !seen.insert(id) {
+            return Err(invalid(format!("{at}.id {} is a duplicate", quoted(id))));
+        }
+        let name = obj
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .ok_or_else(|| invalid(format!("{at}.name must be a string")))?;
+        let n = name.chars().count();
+        if n == 0 || n > ACTION_NAME_MAX {
+            return Err(invalid(format!(
+                "{at}.name must be 1-{ACTION_NAME_MAX} characters"
+            )));
+        }
+        if name
+            .chars()
+            .any(|c| c.is_control() || crate::versions::is_bidi_control(c))
+        {
+            return Err(invalid(format!("{at}.name contains invalid characters")));
+        }
+        let keys = parse_binding_list(
+            obj,
+            &at,
+            "keys",
+            MAX_ACTION_KEYS,
+            BINDABLE_KEYS,
+            "can't be bound",
+        )?;
+        let gamepad = parse_binding_list(
+            obj,
+            &at,
+            "gamepad",
+            MAX_ACTION_GAMEPAD,
+            GAMEPAD_BUTTONS,
+            "is not a gamepad button",
+        )?;
+        if keys.is_empty() && gamepad.is_empty() {
+            return Err(invalid(format!(
+                "{at} needs at least one key or gamepad button"
+            )));
+        }
+        out.push(ControlActionMeta {
+            id: id.to_string(),
+            name: name.to_string(),
+            keys,
+            gamepad,
+        });
+    }
+    Ok(out)
+}
+
+/// F009: the free-text `controls` string of game.json (`v` is the whole manifest), leniently
+/// normalised; never fails. Control characters become spaces, bidi controls are removed,
+/// whitespace runs collapse to one space, then trim and cut to 300 chars. Non-strings → `""`.
+pub fn parse_controls_hint(v: &Value) -> String {
+    let Some(raw) = v.get("controls").and_then(Value::as_str) else {
+        return String::new();
+    };
+    let mut out = String::with_capacity(raw.len().min(CONTROLS_HINT_MAX * 4));
+    let mut count = 0usize;
+    let mut pending_space = false;
+    for c in raw.chars() {
+        if crate::versions::is_bidi_control(c) {
+            continue;
+        }
+        if c.is_control() || c.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if pending_space && count > 0 {
+            if count + 1 >= CONTROLS_HINT_MAX {
+                break;
+            }
+            out.push(' ');
+            count += 1;
+        }
+        pending_space = false;
+        if count >= CONTROLS_HINT_MAX {
+            break;
+        }
+        out.push(c);
+        count += 1;
+    }
+    out
+}
+
 pub fn parse_game_json(bytes: &[u8]) -> Result<BundleMeta, AppError> {
     let v: Value = serde_json::from_slice(bytes)
         .map_err(|e| invalid(format!("game.json is not valid JSON: {e}")))?;
@@ -310,6 +617,8 @@ pub fn parse_game_json(bytes: &[u8]) -> Result<BundleMeta, AppError> {
         .filter(|s| !s.is_empty());
     let achievements = parse_achievements(&v)?;
     let leaderboard = parse_leaderboard(&v)?;
+    let actions = parse_actions(&v)?;
+    let controls_hint = parse_controls_hint(&v);
     Ok(BundleMeta {
         name,
         entry,
@@ -317,6 +626,8 @@ pub fn parse_game_json(bytes: &[u8]) -> Result<BundleMeta, AppError> {
         height,
         achievements,
         leaderboard,
+        actions,
+        controls_hint,
     })
 }
 

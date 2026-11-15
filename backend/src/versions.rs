@@ -8,7 +8,9 @@ pub const NOTES_MAX: usize = 1000;
 /// Maximum raw size of a multipart `notes` field.
 pub const NOTES_RAW_MAX: usize = 8 * 1024;
 
-fn is_bidi_control(c: char) -> bool {
+/// Bidi embedding/override/isolate controls (U+202A–U+202E, U+2066–U+2069). Shared with the
+/// F009 action-name and controls-hint rules in `bundle.rs`.
+pub fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 

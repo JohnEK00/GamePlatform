@@ -1,6 +1,6 @@
 //! JSON DTOs (camelCase, matching docs/API.md) and row mapping helpers.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
@@ -127,6 +127,32 @@ pub struct Game {
     pub leaderboard: LeaderboardConfig,
     /// F004: the current version's history row.
     pub latest_version: GameVersion,
+    /// F009: declared actions of the current version, normalised, in manifest order.
+    pub actions: Vec<ControlAction>,
+    /// F009: normalised game.json `controls` (0-300 chars, `""` when none).
+    pub controls_hint: String,
+}
+
+/// `ControlAction` (API.md § F009).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlAction {
+    pub id: String,
+    pub name: String,
+    pub keys: Vec<String>,
+    pub gamepad: Vec<String>,
+}
+
+/// Parse a stored `games.actions_json`. `NULL` → `[]`; unparsable → `[]` with a warning.
+pub fn parse_stored_actions(game_id: &str, raw: Option<&str>) -> Vec<ControlAction> {
+    let Some(raw) = raw else { return Vec::new() };
+    match serde_json::from_str(raw) {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::warn!(game_id, error = %e, "unparsable games.actions_json; using []");
+            Vec::new()
+        }
+    }
 }
 
 /// `Game.leaderboard` (API.md § F001): `{ order, format, label }`.
@@ -243,6 +269,11 @@ pub struct GameRow {
     pub owner: UserRef,
     pub tags: Vec<String>,
     pub leaderboard: LeaderboardConfig,
+    /// F009: raw `games.actions_json` (`None` = not yet backfilled); parsed only for `Game`
+    /// and the player page, so list queries don't pay for it.
+    pub actions_json: Option<String>,
+    /// F009: `games.controls_hint` (`None` → `""`).
+    pub controls_hint: String,
 }
 
 /// SELECT prefix for [`GameRow`]; append `WHERE ...`.
@@ -250,6 +281,7 @@ pub const GAME_SELECT: &str = "SELECT g.id, g.owner_id, g.title, g.description, 
      g.version, g.entry, g.width, g.height, g.thumbnail_ext, g.thumbnail_version, g.plays, \
      g.rating_sum, g.rating_count, g.created_at, g.updated_at, \
      g.score_order, g.score_format, g.score_label, g.last_updated_at, \
+     g.actions_json, g.controls_hint, \
      u.id AS o_id, u.username AS o_username, u.display_name AS o_display_name, \
      u.avatar_ext AS o_avatar_ext, u.avatar_version AS o_avatar_version, \
      (SELECT group_concat(tag, ',') FROM (SELECT tag FROM game_tags t WHERE t.game_id = g.id \
@@ -295,6 +327,10 @@ pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
             format: row.try_get("score_format")?,
             label: row.try_get("score_label")?,
         },
+        actions_json: row.try_get("actions_json")?,
+        controls_hint: row
+            .try_get::<Option<String>, _>("controls_hint")?
+            .unwrap_or_default(),
     })
 }
 
@@ -352,7 +388,14 @@ impl GameRow {
             achievements,
             leaderboard: self.leaderboard.clone(),
             latest_version,
+            actions: self.actions(),
+            controls_hint: self.controls_hint.clone(),
         }
+    }
+
+    /// F009: the stored actions (`NULL` or unparsable → `[]`).
+    pub fn actions(&self) -> Vec<ControlAction> {
+        parse_stored_actions(&self.id, self.actions_json.as_deref())
     }
 
     pub fn visible_to(&self, viewer: Option<&str>) -> bool {
