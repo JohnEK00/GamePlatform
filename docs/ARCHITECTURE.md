@@ -424,3 +424,71 @@ Controls overlay and key remapping (spec: `docs/features/F009-controls-and-remap
   - `parse_actions`, `parse_controls_hint`, `controls_backfill.rs` and the `play.rs` changes belong to backend-dev.
   - `controls.ts`, the three components and the Studio form belong to frontend-dev.
   - The menu item belongs to desktop-dev.
+
+
+## F006 additions
+Comment replies and reactions (spec: `docs/features/F006-comment-replies-and-reactions.md`).
+- **Model.** Replies are rows in `comments` with `parent_id` set to a top-level comment. Nesting is one level by construction: the create handler normalises any reply target to its root, so `parent_id` always points at a row whose own `parent_id` is NULL. Hearts are a join table with one row per (comment, user). There are no stored counters: counts are computed per read from primary-key or index prefixes, which is cheap for a page (≤ 100 threads + ≤ 300 preview replies).
+- **Data**: migration `backend/migrations/0012_f006.sql` runs after the review-fix `0011_review3.sql`:
+  ```sql
+  -- One level of replies. NULL = top-level. Always a top-level comment's id (enforced in Rust).
+  -- SQLite allows ADD COLUMN with REFERENCES because the default is NULL; the cascade is honoured.
+  ALTER TABLE comments ADD COLUMN parent_id TEXT REFERENCES comments(id) ON DELETE CASCADE;
+  -- Replies only: the author of the reply that was answered ("Replying to @x").
+  ALTER TABLE comments ADD COLUMN reply_to_user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
+
+  CREATE INDEX idx_comments_game_top      ON comments(game_id, created_at DESC) WHERE parent_id IS NULL;
+  CREATE INDEX idx_comments_parent_created ON comments(parent_id, created_at) WHERE parent_id IS NOT NULL;
+
+  CREATE TABLE comment_hearts (
+      comment_id  TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at  TEXT NOT NULL,                       -- RFC3339 millis Z
+      PRIMARY KEY (comment_id, user_id)
+  );
+  CREATE INDEX idx_comment_hearts_user ON comment_hearts(user_id);   -- user-delete cascade; F007 lookups
+  ```
+  Existing rows become top-level comments (`parent_id` NULL). `idx_comments_game_created` (v1) stays; it serves `totalAll` and the stats counts.
+- **Read shape** (normative; `?v` = viewer id or NULL, `?a` = 1 when the viewer is an admin):
+  ```sql
+  SELECT c.id, c.game_id, c.parent_id, c.body, c.created_at,
+         u.id AS a_id, u.username AS a_username, u.display_name AS a_display_name,
+         u.avatar_ext AS a_avatar_ext, u.avatar_version AS a_avatar_version,
+         r.id AS r_id, r.username AS r_username, r.display_name AS r_display_name,
+         r.avatar_ext AS r_avatar_ext, r.avatar_version AS r_avatar_version,
+         (c.user_id = g.owner_id) AS is_creator,
+         (SELECT COUNT(*) FROM comment_hearts h WHERE h.comment_id = c.id) AS hearts,
+         EXISTS (SELECT 1 FROM comment_hearts h WHERE h.comment_id = c.id AND h.user_id = ?v) AS my_heart,
+         EXISTS (SELECT 1 FROM comment_hearts h WHERE h.comment_id = c.id AND h.user_id = g.owner_id) AS creator_heart,
+         (?v IS NOT NULL AND (?a = 1 OR c.user_id = ?v OR g.owner_id = ?v)) AS can_delete
+  FROM comments c
+  JOIN users u ON u.id = c.user_id
+  JOIN games g ON g.id = c.game_id
+  LEFT JOIN users r ON r.id = c.reply_to_user_id
+  ```
+  - Thread page: `WHERE c.game_id = ? AND c.parent_id IS NULL ORDER BY c.created_at DESC, c.rowid DESC LIMIT ? OFFSET ?` (walks `idx_comments_game_top`).
+  - Previews, one query per page (ids = the page's thread ids):
+    ```sql
+    WITH p AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY parent_id ORDER BY created_at, rowid) AS rn
+               FROM comments WHERE parent_id IN (/* ids */))
+    /* read shape */ JOIN p ON p.id = c.id WHERE p.rn <= 3 ORDER BY c.parent_id, p.rn
+    ```
+  - Reply counts: `SELECT parent_id, COUNT(*) FROM comments WHERE parent_id IN (/* ids */) GROUP BY parent_id`.
+  - `/replies`: `WHERE c.parent_id = ? ORDER BY c.created_at, c.rowid LIMIT ? OFFSET ?`.
+- **Write paths**:
+  - Reply insert, guarded for the cap: `INSERT INTO comments (id, game_id, user_id, body, created_at, parent_id, reply_to_user_id) SELECT ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM comments WHERE parent_id = ?) < 200`. Zero rows → 422.
+  - Delete (shared by `DELETE /api/comments/{id}` and admin resolve `delete`), one transaction:
+    ```sql
+    UPDATE reports SET status = 'resolved', resolution = 'delete', resolved_at = ?2
+     WHERE target_type = 'comment' AND status = 'open'
+       AND target_id IN (SELECT id FROM comments WHERE id = ?1 OR parent_id = ?1);
+    DELETE FROM comments WHERE id = ?1;   -- replies and comment_hearts cascade
+    ```
+  - Hearts: `INSERT OR IGNORE INTO comment_hearts …` / `DELETE FROM comment_hearts WHERE comment_id = ? AND user_id = ?`, then read the counts back.
+- **Feed and notifications (coordination with F002/F007).**
+  - F006 writes **no** `activity_events`. The F002 feed shows what followed people *do* in games (publish, update, bests, unlocks); conversations are addressed to specific people and belong in F007 notifications, not in a follower fan-out. The `activity_events.kind` CHECK is unchanged.
+  - F007 hook points (to be wired by F007, not F006): after a successful insert in `create_comment` and after a heart insert that changed a row. The rows already hold what F007 needs: `comments.parent_id`, `comments.reply_to_user_id`, `comments.user_id`, `games.owner_id`, `comment_hearts.user_id`, and the permalink `/games/{gameId}?comment={commentId}`.
+  - Recommended F007 recipients (F007's spec is normative): a top-level comment → the game owner; a reply → the thread's root author and the `replyTo` user; a creator heart → the comment's author. Never the actor themself, and each recipient at most once per event.
+- **Permalinks.** `?comment={id}` on the game page (a query string, so it works under the desktop HashRouter, like F004's `?section=versions`). The UI resolves it with `GET /api/comments/{id}`.
+- **UI**: `Comments.tsx` is split into `Comments` (state), `CommentItem`, `CommentForm` and `HeartButton`. Threads are nested `<ul>`s of `<article>`s (spec § 2.6), not an ARIA tree.
+- **Ownership**: the migration, `routes/comments.rs`, the hearts handlers, `Limit::Heart` and the `reports.rs` change belong to backend-dev. The four components, the client and types, `GamePage`/`AdminPage` changes and styles belong to frontend-dev. Desktop has no code changes.

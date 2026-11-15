@@ -653,3 +653,98 @@ type Game = { ...F004, actions: ControlAction[]; controlsHint: string }
   - New 422 message: "image is too large to process; use fewer pixels or 8-bit color", returned when the estimated decode memory exceeds 80 MiB (L3).
   - A 503 (decode slots busy) or a 422 decode/processing failure no longer uses up the 10/hour quota (L5).
 - **Leaderboards after a `leaderboard.order` change** (L4): boards are served by a slower fallback query until a background rebuild of `score_bests` finishes (migration `0011_review3.sql`). Results are identical.
+
+
+---
+
+## F006 additions
+
+Comment replies and reactions (spec: `docs/features/F006-comment-replies-and-reactions.md`). All earlier rules apply, including the v2 moderation flow and `Limit::Comment`.
+
+### Types
+```ts
+type Comment = {
+  ...v1,                          // id, gameId, author, body, createdAt
+  parentId: string | null;        // null = top-level; otherwise ALWAYS the id of a top-level comment (one level of nesting)
+  replyTo: UserRef | null;        // replies only: the author of the reply that was answered (see "Reply rules"); null otherwise or if that user was deleted
+  isCreator: boolean;             // the author is the game's CURRENT owner
+  hearts: number;                 // >= 0, distinct users who hearted this comment
+  myHeart: boolean;               // 🔓 the viewer hearted it; false when anonymous
+  creatorHeart: boolean;          // the game's current owner hearted it
+  canDelete: boolean;             // 🔓 the viewer is the author, the game owner or an admin; false when anonymous
+}
+
+type CommentThread = Comment & {  // a top-level comment (parentId === null) with a reply preview
+  replyCount: number;             // all replies in the thread
+  replies: Comment[];             // the OLDEST replies, oldest first, at most 3
+}
+
+type CommentListPage = Page<CommentThread> & {
+  totalAll: number;               // comments + replies on the game; `total` counts top-level comments only
+}
+
+type CommentContext = {
+  comment: Comment;               // the requested comment (top-level or reply)
+  thread: CommentThread;          // its thread; thread.id === comment.id when the comment is top-level
+}
+
+type HeartResponse = { hearted: boolean; hearts: number; creatorHeart: boolean }
+```
+- The fields are on every `Comment` the API returns: list items, previews, `/replies`, `CommentContext`, and the `POST` response.
+- Clients must treat missing new fields as `null` / `0` / `false` / `[]`, and a missing `totalAll` as `total` (older servers).
+
+### Changed endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/comments | `?page=1&perPage=20` (max 100) | `CommentListPage`: top-level comments only, newest first (`createdAt` desc, then insertion order desc) |
+| POST 🔒 | /api/games/{id}/comments | `{ body, parentId?: string \| null }` | 201 `Comment` |
+| DELETE 🔒 | /api/comments/{id} | – | 204 |
+
+- **`GET …/comments`** was `Page<Comment>` with `total` = all comments. Now `total` = top-level comments, `totalAll` = all comments. Paging and visibility are unchanged (unknown game → 404; unpublished → 404 unless owner; non-integer `page`/`perPage` → 400).
+- **`POST …/comments` validation, in this order**:
+  1. Auth → 401.
+  2. Game visibility → 404.
+  3. `Limit::Comment` (shared by top-level comments and replies) → 429.
+  4. `parentId` present and not a string or `null` → 422 `validation`.
+  5. `body`: trimmed, 1–2000 characters, else 422 (v1 rule, unchanged).
+  6. `parentId` (when a string): no such comment, or it belongs to another game → 404 `not_found` "Comment not found".
+  7. The thread already has **200** replies → 422 `validation` "This thread has reached 200 replies". The insert is guarded, so concurrent posts can't exceed 200.
+- **Reply rules** (when `parentId` names comment P):
+  - The stored `parentId` is P's id if P is top-level, else P's `parentId` (its root). Nesting never goes deeper than one level.
+  - `replyTo` is P's author when P is itself a reply **and** P's author is not the poster. Otherwise `replyTo` is `null`.
+- **`DELETE /api/comments/{id}`**:
+  - Allowed for the comment's author, the game's owner, or an admin (admins are new). Anyone else → 403. Unknown id → 404. Anonymous → 401.
+  - Deleting a top-level comment also deletes all its replies. Hearts on deleted comments are removed.
+  - Every open report whose target is a deleted comment (the comment itself and, for a top-level comment, each of its replies) is marked `resolved` with resolution `delete`, in the same transaction.
+
+### New endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/comments/{id} | – | `CommentContext` |
+| GET 🔓 | /api/comments/{id}/replies | `?page=1&perPage=50` (1–100) | `Page<Comment>`: the thread's replies, oldest first (`createdAt` asc, then insertion order); `total` = `replyCount` |
+| PUT 🔒 | /api/comments/{id}/heart | – | `HeartResponse` `{ hearted: true }` (idempotent) |
+| DELETE 🔒 | /api/comments/{id}/heart | – | `HeartResponse` `{ hearted: false }` (idempotent; 200 even if not hearted) |
+
+- **Visibility** (all four): unknown comment id → 404; the comment's game must be visible to the viewer under `GET /api/games/{id}` rules, else 404.
+- **`/replies`**: `{id}` is a reply (not top-level) → 422 `validation` "Replies are listed for top-level comments only". Non-integer `page`/`perPage` → 400.
+- **Hearts**, checked in this order: auth → 401; comment and visibility → 404; `Limit::Heart` → 429; `PUT` on your own comment → 422 `validation` "You can't heart your own comment" (`DELETE` on your own comment returns `{ hearted: false }`). The response carries the counts after the change.
+- `hearts`, `myHeart` and `creatorHeart` on later reads reflect the change immediately.
+- Who hearted a comment is not listed anywhere; only the count, the viewer's own state and `creatorHeart` are exposed.
+
+### Reports (changed)
+| Method | Path | Body | Response |
+|---|---|---|---|
+| POST 🔒 | /api/reports | v2 body; `targetType: "comment"` accepts replies too | 201 `Report` |
+| POST 🔒 admin | /api/admin/reports/{id}/resolve | `{ action }` | `Report` |
+
+- Creating a report on a reply follows the v2 comment rules (`targetGameId` = the reply's game; `targetPreview` = its first 140 chars).
+- Resolving a comment report with `delete` has exactly the effects of `DELETE /api/comments/{id}` (replies cascade, open reports on all deleted comments are resolved). `dismiss` is unchanged; `unpublish` → 422 as before.
+- `Report` has no new fields. Clients link a comment report to `/games/{targetGameId}?comment={targetId}`.
+
+### Stats (unchanged, clarified)
+`CreatorStats.totals.comments` and `GameStats.comments` count all comments, replies included.
+
+### Rate limits
+- Top-level comments and replies share `Limit::Comment`: 30 per 10 min, per user (unchanged).
+- Hearts (`PUT` and `DELETE …/heart`, shared bucket): **120 per 10 min, per user** (`Limit::Heart`). Over the limit → 429 `rate_limited` with `Retry-After`.
+- `GET /api/comments/{id}` and `/replies` are unlimited public reads, like the comment list. `DELETE /api/comments/{id}` is unlimited.

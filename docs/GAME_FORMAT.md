@@ -402,3 +402,9 @@ engine.input.keyLabel(code: string): string            // default label table; a
 ## Review-fix additions (REVIEW-2026-11-15-3)
 
 - **Screenshot size rule (L6):** first upscale by the integer `k = max(1, floor(1280 / max(w, h)))`, giving long side `L` and short side `S`. Then scale by `s = max(min(1, maxSize / L), 64 / S)`, keeping the aspect ratio, and round each side and clamp it to 64–4096. The short side is never below 64, even if that pushes the long side past `maxSize`. Game sizes are 64–4096 per side, so every capture is a valid upload.
+
+
+## F006 additions
+Comment replies and reactions (spec: `docs/features/F006-comment-replies-and-reactions.md`). **No changes** to the bundle format, the engine API or the game ↔ parent messages. Games can neither read nor write comments, replies or hearts.
+
+- **Screenshot laundering, pre-decode check (review 3, M1):** before calling `createImageBitmap`, the parent sniffs the magic bytes (PNG, JPEG or WebP only) and reads the image dimensions from the header. It rejects any side outside 1–4096, more than 4096² pixels, and malformed or unknown headers. A share that fails laundering still uses its throttle slot (1 per 3000 ms).

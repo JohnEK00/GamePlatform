@@ -28,16 +28,17 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F004 | Version changelogs and an "Updated" badge | S | shipped |
 | F013 | Studio: publish updates to an existing game | M | shipped |
 | F005 | Screenshot capture and share | M | shipped |
-| F009 | Controls overlay and key remapping | M | specced |
-| F006 | Comment replies and reactions | M | proposed |
-| F012 | Engine bitmap fonts and 9-slice UI widgets | M | proposed |
+| F009 | Controls overlay and key remapping | M | shipped |
+| F006 | Comment replies and reactions | M | specced |
 | F007 | In-app notifications | M | proposed |
+| F012 | Engine bitmap fonts and 9-slice UI widgets | M | proposed |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
 | F008 | Collections (curated game lists) | M | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
 | F016 | Gamepad remapping and synced control bindings | M | proposed |
+| F017 | Creator comment tools: pin, lock and "top" sort | S | proposed |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
@@ -90,12 +91,17 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: engine (`capture.ts`, messages, examples), backend (migration `0009_f005.sql`: `screenshots` + `reports` CHECK rebuild; `image` crate; `Limit::Screenshot`), frontend (tray, dialogs, gallery, admin), desktop (View → Take Screenshot, Pictures default in `save_file`).
 - **Depends on**: nothing unshipped. It reuses `validate_image`, the N5 `Limit::Image` pattern, the F001 request/reply pattern, `useModal` and `platform.saveFile`.
 
-### F006: Comment replies and reactions (M, proposed)
-- **Pitch**: one level of threaded replies, a heart reaction on comments, and a "creator" tag on the owner's comments.
-- **User value**: real conversations between players and creators.
-- **Areas**: backend, frontend.
+### F006: Comment replies and reactions (M, specced → [spec](features/F006-comment-replies-and-reactions.md))
+- **Pitch**:
+  - One level of replies under each top-level comment, oldest first, with a 3-reply preview and "Show N more replies". Replying to a reply stays in the thread and records "Replying to @name".
+  - A heart on any comment or reply (not your own), with a public count and a "♥ Creator" mark when the game owner hearts it. A "Creator" badge on the owner's comments.
+  - Permalinks `/games/{id}?comment={commentId}` (thread shown, scrolled and focused), which F007 notifications will link to.
+  - Moderation: admins can delete any comment; deleting a thread removes its replies and resolves open reports on everything removed; "View in context" from `/admin`.
+- **User value**: real conversations between players and creators, "+1" without noise, and creator answers that stand out.
+- **Areas**: backend (migration `0012_f006.sql`: `comments.parent_id`, `comments.reply_to_user_id`, `comment_hearts`; replies/heart/context endpoints; `Limit::Heart`; delete cascade + report resolution), frontend (threaded `Comments` split into `CommentItem`/`CommentForm`/`HeartButton`, permalinks, admin link, accessibility), desktop (verification only). No engine changes.
+- **Depends on**: nothing unshipped. Writes no F002 activity events; F007 consumes its hook points.
 
-### F007: In-app notifications (M, proposed; best after F002/F006; can reuse F002's `activity_events`)
+### F007: In-app notifications (M, proposed; after F006; can reuse F002's `activity_events` and F006's hook points and `?comment=` permalinks)
 - **Pitch**: a bell menu listing new comments on your games, replies, new followers, and games from creators you follow. Desktop shows native OS notifications.
 - **User value**: creators notice feedback quickly, and players notice new content.
 - **Areas**: backend (notifications table, unread count), frontend (bell, list), desktop (native notifications via a Rust plugin).
@@ -110,7 +116,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: curation as a discovery channel, and a social signal.
 - **Areas**: backend, frontend.
 
-### F009: Controls overlay and key remapping (M, specced → [spec](features/F009-controls-and-remapping.md))
+### F009: Controls overlay and key remapping (M, shipped → [spec](features/F009-controls-and-remapping.md))
 - **Pitch**:
   - game.json declares named `actions` with default keys (up to 3) and gamepad buttons (up to 2), validated on upload (422) and exposed as `Game.actions`. The free-text `controls` string that bundles already carry becomes `Game.controlsHint` (lenient, never 422).
   - The engine adds `input.actionDown/actionPressed/actionReleased(id)`, `input.actionLabel(id)` for prompts, and `input.axis()` that follows `left/right/up/down` actions.
@@ -144,3 +150,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: remap gamepad buttons in the F009 controls panel (capture via the parent's Gamepad API), and an opt-in "Sync my controls" that stores overrides per user per game on the server, falling back to the device copy.
 - **User value**: controller players get the same accessibility as keyboard players, and bindings follow the account to the desktop app.
 - **Areas**: engine (accept `gamepad` overrides), backend (small per-user bindings table and endpoints), frontend (gamepad capture, sync toggle).
+
+### F017: Creator comment tools: pin, lock and "top" sort (S, proposed; after F006)
+- **Pitch**: the game owner can pin one thread to the top of the comments and lock a thread against new replies, and players can sort threads by "Top" (hearts, then newest) instead of "Newest".
+- **User value**: creators can keep an FAQ or known-issues answer visible and stop a thread that has gone off the rails, and the most useful tips surface first.
+- **Areas**: backend (`games.pinned_comment_id`, `comments.locked`, `sort=top` on the list), frontend (owner menu on threads, sort toggle). No engine changes.
