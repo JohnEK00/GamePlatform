@@ -5,7 +5,16 @@
   "height": 600,
   "engine": "1",
   "description": "Blast asteroids and dodge saucers in this neon arcade shooter. Arrows/WASD to fly, Space to shoot - or drag with mouse/touch.",
-  "controls": "Arrows/WASD move, Space/Z fire, M mute. Mouse/touch: hold & drag to fly (auto-fire).",
+  "controls": "Arrows/WASD move, Space/Z/J fire, P photo, M mute. Mouse/touch: hold & drag to fly (auto-fire). Remap keys with ⌨.",
+  "actions": [
+    { "id": "left", "name": "Move left", "keys": ["ArrowLeft", "KeyA"], "gamepad": ["Left"] },
+    { "id": "right", "name": "Move right", "keys": ["ArrowRight", "KeyD"], "gamepad": ["Right"] },
+    { "id": "up", "name": "Move up", "keys": ["ArrowUp", "KeyW"], "gamepad": ["Up"] },
+    { "id": "down", "name": "Move down", "keys": ["ArrowDown", "KeyS"], "gamepad": ["Down"] },
+    { "id": "fire", "name": "Fire", "keys": ["Space", "KeyZ", "KeyJ"], "gamepad": ["A", "RT"] },
+    { "id": "photo", "name": "Screenshot", "keys": ["KeyP"], "gamepad": ["Back"] },
+    { "id": "mute", "name": "Mute", "keys": ["KeyM"] }
+  ],
   "achievements": [
     {
       "id": "rock_breaker",

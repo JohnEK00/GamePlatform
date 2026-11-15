@@ -1,4 +1,5 @@
 /** The Engine instance handed to games, and boot(). */
+import { parseActions, type ControlAction } from './actions';
 import { Assets } from './assets';
 import { AudioManager, Sound } from './audio';
 import { Camera } from './camera';
@@ -61,6 +62,29 @@ export interface BootOptions {
   files?: FileMap;
   /** Start with the debug overlay visible (default false; F3 toggles it). */
   debug?: boolean;
+  /**
+   * F009: the game.json `actions` list. Parsed leniently (invalid entries are dropped with a
+   * `[pixelforge] actions:` warning); read them with `input.actionDown/actionPressed/...`.
+   */
+  actions?: unknown;
+}
+
+/** Lenient parse of the `actions` boot option; each dropped entry/key is a `[pixelforge] actions:` warning. */
+export function bootActions(raw: unknown): ControlAction[] {
+  const { actions, warnings } = parseActions(raw);
+  for (const m of warnings) console.warn('[pixelforge] actions:', m);
+  return actions;
+}
+
+/** Most action ids a `webgame:controls` overrides object may carry. */
+export const MAX_OVERRIDE_KEYS = 32;
+
+/** `webgame:controls` payload check: a plain object with at most 32 own keys. */
+export function isOverridesObject(v: unknown): v is Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v) as unknown;
+  if (proto !== null && Object.getPrototypeOf(proto) !== null) return false; // not a plain object (any realm)
+  return Reflect.ownKeys(v).length <= MAX_OVERRIDE_KEYS;
 }
 
 type PauseReason = 'host' | 'hidden' | 'user';
@@ -166,6 +190,7 @@ export class Engine {
     this.assets = new Assets(this.baseUrl, this.renderer, this.audio, this.files);
     this.debug = !!opts.debug;
     this.input = new Input(canvas, w, h);
+    this.input.setActions(bootActions(opts.actions));
     this.scenes = new SceneManager<Engine>(this);
     this.storage = new Storage(deriveStorageKey(this.baseUrl, opts.files, opts.storageKey),this.platform);
     this.capturer = new FrameCapture(w, h);
@@ -296,7 +321,7 @@ export class Engine {
   /** Host → game messages (only from window.parent). */
   private onMessage(e: MessageEvent): void {
     if (e.source !== window.parent) return;
-    const d = e.data as { type?: unknown; muted?: unknown; data?: unknown; requestId?: unknown } | null;
+    const d = e.data as { type?: unknown; muted?: unknown; data?: unknown; requestId?: unknown; overrides?: unknown } | null;
     if (!d || typeof d !== 'object' || typeof d.type !== 'string') return;
     switch (d.type) {
       case 'webgame:pause':
@@ -318,6 +343,9 @@ export class Engine {
         break;
       case 'webgame:screenshot-request':
         this.onScreenshotRequest(d.requestId);
+        break;
+      case 'webgame:controls': // F009: replaces all previous overrides; applied at the next step
+        if (isOverridesObject(d.overrides)) this.input.setOverrides(d.overrides);
         break;
     }
   }

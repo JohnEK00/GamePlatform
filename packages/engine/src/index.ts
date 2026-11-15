@@ -2,7 +2,7 @@
  * Pixelforge — a small, dependency-free WebGL2 2D game engine.
  * Games receive the Engine instance; this module's named exports are for hosts and TypeScript users.
  */
-export { boot, Engine, VERSION } from './engine';
+export { boot, Engine, VERSION, MAX_OVERRIDE_KEYS, isOverridesObject } from './engine';
 export type { BootOptions, Game, GameLike } from './engine';
 
 export { Assets } from './assets';
@@ -14,7 +14,12 @@ export type { ScreenshotOptions, ShareScreenshotOptions, ScreenshotError, Captur
 export {
   Input, InputState, GamepadState, GamepadButtons, computeLetterbox, clientToGame, combineAxis,
 } from './input';
-export type { MouseState, TouchPoint, Letterbox, GamepadButtonName } from './input';
+export type { MouseState, TouchPoint, Letterbox, GamepadButtonKey } from './input';
+export {
+  BINDABLE_KEYS, GAMEPAD_BUTTON_NAMES, keyLabel, gamepadLabel, parseActions, applyOverrides, ActionMap,
+  isBindableKey, isGamepadButtonName, MAX_ACTIONS, MAX_ACTION_KEYS, MAX_ACTION_GAMEPAD, ACTION_NAME_MAX, ACTION_ID_RE,
+} from './actions';
+export type { ControlAction, GamepadButtonName, ButtonSource, PadSource } from './actions';
 export { FixedTimestep } from './loop';
 export {
   Vec2, Rect, Color, Random, MathUtil, clamp, lerp, invLerp, remap, approach, wrap, degToRad, radToDeg, damp,

@@ -84,6 +84,7 @@ missing or `load()` throws. In that case it shows an overlay and posts `webgame:
 | `pauseOverlay` | `true` | draw "PAUSED" while the host has paused the game |
 | `files` | — | in-memory bundle: `{ [bundlePath]: Blob \| ArrayBuffer \| ArrayBufferView \| string }` (see below) |
 | `debug` | `false` | start with the debug overlay visible |
+| `actions` | `[]` | the game.json `actions` list (F009), parsed leniently; see [Actions and remapping](#actions-and-remapping-f009) |
 
 ### In-memory files (`files`)
 
@@ -193,9 +194,66 @@ Keys use `KeyboardEvent.code` (`"ArrowLeft"`, `"KeyA"`, `"Space"`). Mouse button
 * `touches: { id, x, y, startX, startY, pressed, released }[]`
 * `gamepad(i)` returns:
   * `connected`, `axes`, `leftX`, `leftY`, `rightX`, `rightY`
-  * `isDown(b)`, `wasPressed(b)`, `wasReleased(b)`, where `b` is an index or a name: `A B X Y LB RB LT RT Back Start LS RS Up Down Left Right Home`
-* `axis('horizontal' | 'vertical')` returns -1..1 from the arrow keys, WASD, or the first gamepad (left stick with a deadzone, plus the d-pad)
+  * `isDown(b)`, `wasPressed(b)`, `wasReleased(b)`, where `b` is an index or a name: `A B X Y LB RB LT RT Back Start LS RS Up Down Left Right Home` (type `GamepadButtonKey`)
+* `axis('horizontal' | 'vertical')` returns -1..1 from the arrow keys, WASD, or the first gamepad (left stick with a deadzone, plus the d-pad). With movement actions it follows them instead (see below)
+* `actions`, `defaultActions`, `actionDown/actionPressed/actionReleased(id)`, `actionLabel(id)`, `keyLabel(code)`: see [Actions and remapping](#actions-and-remapping-f009)
 * `typed`: printable characters typed this step
+
+## Actions and remapping (F009)
+
+Contract: docs/GAME_FORMAT.md § F009. Declare every control your game uses as a named **action** in game.json.
+Players see them in the player's ⌨ controls panel and can remap the keys (up to 3 per action); the change reaches the
+running game at once through `webgame:controls`.
+
+```json
+"actions": [
+  { "id": "left",  "name": "Move left",  "keys": ["ArrowLeft", "KeyA"], "gamepad": ["Left"] },
+  { "id": "right", "name": "Move right", "keys": ["ArrowRight", "KeyD"], "gamepad": ["Right"] },
+  { "id": "jump",  "name": "Jump",       "keys": ["Space", "ArrowUp", "KeyW"], "gamepad": ["A"] },
+  { "id": "fire",  "name": "Fire",       "keys": ["Mouse0", "KeyZ"] }
+],
+"controls": "Mouse aims. Remap keys with ⌨."
+```
+
+* `id` matches `^[a-z0-9_-]{1,32}$` (unique); `name` is 1–40 chars; `keys` are up to 3 codes from the bindable table
+  (`BINDABLE_KEYS`: letters, digits, numpad, arrows, Space/Enter/Backspace, Shift/Ctrl/Alt, punctuation, Insert/Delete/Home/End/PageUp/PageDown,
+  `Mouse0..2`; **not** Escape, Tab, F-keys, Meta, CapsLock…); `gamepad` is up to 2 of `GAMEPAD_BUTTON_NAMES` (no `Home`).
+  At most 32 actions; each needs a key or a button. The backend rejects a bad list with a 422; the engine itself parses
+  the `actions` boot option leniently and drops bad entries with a `[pixelforge] actions:` warning.
+* `controls` (free text, ≤ 300 chars) is shown next to the action list. Use it for what actions can't say (mouse aim, touch).
+
+```js
+update(engine) {
+  const input = engine.input;
+  if (input.actionPressed('jump')) jump();          // up → down this step
+  if (input.actionDown('fire')) fire();             // held
+  if (input.actionReleased('jump')) cutJump();      // down → up this step
+  const dx = input.axis('horizontal');              // follows "left"/"right" when both are declared
+},
+render(engine) {
+  engine.renderer.drawText(`Press ${engine.input.actionLabel('jump')} to start`, 10, 10); // "Press Space" / "Press K" after a remap
+}
+```
+
+* `input.actions`: effective bindings (defaults plus the player's overrides), manifest order, frozen. `input.defaultActions`: as declared.
+* `actionDown(id)` = any bound key or gamepad button (first connected pad) is held.
+* **Edges are per action**, once per fixed step: `actionPressed` fires when the action goes from up to down, so pressing a
+  second bound key while the first is held does **not** fire it again; `actionReleased` fires when the last bound input
+  is let go (releasing one of two held keys does not). A tap within one step reports both `pressed` and `released`, like raw keys.
+* `actionLabel(id)`: the label of the first effective key, else of the first gamepad button, else `""`. Labels come from the
+  US-layout table (`keyLabel(code)`, also exported): the platform never tells games the player's keyboard layout, so an AZERTY
+  player's default `KeyW` is "W" in-game (the panel shows "Z").
+* Unknown ids return `false` / `""` and warn once per id.
+* **`axis()`**: when both `left` and `right` actions exist, `axis('horizontal')` uses them plus the left stick, and the built-in
+  Arrows/WASD/d-pad no longer apply; likewise `axis('vertical')` with `up`/`down`. With only one of the pair, `axis` is unchanged.
+* Overrides apply at the next fixed step. Button state is kept per code, so a key held during a remap is never stuck.
+* Keys bound to an action get `preventDefault()` on keydown (unless Ctrl or Meta is held), so `Slash` or `Quote` won't open
+  the browser's quick find.
+* **Read actions, not codes.** `isDown/wasPressed/wasReleased(code)`, `mouse`, `touches`, `gamepad(i)`, `anyPressed()` and
+  `typed` still report the physical input and ignore remapping (useful for text entry and debug keys). A game that declares
+  actions but checks `wasPressed('Space')` can't be remapped.
+* The dev harness (`index.html`, `studio.html`) has a ⌨ button with a small remapping panel that sends `webgame:controls`
+  (persisted in localStorage on `index.html`, in memory on `studio.html`).
 
 ## `engine.audio`
 
@@ -408,5 +466,7 @@ if (input.wasPressed('KeyP')) engine.platform.shareScreenshot?.({ caption: `Scor
 
 * `examples/brick-breaker`: a six-level neon brick breaker with levels loaded from `assets/levels.json`. It has tough, steel and explosive bricks; six power-ups (wide paddle, multi-ball, slow ball, lasers, catch, extra life); combo multipliers; tweened level intros; and achievement badge icons in `assets/`.
 
+All three declare their keys as game.json `actions` and read them with the action API (F009); space-dodge and
+pixel-peaks show the effective key labels on their title screens.
 All three games call `engine.platform.submitScore` on game over and keep their best score in `engine.storage`.
 Each declares achievements in game.json: brick-breaker has 6 (with icons), the other two have 3 each.

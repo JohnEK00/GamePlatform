@@ -160,13 +160,12 @@ function unlock(engine, id) {
   if (typeof engine.platform.unlockAchievement === 'function') engine.platform.unlockAchievement(id);
 }
 
+// F009: keys are game.json actions (remappable by players); read actions, never raw key codes.
 function jumpPressed(input) {
-  const pad = input.gamepad(0);
-  return input.wasPressed('Space') || input.wasPressed('ArrowUp') || input.wasPressed('KeyW') || input.wasPressed('KeyZ') || pad.wasPressed('A');
+  return input.actionPressed('jump');
 }
 function jumpHeld(input) {
-  const pad = input.gamepad(0);
-  return input.isDown('Space') || input.isDown('ArrowUp') || input.isDown('KeyW') || input.isDown('KeyZ') || pad.isDown('A');
+  return input.actionDown('jump');
 }
 
 function drawSky(engine, level, cam) {
@@ -211,7 +210,7 @@ class TitleScene {
   update(engine, dt) {
     this.t += dt;
     this.cam.x += dt * 30;
-    if (engine.input.wasPressed('KeyM')) engine.audio.muted = !engine.audio.muted;
+    if (engine.input.actionPressed('mute')) engine.audio.muted = !engine.audio.muted;
     if (this.t > 0.3 && engine.input.anyPressed()) {
       Object.assign(run, { score: 0, lives: 3, coins: 0, level: 0 });
       engine.audio.tone({ freq: 392, freqEnd: 784, duration: 0.2, type: 'square', volume: 0.2 });
@@ -229,7 +228,8 @@ class TitleScene {
       for (let i = 0; i < 31; i++) for (let j = 1; j < 8; j++) r.drawSprite(art.sheet, i * 16 - ((this.cam.x * 2) % 16), 152 + j * 16, { frame: F.dirt });
       if (Math.floor(this.t * 2) % 2 === 0)
         r.drawText('PRESS ANY KEY OR TAP', W / 2, 200, { size: 16, align: 'center', baseline: 'middle', color: '#ffffff', shadow: '#1a1c2c' });
-      r.drawText('Arrows/WASD move · Space jump · stomp slimes · reach the flag', W / 2, 232, { size: 10, align: 'center', baseline: 'middle', color: '#e8e8ff' });
+      const L = (id) => engine.input.actionLabel(id) || '—';
+      r.drawText(`${L('left')}${L('right')} move · ${L('jump')} jump · stomp slimes · reach the flag`, W / 2, 232, { size: 10, align: 'center', baseline: 'middle', color: '#e8e8ff' });
       if (run.best > 0) r.drawText(`BEST ${run.best}`, W / 2, 255, { size: 11, align: 'center', baseline: 'middle', color: '#fee761' });
     });
   }
@@ -355,7 +355,7 @@ class PlayScene {
     let h = input.axis('horizontal');
     let jp = jumpPressed(input);
     let jh = jumpHeld(input);
-    let down = input.isDown('ArrowDown') || input.isDown('KeyS') || input.gamepad(0).isDown('Down');
+    let down = input.actionDown('down');
     if (input.touches.length) this.touchMode = true;
     if (this.touchMode) {
       let jumpTouch = false;
@@ -376,10 +376,10 @@ class PlayScene {
 
   update(engine, dt) {
     const input = engine.input;
-    if (input.wasPressed('KeyM')) engine.audio.muted = !engine.audio.muted;
-    // F005 photo mode: P (or gamepad Select/Back) hides the HUD and offers the frame to the
-    // player's screenshot tray. shareScreenshot is new in F005, so feature-detect it.
-    if ((input.wasPressed('KeyP') || input.gamepad(0).wasPressed('Back')) && !this.photo && typeof engine.platform.shareScreenshot === 'function')
+    if (input.actionPressed('mute')) engine.audio.muted = !engine.audio.muted;
+    // F005 photo mode: the "photo" action (P / gamepad Back) hides the HUD and offers the frame to
+    // the player's screenshot tray. shareScreenshot is new in F005, so feature-detect it.
+    if (input.actionPressed('photo') && !this.photo && typeof engine.platform.shareScreenshot === 'function')
       this.photo = true;
     this.time += dt;
     this.anim += dt;

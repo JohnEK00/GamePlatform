@@ -327,7 +327,7 @@ const game = {
 
   update(engine, dt) {
     const input = engine.input;
-    if (input.wasPressed('KeyM')) engine.audio.muted = !engine.audio.muted;
+    if (input.actionPressed('mute')) engine.audio.muted = !engine.audio.muted;
     this.stateTime += dt;
     this.shards.update(dt);
     this.sparks.update(dt);
@@ -338,7 +338,9 @@ const game = {
     if (Math.abs(this.score - this.shownScore) < 1) this.shownScore = this.score;
     for (const b of this.bricks) b.flash = Math.max(0, b.flash - dt * 5);
 
-    const go = input.wasPressed('Space') || input.wasPressed('Enter') || input.mouse.pressed || input.gamepad(0).wasPressed('A');
+    // F009: keys are game.json actions (players can remap them). Touch always launches and fires.
+    const tapped = input.touches.some((t) => t.pressed);
+    const go = input.actionPressed('launch') || tapped;
     switch (this.state) {
       case 'title':
         this.updatePaddle(engine, dt);
@@ -374,7 +376,7 @@ const game = {
     // Lasers
     if (this.effects.laser > 0) {
       this.laserCooldown = (this.laserCooldown ?? 0) - dt;
-      const fire = input.isDown('Space') || input.mouse.down || input.gamepad(0).isDown('A');
+      const fire = input.actionDown('launch') || input.touches.some((t) => !t.released);
       if (fire && this.laserCooldown <= 0 && !this.balls.some((b) => b.stuck && !b.caught)) {
         this.laserCooldown = 0.28;
         const p = this.paddle;
@@ -387,6 +389,17 @@ const game = {
     this.updatePowerups(engine, dt);
 
     if (this.bricks.every((b) => b.dead || b.kind === 'steel')) this.levelCleared(engine);
+  },
+
+  /** "CLICK / SPACE" from the effective `launch` bindings (follows the player's remapping). */
+  launchPrompt(engine) {
+    const keys = engine.input.actions.find((a) => a.id === 'launch')?.keys ?? [];
+    const parts = [];
+    if (keys.includes('Mouse0')) parts.push('CLICK');
+    const key = keys.find((k) => !k.startsWith('Mouse'));
+    if (key) parts.push(engine.input.keyLabel(key).toUpperCase());
+    if (!parts.length) parts.push(engine.input.actionLabel('launch').toUpperCase() || 'CLICK');
+    return parts.join(' / ');
   },
 
   setState(s) {
@@ -820,14 +833,14 @@ const game = {
 
     const stuck = this.balls.some((b) => b.stuck && !b.caught);
     if (this.state === 'play' && stuck && this.bricks.some((b) => b.s >= 1))
-      r.drawText('CLICK / SPACE TO LAUNCH', W / 2, H / 2 + 110, { size: 16, align: 'center', baseline: 'middle', color: '#cfd6ff', alpha: 0.6 + Math.sin(t * 5) * 0.4 });
+      r.drawText(`${this.launchPrompt(engine)} TO LAUNCH`, W / 2, H / 2 + 110, { size: 16, align: 'center', baseline: 'middle', color: '#cfd6ff', alpha: 0.6 + Math.sin(t * 5) * 0.4 });
 
     if (this.state === 'title') this.drawPanel(r, t, 'BRICK BREAKER', [
       'Break every brick. Chain hits for combo multipliers.',
       'Catch power-ups: W wide · M multi-ball · S slow · L lasers · C catch · + life',
       '',
       `Best ${this.best}   ·   Furthest level ${this.bestLevel}`,
-    ], 'CLICK, TAP OR PRESS SPACE');
+    ], `TAP OR ${this.launchPrompt(engine)}`);
     else if (this.state === 'clear') this.drawPanel(r, t, 'LEVEL CLEAR!', [
       `Bonus +${this.clearBonus}${this.clearFlawless ? '   ·   FLAWLESS!' : ''}`,
     ], null);

@@ -70,6 +70,56 @@ function validateLeaderboard(lb) {
   return errs;
 }
 
+// game.json "actions" (optional, strict) — docs/GAME_FORMAT.md "F009 additions". Mirrors the backend's
+// parse_actions so a packed example never gets a 422 on upload.
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+const DIGITS = '0123456789'.split('');
+const BINDABLE_KEYS = new Set([
+  ...LETTERS.map((l) => `Key${l}`), ...DIGITS.map((d) => `Digit${d}`), ...DIGITS.map((d) => `Numpad${d}`),
+  'NumpadAdd', 'NumpadSubtract', 'NumpadMultiply', 'NumpadDivide', 'NumpadDecimal', 'NumpadEnter',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Enter', 'Backspace',
+  'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight',
+  'Minus', 'Equal', 'BracketLeft', 'BracketRight', 'Backslash', 'Semicolon', 'Quote', 'Backquote', 'Comma', 'Period', 'Slash', 'IntlBackslash',
+  'Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'Mouse0', 'Mouse1', 'Mouse2',
+]);
+const GAMEPAD_BUTTONS = new Set(['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'Back', 'Start', 'LS', 'RS', 'Up', 'Down', 'Left', 'Right']);
+if (BINDABLE_KEYS.size !== 86) throw new Error('pack-examples: the bindable key table must have 86 codes');
+const ACTION_ID = /^[a-z0-9_-]{1,32}$/;
+const BAD_NAME_CHARS = new RegExp('[\\u0000-\\u001f\\u007f-\\u009f\\u202a-\\u202e\\u2066-\\u2069]');
+
+function validateActions(list) {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list)) return ['"actions" must be an array'];
+  const errs = [];
+  if (list.length > 32) errs.push(`"actions" has ${list.length} entries (max 32)`);
+  const seen = new Set();
+  list.forEach((a, i) => {
+    const at = `actions[${i}]`;
+    if (!a || typeof a !== 'object' || Array.isArray(a)) return void errs.push(`${at} must be an object`);
+    if (typeof a.id !== 'string' || !ACTION_ID.test(a.id)) errs.push(`${at}.id must match ${ACTION_ID}`);
+    else if (seen.has(a.id)) errs.push(`${at}.id "${a.id}" is duplicated`);
+    else seen.add(a.id);
+    const name = typeof a.name === 'string' ? a.name.trim() : null;
+    if (name === null || Array.from(name).length < 1 || Array.from(name).length > 40) errs.push(`${at}.name must be a string of 1–40 chars (trimmed)`);
+    else if (BAD_NAME_CHARS.test(name)) errs.push(`${at}.name contains control or bidi characters`);
+    const lists = [['keys', 3, BINDABLE_KEYS], ['gamepad', 2, GAMEPAD_BUTTONS]];
+    let bindings = 0;
+    for (const [field, max, table] of lists) {
+      const v = a[field];
+      if (v === undefined) continue;
+      if (!Array.isArray(v)) { errs.push(`${at}.${field} must be an array`); continue; }
+      if (v.length > max) errs.push(`${at}.${field} has ${v.length} entries (max ${max})`);
+      v.forEach((k, j) => {
+        if (typeof k !== 'string' || !table.has(k)) errs.push(`${at}.${field}[${j}] ${JSON.stringify(k)} can't be bound`);
+        else if (v.indexOf(k) !== j) errs.push(`${at}.${field}[${j}] "${k}" is duplicated`);
+      });
+      bindings += v.length;
+    }
+    if (bindings === 0) errs.push(`${at} needs at least one key or gamepad button`);
+  });
+  return errs;
+}
+
 function validateMeta(meta, files, name) {
   const errs = [];
   if (!meta || typeof meta !== 'object') errs.push('game.json must be an object');
@@ -81,6 +131,10 @@ function validateMeta(meta, files, name) {
     if (!Number.isInteger(meta[k]) || meta[k] < 64 || meta[k] > 4096) errs.push(`"${k}" must be an integer 64–4096`);
   errs.push(...validateAchievements(meta.achievements, files));
   errs.push(...validateLeaderboard(meta.leaderboard));
+  errs.push(...validateActions(meta.actions));
+  // "controls" is lenient on the server (never a 422); here an over-long hint is a packing error, since
+  // the server would silently cut it to 300 chars.
+  if (typeof meta.controls === 'string' && meta.controls.trim().length > 300) errs.push('"controls" is longer than 300 chars');
   if (errs.length) throw new Error(`${name}: invalid game.json:\n  - ${errs.join('\n  - ')}`);
 }
 
@@ -110,7 +164,7 @@ async function pack(name) {
   mkdirSync(outDir, { recursive: true });
   const out = join(outDir, `${name}.zip`);
   writeFileSync(out, buf);
-  return { out, files: files.length, size: buf.length, title: meta.name, achievements: meta.achievements?.length ?? 0, leaderboard: meta.leaderboard };
+  return { out, files: files.length, size: buf.length, title: meta.name, achievements: meta.achievements?.length ?? 0, actions: meta.actions?.length ?? 0, leaderboard: meta.leaderboard };
 }
 
 const only = process.argv.slice(2);
@@ -124,7 +178,7 @@ for (const n of names) {
     const r = await pack(n);
     if (!r) continue;
     count++;
-    console.log(`packed ${r.title.padEnd(16)} → ${relative(root, r.out).split(sep).join('/')}  (${r.files} files, ${(r.size / 1024).toFixed(1)} KB, ${r.achievements} achievements, leaderboard ${r.leaderboard?.order ?? 'desc'}/${r.leaderboard?.format ?? 'number'}${r.leaderboard?.label ? ` "${r.leaderboard.label}"` : ''})`);
+    console.log(`packed ${r.title.padEnd(16)} → ${relative(root, r.out).split(sep).join('/')}  (${r.files} files, ${(r.size / 1024).toFixed(1)} KB, ${r.achievements} achievements, ${r.actions} actions, leaderboard ${r.leaderboard?.order ?? 'desc'}/${r.leaderboard?.format ?? 'number'}${r.leaderboard?.label ? ` "${r.leaderboard.label}"` : ''})`);
   } catch (e) {
     failed = true;
     console.error(`✗ ${e.message}`);

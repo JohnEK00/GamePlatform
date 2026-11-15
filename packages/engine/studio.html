@@ -36,6 +36,7 @@
   <iframe id="player" sandbox="allow-scripts" allow="autoplay; fullscreen; gamepad" title="game"></iframe>
   <script type="module">
     import { screenshotHost } from '/playground-screenshots.js';
+    import { controlsHost } from '/playground-controls.js';
     // Mimics the platform's studio host for GET /play/studio: the parent fetches the bundle files itself
     // and sends them in-memory via webgame:studio-load. The game never touches /examples over HTTP for
     // its assets, so this exercises boot({ files }). Score/achievement messages are NOT persisted —
@@ -99,6 +100,11 @@
       toGame, bar: document.getElementById('bar'), log, slug: () => name,
       note: (text, err) => { log.textContent = text; toast(text, err); },
     });
+    // F009: same ⌨ panel, overrides kept in memory for this page only (Studio rule).
+    const controls = controlsHost({
+      frame, toGame, bar: document.getElementById('bar'), log, storageKey: null,
+      actions: () => bundle?.manifest.actions, hint: () => (typeof bundle?.manifest.controls === 'string' ? bundle.manifest.controls : ''),
+    });
     window.addEventListener('message', (e) => {
       if (e.source !== frame.contentWindow) return;
       const d = e.data;
@@ -110,7 +116,7 @@
           if (bundle) toGame({ type: 'webgame:studio-load', manifest: bundle.manifest, files: bundle.files });
           log.textContent = 'studio-ready -> studio-load';
           return;
-        case 'webgame:hello': toGame({ type: 'webgame:load', data: null }); return; // studio sessions start fresh
+        case 'webgame:hello': toGame({ type: 'webgame:load', data: null }); controls.afterLoad(); return; // studio sessions start fresh
         case 'webgame:ready': log.textContent = 'running from in-memory files'; return;
         case 'webgame:save': log.textContent = 'save (not persisted in studio)'; return;
         case 'webgame:score':

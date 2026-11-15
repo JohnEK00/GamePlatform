@@ -1,4 +1,5 @@
 /** Keyboard / mouse / touch / gamepad input with per-step pressed/released edges. */
+import { ActionMap, applyOverrides, gamepadLabel, keyLabel as defaultKeyLabel, type ControlAction } from './actions';
 
 interface BtnState {
   down: boolean;
@@ -111,7 +112,8 @@ export const GamepadButtons = {
   A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, Back: 8, Start: 9, LS: 10, RS: 11,
   Up: 12, Down: 13, Left: 14, Right: 15, Home: 16,
 } as const;
-export type GamepadButtonName = keyof typeof GamepadButtons;
+/** Every standard button name including `Home` (actions use the narrower `GamepadButtonName`). */
+export type GamepadButtonKey = keyof typeof GamepadButtons;
 
 export class GamepadState {
   connected = false;
@@ -138,17 +140,17 @@ export class GamepadState {
     this.cur = gp.buttons.map((b) => b.pressed);
     this.values = gp.buttons.map((b) => b.value);
   }
-  private idx(b: number | GamepadButtonName): number {
+  private idx(b: number | GamepadButtonKey): number {
     return typeof b === 'number' ? b : GamepadButtons[b];
   }
-  isDown(b: number | GamepadButtonName): boolean {
+  isDown(b: number | GamepadButtonKey): boolean {
     return this.cur[this.idx(b)] ?? false;
   }
-  wasPressed(b: number | GamepadButtonName): boolean {
+  wasPressed(b: number | GamepadButtonKey): boolean {
     const i = this.idx(b);
     return (this.cur[i] ?? false) && !(this.prev[i] ?? false);
   }
-  wasReleased(b: number | GamepadButtonName): boolean {
+  wasReleased(b: number | GamepadButtonKey): boolean {
     const i = this.idx(b);
     return !(this.cur[i] ?? false) && (this.prev[i] ?? false);
   }
@@ -209,6 +211,13 @@ export class Input {
   /** Last KeyboardEvent.key typed this step (for text entry). */
   typed = '';
   private typedAcc = '';
+  private defaults: readonly ControlAction[] = Object.freeze([]);
+  private effective: readonly ControlAction[] = Object.freeze([]);
+  private overrides: unknown = {};
+  /** Map used by the action queries; swapped for `next` at the next beginStep. */
+  private map = new ActionMap([]);
+  private next: ActionMap | null = null;
+  private readonly warned = new Set<string>();
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -229,7 +238,7 @@ export class Input {
     if (c.tabIndex < 0) c.tabIndex = 0;
 
     on(window, 'keydown', (e) => {
-      if (PREVENT.has(e.code) && !e.ctrlKey && !e.metaKey) e.preventDefault();
+      if ((PREVENT.has(e.code) || (this.next ?? this.map).boundKeys.has(e.code)) && !e.ctrlKey && !e.metaKey) e.preventDefault();
       if (!e.repeat) this.state.press(e.code);
       if (e.key.length === 1) this.typedAcc += e.key;
     });
@@ -322,6 +331,76 @@ export class Input {
     const nav = typeof navigator !== 'undefined' ? navigator : null;
     const list = nav && typeof nav.getGamepads === 'function' ? nav.getGamepads() : [];
     for (let i = 0; i < this.pads.length; i++) this.pads[i]!.poll(list[i] ?? null);
+    this.updateActions();
+  }
+
+  /** Engine-internal (also used by tests): apply a pending rebuild, then compute action edges. */
+  updateActions(): void {
+    if (this.next) {
+      this.map = this.next;
+      this.next = null;
+    }
+    this.map.update(this.state, this.pads.find((p) => p.connected) ?? null);
+  }
+
+  // --- F009 actions ----------------------------------------------------------
+
+  /** Engine-internal: the declared actions (boot option `actions`, already parsed). Clears overrides. */
+  setActions(defaults: readonly ControlAction[]): void {
+    this.defaults = Object.freeze([...defaults]);
+    this.overrides = {};
+    this.rebuild();
+  }
+  /** Engine-internal: player key overrides (`webgame:controls`); replaces the previous overrides. */
+  setOverrides(overrides: unknown): void {
+    this.overrides = overrides;
+    this.rebuild();
+  }
+  private rebuild(): void {
+    this.effective = Object.freeze(applyOverrides(this.defaults, this.overrides));
+    // Takes effect at the next step; per-id `down` carries over so a held action does not re-fire.
+    this.next = new ActionMap(this.effective, this.next ?? this.map);
+  }
+
+  /** Effective bindings (defaults + player overrides), manifest order, frozen. */
+  get actions(): readonly ControlAction[] {
+    return this.effective;
+  }
+  /** The declared actions (after lenient parsing), frozen. */
+  get defaultActions(): readonly ControlAction[] {
+    return this.defaults;
+  }
+  private known(id: string): boolean {
+    if (this.effective.some((a) => a.id === id)) return true;
+    if (!this.warned.has(id)) {
+      this.warned.add(id);
+      console.warn(`[pixelforge] input: unknown action "${id}" (declare it in game.json "actions")`);
+    }
+    return false;
+  }
+  /** Any key / gamepad button of the action is held. */
+  actionDown(id: string): boolean {
+    return this.known(id) && this.map.down(id);
+  }
+  /** The action went from up to down this step (a second bound key while held does not count). */
+  actionPressed(id: string): boolean {
+    return this.known(id) && this.map.pressed(id);
+  }
+  /** The action went from down to up this step. */
+  actionReleased(id: string): boolean {
+    return this.known(id) && this.map.released(id);
+  }
+  /** Label of the action's first effective key, else its first gamepad button, else "". */
+  actionLabel(id: string): string {
+    if (!this.known(id)) return '';
+    const a = this.effective.find((x) => x.id === id)!;
+    if (a.keys[0]) return defaultKeyLabel(a.keys[0]);
+    if (a.gamepad[0]) return gamepadLabel(a.gamepad[0]);
+    return '';
+  }
+  /** Default (US layout) label of a code; an unknown code returns the code. */
+  keyLabel(code: string): string {
+    return defaultKeyLabel(code);
   }
 
   /** Engine-internal: called after each fixed update step. */
@@ -352,10 +431,17 @@ export class Input {
   gamepad(i = 0): GamepadState {
     return this.pads[i] ?? new GamepadState();
   }
-  /** -1..1 from arrows / WASD / first connected gamepad (left stick + d-pad). */
+  /**
+   * -1..1 from arrows / WASD / first connected gamepad (left stick + d-pad). When both `left`/`right`
+   * (or `up`/`down`) actions are declared, those actions plus the left stick are used instead.
+   */
   axis(name: 'horizontal' | 'vertical'): number {
     const s = this.state;
     const pad = this.pads.find((p) => p.connected);
+    // F009: with both movement actions declared, follow the (remappable) actions + left stick.
+    const [negId, posId] = name === 'horizontal' ? ['left', 'right'] : ['up', 'down'];
+    if (this.effective.some((a) => a.id === negId) && this.effective.some((a) => a.id === posId))
+      return combineAxis(this.map.down(negId), this.map.down(posId), (name === 'horizontal' ? pad?.leftX : pad?.leftY) ?? 0);
     if (name === 'horizontal') {
       const neg = s.isDown('ArrowLeft') || s.isDown('KeyA') || !!pad?.isDown('Left');
       const pos = s.isDown('ArrowRight') || s.isDown('KeyD') || !!pad?.isDown('Right');

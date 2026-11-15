@@ -44,10 +44,11 @@
   <iframe id="player" sandbox="allow-scripts" allow="autoplay; fullscreen; gamepad" title="game"></iframe>
   <script type="module">
     import { screenshotHost } from '/playground-screenshots.js';
+    import { controlsHost } from '/playground-controls.js';
     // Dev playground host: loads player.html (which mirrors the backend player page) in a sandboxed
     // iframe and plays the parent role: storage handshake (webgame:hello -> webgame:load), persisting
     // webgame:save to localStorage under webgame.save.{gameId}, fullscreen, pause/resume/mute, and the
-    // F005 screenshot messages (playground-screenshots.js).
+    // F005 screenshot messages (playground-screenshots.js) and F009 remapping (playground-controls.js).
     const params = new URLSearchParams(location.search);
     const select = document.getElementById('game');
     const log = document.getElementById('log');
@@ -87,6 +88,12 @@
       },
     });
 
+    // F009: ⌨ panel; overrides persist under webgame.controls.{gameId} and are sent after each load.
+    const controls = controlsHost({
+      frame, toGame, bar: document.getElementById('bar'), log,
+      storageKey: `webgame.controls.${name}`, actions: () => meta?.actions, hint: () => (typeof meta?.controls === 'string' ? meta.controls : ''),
+    });
+
     let muted = false;
     document.getElementById('mute').onclick = () => {
       muted = !muted;
@@ -110,6 +117,7 @@
           try { data = JSON.parse(localStorage.getItem(saveKey) || 'null'); } catch { data = null; }
           toGame({ type: 'webgame:load', data });
           log.textContent = data ? 'hello -> load (saved data)' : 'hello -> load (null)';
+          controls.afterLoad();
           return;
         }
         case 'webgame:save': {

@@ -180,10 +180,11 @@ const game = {
 
   update(engine, dt) {
     const input = engine.input;
-    if (input.wasPressed('KeyM')) engine.audio.muted = !engine.audio.muted;
-    // F005: P (or gamepad Select/Back) offers a screenshot to the player's tray. Nothing is posted
-    // until the player posts it. shareScreenshot is new in F005, so feature-detect it.
-    const photo = input.wasPressed('KeyP') || input.gamepad(0).wasPressed('Back');
+    if (input.actionPressed('mute')) engine.audio.muted = !engine.audio.muted;
+    // F005: the "photo" action (P / gamepad Back) offers a screenshot to the player's tray. Nothing
+    // is posted until the player posts it. shareScreenshot is new in F005, so feature-detect it.
+    // F009: every key is a game.json action, so players can remap it in the player's controls panel.
+    const photo = input.actionPressed('photo');
     if (photo && typeof engine.platform.shareScreenshot === 'function') {
       this.capturePrompt = 0;
       engine.platform.shareScreenshot({ caption: `Score ${Math.floor(this.score)} in Space Dodge` });
@@ -262,8 +263,7 @@ const game = {
 
     this.thrust.burst(1, p.x + engine.random.range(-4, 4), p.y + 20);
 
-    const pad = input.gamepad(0);
-    const firing = input.isDown('Space') || input.isDown('KeyZ') || input.isDown('KeyJ') || pointer || pad.isDown('A') || pad.isDown('RT');
+    const firing = input.actionDown('fire') || pointer;
     if (firing && p.cooldown <= 0) {
       p.cooldown = p.triple > 0 ? 0.12 : 0.17;
       const speed = -720;
@@ -503,7 +503,7 @@ const game = {
       for (let i = 0; i < this.lives; i++)
         r.drawSprite(this.tex.ship, W - 30 - i * 30, 28, { w: 24, h: 24, originX: 0.5, originY: 0.5 });
       if (p.triple > 0) r.drawText(`TRIPLE ${p.triple.toFixed(1)}s`, W - 16, 52, { size: 13, align: 'right', color: '#ffe14c' });
-      if (engine.audio.muted) r.drawText('MUTED (M)', W / 2, 14, { size: 12, align: 'center', color: '#8899aa' });
+      if (engine.audio.muted) r.drawText(`MUTED (${engine.input.actionLabel('mute') || 'M'})`, W / 2, 14, { size: 12, align: 'center', color: '#8899aa' });
       if (this.state === 'over') this.renderGameOver(engine);
     });
   },
@@ -516,7 +516,8 @@ const game = {
     r.drawText('Blast rocks. Dodge saucers. Grab power-ups.', W / 2, H / 2 - 30, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });
     if (Math.floor(t * 2) % 2 === 0)
       r.drawText('PRESS ANY KEY OR TAP TO START', W / 2, H - 110, { size: 20, align: 'center', baseline: 'middle', color: '#ffe14c' });
-    r.drawText('Arrows/WASD move  ·  Space fire  ·  Mouse/touch: hold to fly  ·  M mute', W / 2, H - 60, { size: 14, align: 'center', baseline: 'middle', color: '#7f8db0' });
+    const L = (id) => engine.input.actionLabel(id) || '—';
+    r.drawText(`${L('up')}${L('left')}${L('down')}${L('right')} move  ·  ${L('fire')} fire  ·  Mouse/touch: hold to fly  ·  ${L('mute')} mute`, W / 2, H - 60, { size: 14, align: 'center', baseline: 'middle', color: '#7f8db0' });
     if (this.best > 0) r.drawText(`BEST ${this.best}`, W / 2, 40, { size: 18, align: 'center', color: '#8ea2ff' });
   },
 
@@ -558,7 +559,7 @@ const game = {
     r.drawText(`SCORE ${this.score}`, W / 2, y0 + 70, { size: 30, align: 'center', baseline: 'middle', color: '#fff' });
     if (this.newBest || this.serverBest) r.drawText('NEW BEST!', W / 2, y0 + 110, { size: 22, align: 'center', baseline: 'middle', color: '#ffe14c' });
     if (this.capturePrompt > 0)
-      r.drawText('Press P to capture', W / 2, y0 + 133, { size: 15, align: 'center', baseline: 'middle', color: '#4cf2ff', alpha: Math.min(1, this.capturePrompt * 2) });
+      r.drawText(`Press ${engine.input.actionLabel('photo') || 'P'} to capture`, W / 2, y0 + 133, { size: 15, align: 'center', baseline: 'middle', color: '#4cf2ff', alpha: Math.min(1, this.capturePrompt * 2) });
     if (b) this.renderBoard(r, b, 265);
     if (this.overTime > 1 && Math.floor(engine.time * 2) % 2 === 0)
       r.drawText('PRESS ANY KEY OR TAP TO PLAY AGAIN', W / 2, b ? H - 40 : H / 2 + 100, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });
