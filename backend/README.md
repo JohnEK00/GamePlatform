@@ -124,6 +124,7 @@ src/routes/        auth, users, games, comments, scores, tags, play, files,
   | VersionNotes | `PATCH …/versions/{version}` | 30 per 10 min | user |
   | BundleDownload | `GET …/bundle` | 30/hour | user |
   | Image | `PUT /api/games/{id}/thumbnail`, `PUT /api/users/me/avatar` (shared) | 20/hour | user |
+  | Screenshot | `POST /api/games/{id}/screenshots` (own bucket, separate from Image) | 10/hour | user |
 - **Studio player** (`/play/studio`): same headers/CSP as `/play/{id}`. Errors are posted as `{type:"webgame:error", message, file?, line?, column?}`. Only the first `webgame:studio-load` is accepted; reload the iframe to run again.
 
 ## Review-fix notes (REVIEW-2026-11-14-1)
@@ -145,5 +146,6 @@ src/routes/        auth, users, games, comments, scores, tags, play, files,
 - **Leaderboards (N2)**: migration `0008_review2.sql` adds `score_bests` (one row per game, period `all`/`day`/`week`, period start and user), kept in sync by triggers on `scores` insert/delete and on `games.score_order` changes, and backfilled from the retained scores. Boards are `LIMIT n` index walks; ranks and totals are index counts. Results are identical to the old window-function query. `GET …/scores` is rate limited (ScoreList, 120/min).
 - **Trending (N3)**: refreshed off the request path (see `TRENDING_TTL_SECS`). The `viewer_key` purge runs in its own short transaction through the partial index `idx_play_events_viewer_key_day`, so it only touches rows that still hold a key.
 - **Images (N5)**: thumbnail and avatar uploads share the Image bucket (20/hour per user).
+- **Screenshots (F005)**: `GET/POST /api/games/{id}/screenshots`, `DELETE /api/screenshots/{id}`. Uploads are decoded and re-encoded (`src/screenshots.rs`, `image` crate, png/jpeg/webp only): PNG stays PNG, JPEG/WebP become JPEG q90, alpha is flattened on black, no metadata is kept, plus a JPEG q80 thumbnail that fits 480×480. At most 2 decodes run at once (`503` + `Retry-After: 5`), 20 screenshots per user per game. Files live in `data/screenshots/{id}.{png|jpg}` + `{id}_t.jpg`, served at `/media/screenshots/` with immutable caching, `nosniff` and `CSP: sandbox`. Migration `0009_f005.sql` rebuilds `reports` to allow `targetType: "screenshot"` (rows and indices preserved). `tests/f005.rs` covers it.
 - **Studio linker (N9)**: see R3 above. A commented-out import of a missing file no longer fails the preview.
 - **Bundle replace (N10)**: `published` is read inside the replace transaction (`UPDATE … RETURNING published`), so an unpublish that lands while an upload is in flight neither sets `last_updated_at` nor writes `gameUpdated`.

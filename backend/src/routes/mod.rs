@@ -13,6 +13,7 @@ pub mod related;
 pub mod reports;
 pub mod saves;
 pub mod scores;
+pub mod screenshots;
 pub mod stats;
 pub mod tags;
 pub mod users;
@@ -114,6 +115,14 @@ pub fn api_router() -> Router<AppState> {
             get(comments::list_comments).post(comments::create_comment),
         )
         .route("/comments/{id}", delete(comments::delete_comment))
+        // F005 screenshots
+        .route(
+            "/games/{id}/screenshots",
+            get(screenshots::list_screenshots)
+                .post(screenshots::create_screenshot)
+                .layer(image_limit),
+        )
+        .route("/screenshots/{id}", delete(screenshots::delete_screenshot))
         .route(
             "/games/{id}/scores",
             get(scores::list_scores).post(scores::submit_score),
@@ -159,6 +168,35 @@ pub fn public_router(state: &AppState) -> Router<AppState> {
             ServeDir::new(state.storage.thumbnails_dir()),
         )
         .nest_service("/media/avatars", ServeDir::new(state.storage.avatars_dir()))
+        .nest_service(
+            "/media/screenshots",
+            Router::new()
+                .fallback_service(ServeDir::new(state.storage.screenshots_dir()))
+                .layer(axum::middleware::map_response(screenshot_media_headers)),
+        )
+}
+
+/// F005: stored screenshots never change (ids are never reused) and must never be sniffed or
+/// run as a document.
+async fn screenshot_media_headers(mut res: axum::response::Response) -> axum::response::Response {
+    let ok = res.status().is_success() || res.status() == axum::http::StatusCode::NOT_MODIFIED;
+    let h = res.headers_mut();
+    if ok {
+        // Only real files are immutable: a 404 (deleted screenshot) must not be cached.
+        h.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("sandbox"),
+    );
+    res
 }
 
 fn api_cors(origins: &[String]) -> CorsLayer {

@@ -940,10 +940,18 @@ pub async fn delete_game(
 
 /// Delete a game row (cascades) and its files.
 pub async fn remove_game(state: &AppState, id: &str) -> AppResult<()> {
+    // F005: the screenshot rows cascade; collect their ids first to remove the files.
+    let shots: Vec<(String,)> = sqlx::query_as("SELECT id FROM screenshots WHERE game_id = ?")
+        .bind(id)
+        .fetch_all(&state.db)
+        .await?;
     sqlx::query("DELETE FROM games WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await?;
+    for (sid,) in &shots {
+        crate::screenshots::remove_screenshot_files(&state.storage, sid).await;
+    }
     let _ = tokio::fs::remove_dir_all(state.storage.game_dir(id)).await;
     let thumbs = state.storage.thumbnails_dir();
     state.storage.remove_images(&thumbs, id).await;

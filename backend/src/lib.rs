@@ -12,6 +12,7 @@ pub mod locks;
 pub mod models;
 pub mod ratelimit;
 pub mod routes;
+pub mod screenshots;
 pub mod seed;
 pub mod storage;
 pub mod trending;
@@ -40,10 +41,15 @@ pub struct AppState {
     pub trending: trending::TrendingCache,
     /// F013: concurrent bundle-download builds (`EXPORT_SLOTS` permits, `try_acquire`).
     pub export_slots: Arc<tokio::sync::Semaphore>,
+    /// F005: concurrent screenshot decodes (`IMAGE_SLOTS` permits, `try_acquire`).
+    pub image_slots: Arc<tokio::sync::Semaphore>,
 }
 
 /// F013: at most this many `GET /api/games/{id}/bundle` archives are built at once.
 pub const EXPORT_SLOTS: usize = 2;
+
+/// F005: at most this many screenshot uploads are decoded / re-encoded at once.
+pub const IMAGE_SLOTS: usize = 2;
 
 impl AppState {
     /// Create the data directories, open the database and run migrations.
@@ -59,6 +65,7 @@ impl AppState {
             play_dedupe: ratelimit::PlayDedupe::new(),
             trending: trending::TrendingCache::new(),
             export_slots: Arc::new(tokio::sync::Semaphore::new(EXPORT_SLOTS)),
+            image_slots: Arc::new(tokio::sync::Semaphore::new(IMAGE_SLOTS)),
             config: Arc::new(config),
             storage,
         };
@@ -84,16 +91,17 @@ pub async fn apply_admin_roles(db: &SqlitePool, admins: &[String]) -> anyhow::Re
 
 /// Startup cleanup (call before serving, never while requests run): removes `.staging-*`
 /// dirs left by interrupted uploads, and game dirs that have no DB row (an interrupted
-/// create). Returns the number of removed directories.
+/// create). F005: also removes screenshot files without a row and stray `.*.tmp` files in
+/// `data/screenshots`. Returns the number of removed directories and files.
 pub async fn sweep_stale_files(state: &AppState) -> anyhow::Result<usize> {
+    let mut removed = sweep_screenshot_files(state).await?;
     let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM games")
         .fetch_all(&state.db)
         .await?;
     let known: std::collections::HashSet<String> = ids.into_iter().map(|(i,)| i).collect();
-    let mut removed = 0;
     let mut games = match tokio::fs::read_dir(state.storage.games_root()).await {
         Ok(d) => d,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
         Err(e) => return Err(e.into()),
     };
     while let Some(entry) = games.next_entry().await? {
@@ -114,6 +122,36 @@ pub async fn sweep_stale_files(state: &AppState) -> anyhow::Result<usize> {
             {
                 removed += 1;
             }
+        }
+    }
+    Ok(removed)
+}
+
+/// F005 part of [`sweep_stale_files`]: screenshot files whose id has no row, and stray
+/// `.*.tmp` files left by an interrupted write.
+async fn sweep_screenshot_files(state: &AppState) -> anyhow::Result<usize> {
+    let mut dir = match tokio::fs::read_dir(state.storage.screenshots_dir()).await {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e.into()),
+    };
+    let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM screenshots")
+        .fetch_all(&state.db)
+        .await?;
+    let known: std::collections::HashSet<String> = ids.into_iter().map(|(i,)| i).collect();
+    let mut removed = 0;
+    while let Some(entry) = dir.next_entry().await? {
+        if !entry.file_type().await?.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let stale = if name.starts_with('.') && name.ends_with(".tmp") {
+            true
+        } else {
+            screenshots::id_of_file(&name).is_none_or(|id| !known.contains(id))
+        };
+        if stale && tokio::fs::remove_file(entry.path()).await.is_ok() {
+            removed += 1;
         }
     }
     Ok(removed)

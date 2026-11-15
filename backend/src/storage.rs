@@ -4,6 +4,7 @@
 //! data/games/{id}/v{version}/...   extracted bundle (only the current version is kept)
 //! data/thumbnails/{id}.{ext}
 //! data/avatars/{userId}.{ext}
+//! data/screenshots/{id}.{png|jpg}, data/screenshots/{id}_t.jpg   (F005)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -25,6 +26,7 @@ impl Storage {
         std::fs::create_dir_all(self.games_root())?;
         std::fs::create_dir_all(self.thumbnails_dir())?;
         std::fs::create_dir_all(self.avatars_dir())?;
+        std::fs::create_dir_all(self.screenshots_dir())?;
         Ok(())
     }
 
@@ -52,6 +54,11 @@ impl Storage {
 
     pub fn avatars_dir(&self) -> PathBuf {
         self.root.join("avatars")
+    }
+
+    /// F005: stored screenshots and their thumbnails.
+    pub fn screenshots_dir(&self) -> PathBuf {
+        self.root.join("screenshots")
     }
 
     pub fn thumbnail_path(&self, game_id: &str, ext: &str) -> PathBuf {

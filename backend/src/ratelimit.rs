@@ -47,6 +47,9 @@ pub enum Limit {
     ScoreList,
     /// image uploads (`PUT …/thumbnail` + `PUT /api/users/me/avatar`, shared): 20/hour, per user
     Image,
+    /// F005 screenshot posts (`POST …/screenshots`; own bucket, separate from `Image`): 10/hour,
+    /// per user
+    Screenshot,
 }
 
 impl Limit {
@@ -67,6 +70,7 @@ impl Limit {
             Limit::BundleDownload => (30, Duration::from_secs(3600)),
             Limit::ScoreList => (120, Duration::from_secs(60)),
             Limit::Image => (20, Duration::from_secs(3600)),
+            Limit::Screenshot => (10, Duration::from_secs(3600)),
         }
     }
 }

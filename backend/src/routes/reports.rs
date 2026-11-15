@@ -14,6 +14,8 @@ use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
 use crate::ratelimit::Limit;
 use crate::routes::games::{fetch_visible_game, limit_user, parse_paging, remove_game};
+use crate::routes::screenshots::remove_screenshot;
+use crate::screenshots::thumb_url;
 
 pub const REPORT_DETAILS_MAX: usize = 1000;
 pub const PREVIEW_MAX: usize = 140;
@@ -34,13 +36,16 @@ pub struct Report {
     pub resolution: Option<String>,
     pub created_at: String,
     pub resolved_at: Option<String>,
+    /// F005: the screenshot's `thumbUrl` while it exists; null for other target types.
+    pub target_image_url: Option<String>,
 }
 
 const REPORT_SELECT: &str = "SELECT r.id, r.target_type, r.target_id, r.target_preview, \
      r.target_game_id, r.reason, r.details, r.status, r.resolution, r.created_at, \
      r.resolved_at, u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
-     u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version \
-     FROM reports r JOIN users u ON u.id = r.reporter_id";
+     u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version, s.id AS s_id \
+     FROM reports r JOIN users u ON u.id = r.reporter_id \
+     LEFT JOIN screenshots s ON r.target_type = 'screenshot' AND s.id = r.target_id";
 
 fn report_from_row(row: &SqliteRow) -> Result<Report, sqlx::Error> {
     Ok(Report {
@@ -56,6 +61,9 @@ fn report_from_row(row: &SqliteRow) -> Result<Report, sqlx::Error> {
         resolution: row.try_get("resolution")?,
         created_at: row.try_get("created_at")?,
         resolved_at: row.try_get("resolved_at")?,
+        target_image_url: row
+            .try_get::<Option<String>, _>("s_id")?
+            .map(|id| thumb_url(&id)),
     })
 }
 
@@ -113,9 +121,36 @@ pub async fn create_report(
                 .map_err(|_| AppError::not_found("Comment"))?;
             (game_id, text.chars().take(PREVIEW_MAX).collect())
         }
+        "screenshot" => {
+            let row = sqlx::query(
+                "SELECT s.game_id, s.caption, u.username, u.display_name FROM screenshots s \
+                 JOIN users u ON u.id = s.author_id WHERE s.id = ?",
+            )
+            .bind(&body.target_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| AppError::not_found("Screenshot"))?;
+            let game_id: String = row.try_get("game_id")?;
+            let caption: String = row.try_get("caption")?;
+            fetch_visible_game(&state, &game_id, Some(&user.id))
+                .await
+                .map_err(|_| AppError::not_found("Screenshot"))?;
+            let preview = if caption.is_empty() {
+                let display: String = row.try_get("display_name")?;
+                let name = if display.trim().is_empty() {
+                    row.try_get::<String, _>("username")?
+                } else {
+                    display
+                };
+                format!("Screenshot by {name}")
+            } else {
+                caption.chars().take(PREVIEW_MAX).collect()
+            };
+            (game_id, preview)
+        }
         _ => {
             return Err(AppError::validation(
-                "targetType must be \"game\" or \"comment\"",
+                "targetType must be \"game\", \"comment\" or \"screenshot\"",
             ));
         }
     };
@@ -251,6 +286,7 @@ pub async fn admin_resolve_report(
                 .await?;
         }
         ("delete", "game") => remove_game(&state, &report.target_id).await?,
+        ("delete", "screenshot") => remove_screenshot(&state, &report.target_id).await?,
         ("delete", "comment") => {
             sqlx::query("DELETE FROM comments WHERE id = ?")
                 .bind(&report.target_id)
