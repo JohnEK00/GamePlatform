@@ -2,11 +2,12 @@
  * Webview side of the native menu (src-tauri/src/menu.rs) and the F11 shortcut.
  * Rust handles window actions itself; navigation items arrive as the `app-menu` event with the item id.
  * `"screenshot"` (View → Take Screenshot) dispatches `PLAYER_SCREENSHOT_EVENT` for the mounted player or Studio
- * preview and does not navigate; with neither mounted it does nothing.
+ * preview and does not navigate; with neither mounted it does nothing. `"controls"` (View → Controls) likewise
+ * dispatches `PLAYER_CONTROLS_EVENT` to open the controls panel, without navigating.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { PLAYER_SCREENSHOT_EVENT, STUDIO_OPEN_FOLDER_EVENT } from "@webgame/ui";
+import { PLAYER_CONTROLS_EVENT, PLAYER_SCREENSHOT_EVENT, STUDIO_OPEN_FOLDER_EVENT } from "@webgame/ui";
 import { isTauri } from "./platform";
 
 export const MENU_EVENT = "app-menu";
@@ -47,6 +48,7 @@ export function installNativeIntegrations(): () => void {
   let unlisten: (() => void) | null = null;
   listen<string>(MENU_EVENT, ({ payload }) => {
     if (payload === "screenshot") window.dispatchEvent(new CustomEvent(PLAYER_SCREENSHOT_EVENT));
+    else if (payload === "controls") window.dispatchEvent(new CustomEvent(PLAYER_CONTROLS_EVENT));
     else if (payload === "open-folder") openFolderInStudio();
     else if (ROUTES[payload]) navigate(ROUTES[payload]);
   })
