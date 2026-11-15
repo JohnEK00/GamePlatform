@@ -31,6 +31,7 @@ export {
   GAME_LEADERBOARD_CACHE_MS,
   GAME_LEADERBOARD_THROTTLE_MAX,
   GAME_LEADERBOARD_THROTTLE_WINDOW_MS,
+  CONTROLS_HINT_MS,
 } from "./components/GamePlayer";
 export { FavoritesProvider, FavoriteButton, useFavorites } from "./components/Favorite";
 export type { FavoriteButtonProps, FavoriteState, FavoritesApi } from "./components/Favorite";
@@ -68,6 +69,55 @@ export { ScreenshotDialog, SCREENSHOTS_CHANGED_EVENT, screenshotErrorMessage } f
 export type { ScreenshotDialogProps, ScreenshotDialogGame } from "./components/ScreenshotDialog";
 export { ScreenshotGallery, SCREENSHOT_GALLERY_PER_PAGE } from "./components/ScreenshotGallery";
 export type { ScreenshotGalleryProps } from "./components/ScreenshotGallery";
+
+// F009: controls and remapping
+export {
+  PLAYER_CONTROLS_EVENT,
+  BINDABLE_KEYS,
+  GAMEPAD_BUTTON_NAMES,
+  MAX_ACTIONS,
+  MAX_ACTION_KEYS,
+  MAX_ACTION_GAMEPAD,
+  ACTION_NAME_MAX,
+  CONTROLS_HINT_MAX,
+  CONTROLS_OVERRIDES_MAX_BYTES,
+  ACTION_ID_PATTERN,
+  isBindableKey,
+  isBindableKeyboardCode,
+  isGamepadButton,
+  keyLabel,
+  gamepadLabel,
+  validateActions,
+  formatActionsProblem,
+  problemsForAction,
+  normalizeActions,
+  normalizeControlsHint,
+  hasControls,
+  sanitizeOverrides,
+  pruneOverrides,
+  effectiveActions,
+  isActionChanged,
+  findConflicts,
+  hasCtrlShortcutRisk,
+  controlsStorageKey,
+  controlsHintedKey,
+  readOverrides,
+  writeOverrides,
+  subscribeOverrides,
+  useStoredOverrides,
+  takeControlsHint,
+  useKeyboardLayout,
+  controlsMessage,
+} from "./controls";
+export type { ActionsProblem, ControlOverrides } from "./controls";
+export { ControlsPanel } from "./components/ControlsPanel";
+export type { ControlsPanelProps } from "./components/ControlsPanel";
+export { KeyCaptureButton, KEY_CAPTURE_TIMEOUT_MS } from "./components/KeyCaptureButton";
+export type { KeyCaptureButtonProps } from "./components/KeyCaptureButton";
+export { ControlsSummary } from "./components/ControlsSummary";
+export type { ControlsSummaryProps } from "./components/ControlsSummary";
+export { usePauseReasons } from "./components/usePauseReasons";
+export type { PauseReason } from "./components/usePauseReasons";
 
 // Studio
 export { createZip, createZipAsync, canDeflateRaw, crc32 } from "./studio/zip";

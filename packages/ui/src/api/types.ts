@@ -74,6 +74,44 @@ export type Game = GameSummary & {
   leaderboard: LeaderboardConfig;
   /** F004: the current version's history row. Older servers omit it. */
   latestVersion?: GameVersion;
+  /**
+   * F009: declared controls of the CURRENT version's game.json, normalised, in declared order; [] when absent.
+   * Servers older than F009 omit it (treat as []).
+   */
+  actions?: ControlAction[];
+  /** F009: normalised game.json `controls` text (0–300 chars, plain text); "" when absent. Older servers omit it. */
+  controlsHint?: string;
+};
+
+/** F009: gamepad buttons an action can use (the engine's `GamepadButtons` names without `Home`). */
+export type GamepadButtonName =
+  | "A"
+  | "B"
+  | "X"
+  | "Y"
+  | "LB"
+  | "RB"
+  | "LT"
+  | "RT"
+  | "Back"
+  | "Start"
+  | "LS"
+  | "RS"
+  | "Up"
+  | "Down"
+  | "Left"
+  | "Right";
+
+/** F009: one declared game action (GAME_FORMAT.md § F009). */
+export type ControlAction = {
+  /** ^[a-z0-9_-]{1,32}$, unique per game */
+  id: string;
+  /** 1–40 chars, trimmed, no control or bidi characters. Plain text. */
+  name: string;
+  /** 0–3 unique bindable codes (KeyboardEvent.code, or Mouse0..2), e.g. "KeyA", "Space". */
+  keys: string[];
+  /** 0–2 unique; keys.length + gamepad.length >= 1 */
+  gamepad: GamepadButtonName[];
 };
 
 /** F004: one row of a game's version history. */

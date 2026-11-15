@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { validateActions } from "../controls";
 import { Link, useNavigate } from "react-router-dom";
 import { isApiError } from "../api/client";
 import type { Game, GameSummary } from "../api/types";
@@ -61,6 +62,8 @@ export function PublishDialog({ project, link, apiBase, onClose, onPublished, on
   const [notes, setNotes] = useState("");
   const [notesError, setNotesError] = useState<string | null>(null);
   const busy = progress !== null;
+  // F009: the backend rejects invalid `actions` with a 422; catch it here.
+  const controlsBlocked = useMemo(() => validateActions(project.manifest).length > 0, [project.manifest]);
   const ref = useModal<HTMLFormElement>(true, onClose, { initialFocus: link ? `[name="pf-publish-mode"]:checked` : "#pf-game-title", canClose: !busy });
 
   // ---- new game ----
@@ -231,7 +234,7 @@ export function PublishDialog({ project, link, apiBase, onClose, onPublished, on
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (busy) return;
+    if (busy || controlsBlocked) return;
     void (mode === "new" ? submitNew() : submitUpdate());
   };
 
@@ -327,17 +330,18 @@ export function PublishDialog({ project, link, apiBase, onClose, onPublished, on
         )}
 
         {progress !== null && <ProgressBar value={progress} label="Uploading" />}
+        {controlsBlocked && <Alert>Fix the errors in game.json → Controls first</Alert>}
         {error && <Alert>{error}</Alert>}
         <div className="pf-modal__actions">
           <button type="button" className="pf-btn pf-btn--ghost" onClick={onClose} disabled={busy}>
             Cancel
           </button>
           {mode === "new" ? (
-            <button type="submit" className="pf-btn pf-btn--primary" disabled={busy}>
+            <button type="submit" className="pf-btn pf-btn--primary" disabled={busy || controlsBlocked}>
               {busy ? <Spinner size={14} /> : null} Publish
             </button>
           ) : (
-            <button type="submit" className="pf-btn pf-btn--primary" disabled={busy || updateBlocked}>
+            <button type="submit" className="pf-btn pf-btn--primary" disabled={busy || updateBlocked || controlsBlocked}>
               {busy ? <Spinner size={14} /> : null} Publish update
             </button>
           )}

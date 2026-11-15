@@ -11,6 +11,7 @@ import { StudioPreview, type StudioConsoleEntry } from "../studio/StudioPreview"
 import { STUDIO_TEMPLATES } from "../studio/templates";
 import { OpenGameDialog } from "../studio/OpenGameDialog";
 import { PublishDialog } from "../studio/PublishDialog";
+import { ControlsFieldset } from "../studio/ControlsFieldset";
 import {
   ACHIEVEMENT_ID_PATTERN,
   asManifest,
@@ -174,6 +175,8 @@ function ManifestForm({ project, onChange }: { project: StudioProject; onChange:
           />
         </div>
       </fieldset>
+
+      <ControlsFieldset manifest={project.manifest} onChange={onChange} />
 
       <div className="pf-studio-ach">
         <div className="pf-studio-ach__head">

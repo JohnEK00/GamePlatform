@@ -3862,3 +3862,404 @@ a.pf-tab {
     flex-direction: column;
   }
 }
+
+/* ---------- F009: controls ---------- */
+.pf-player__ctrl {
+  position: relative;
+  display: inline-flex;
+}
+.pf-controls-hint {
+  position: absolute;
+  right: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 12px;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--pf-text);
+  background: var(--pf-surface-3);
+  border: 1px solid var(--pf-border-strong);
+  border-radius: var(--pf-radius-sm);
+  box-shadow: var(--pf-shadow);
+  animation: pf-pop 0.2s ease-out;
+}
+.pf-controls-hint::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 10px;
+  height: 10px;
+  background: var(--pf-surface-3);
+  border-right: 1px solid var(--pf-border-strong);
+  border-bottom: 1px solid var(--pf-border-strong);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.pf-controls-hint__close {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--pf-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.pf-controls-hint__close:hover {
+  color: var(--pf-text);
+  background: var(--pf-surface-2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pf-controls-hint {
+    animation: none;
+  }
+}
+
+.pf-controls {
+  width: min(720px, 100%);
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pf-controls__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.pf-controls__head h2 {
+  margin: 0;
+}
+.pf-controls__sub {
+  margin: 2px 0 0;
+  color: var(--pf-muted);
+  font-size: 0.88rem;
+}
+.pf-controls__hint {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--pf-radius-sm);
+  background: var(--pf-bg-2);
+  border: 1px solid var(--pf-border);
+  color: var(--pf-text-2);
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+.pf-controls__scroll {
+  overflow: auto;
+  min-height: 0;
+  margin: 0 -6px;
+  padding: 0 6px 28px;
+}
+.pf-controls__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.pf-controls__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--pf-surface);
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pf-muted);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--pf-border);
+}
+.pf-controls__table td,
+.pf-controls__table tbody th {
+  padding: 8px;
+  border-bottom: 1px solid var(--pf-border);
+  vertical-align: middle;
+  text-align: left;
+}
+.pf-controls__table tr.is-changed > * {
+  background: rgba(139, 108, 255, 0.06);
+}
+.pf-controls__name {
+  font-weight: 600;
+  min-width: 120px;
+}
+.pf-controls__name > span:first-child {
+  overflow-wrap: anywhere;
+}
+.pf-controls__tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: 8px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: rgba(139, 108, 255, 0.18);
+  color: #c4b5ff;
+}
+.pf-controls__warn {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--pf-warning);
+}
+.pf-controls__keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.pf-controls__reset {
+  font-size: 0.82rem;
+  margin-left: 2px;
+}
+.pf-controls__pad {
+  color: var(--pf-text-2);
+  white-space: nowrap;
+}
+.pf-controls__note {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.pf-controls__note--warn {
+  padding: 8px 12px;
+  border-radius: var(--pf-radius-sm);
+  background: rgba(255, 209, 102, 0.1);
+  border: 1px solid rgba(255, 209, 102, 0.45);
+  color: #ffe3a3;
+}
+.pf-controls__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.pf-controls__saved {
+  margin-right: auto;
+}
+.pf-controls__foot .pf-btn--ghost {
+  order: -1;
+}
+
+/* Key slot (shared by the panel and the Studio form) */
+.pf-keycap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.pf-keycap__btn {
+  min-width: 64px;
+  height: 32px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--pf-muted);
+  background: var(--pf-bg-2);
+  border: 1px dashed var(--pf-border-strong);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.pf-keycap.is-filled .pf-keycap__btn {
+  color: var(--pf-text);
+  border-style: solid;
+  background: var(--pf-surface-2);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.35);
+  padding-right: 26px;
+}
+.pf-keycap__btn:hover:not(:disabled) {
+  border-color: var(--pf-focus);
+}
+.pf-keycap.is-capturing .pf-keycap__btn {
+  color: var(--pf-accent);
+  border: 1px solid var(--pf-accent);
+  background: rgba(255, 122, 61, 0.1);
+  padding-right: 10px;
+  animation: pf-blink 1.4s ease-in-out infinite;
+}
+.pf-keycap.is-invalid .pf-keycap__btn {
+  border-color: var(--pf-danger);
+  color: #ffc1c9;
+}
+.pf-keycap__clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--pf-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.pf-keycap__clear:hover {
+  color: var(--pf-danger);
+  background: var(--pf-surface-3);
+}
+.pf-keycap__msg {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 2;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  color: #ffe3a3;
+  background: var(--pf-surface-3);
+  border: 1px solid rgba(255, 209, 102, 0.45);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pf-keycap.is-capturing .pf-keycap__btn {
+    animation: none;
+  }
+}
+
+/* Game page summary */
+.pf-controls-summary__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.pf-controls-summary__head .pf-panel__title {
+  margin-bottom: 0 !important;
+}
+.pf-controls-summary__hint {
+  margin: 0 0 10px;
+  color: var(--pf-text-2);
+  overflow-wrap: anywhere;
+}
+.pf-controls-summary__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 18px;
+  font-size: 0.9rem;
+}
+.pf-controls-summary__list li {
+  color: var(--pf-muted);
+}
+.pf-controls-summary__name {
+  color: var(--pf-text);
+  font-weight: 600;
+}
+.pf-controls-summary__keys {
+  color: var(--pf-text-2);
+}
+.pf-controls-summary__keys.is-unbound {
+  color: var(--pf-warning);
+}
+
+/* Studio form */
+.pf-studio-controls {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 12px;
+}
+.pf-studio-controls__count {
+  justify-self: end;
+}
+.pf-studio-controls .pf-field {
+  display: grid;
+}
+.pf-studio-controls__add {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pf-studio-controls__list {
+  margin-top: 0;
+}
+.pf-studio-controls__bindings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.pf-studio-controls__keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.pf-studio-controls__keys .pf-label {
+  margin-right: 2px;
+}
+.pf-studio-controls__pads {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 200px;
+}
+.pf-studio-controls__pads select {
+  padding: 6px 8px;
+}
+.pf-studio-controls__remove {
+  margin-left: auto;
+}
+.pf-studio-controls__errors {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+@media (max-width: 560px) {
+  .pf-controls {
+    padding: 16px;
+  }
+  .pf-controls__table thead {
+    display: none;
+  }
+  .pf-controls__table,
+  .pf-controls__table tbody,
+  .pf-controls__table tr,
+  .pf-controls__table td,
+  .pf-controls__table tbody th {
+    display: block;
+    width: 100%;
+  }
+  .pf-controls__table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--pf-border);
+  }
+  .pf-controls__table td,
+  .pf-controls__table tbody th {
+    border: 0;
+    padding: 4px 0;
+  }
+  .pf-controls__pad::before {
+    content: "Gamepad: ";
+    color: var(--pf-muted);
+  }
+}

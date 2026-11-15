@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApi } from "../context/config";
 import { useToast } from "../context/toast";
 import { GAME_IFRAME_SANDBOX } from "../components/GamePlayer";
 import { Spinner } from "../components/common";
+import { ControlsPanel } from "../components/ControlsPanel";
+import { usePauseReasons } from "../components/usePauseReasons";
+import { controlsMessage, hasControls, normalizeActions, normalizeControlsHint, PLAYER_CONTROLS_EVENT, pruneOverrides, type ControlOverrides } from "../controls";
 import { ScreenshotTray } from "../components/ScreenshotTray";
 import { useScreenshotCapture } from "../components/useScreenshotCapture";
 import { asManifest, leaderboardOf, manifestForBundle, type StudioProject } from "./project";
@@ -74,6 +77,42 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
   const runTitle = String(asManifest(run.current.project.manifest).name ?? "") || "game";
   const shots = useScreenshotCapture(iframeRef, { mode: "studio", title: runTitle, ready });
 
+  // F009: the running snapshot's actions (parsed leniently, like the engine) and hint; overrides live in memory for
+  // the Studio session only (never localStorage, never the API).
+  const runManifest = run.current.project.manifest;
+  const defaults = useMemo(() => normalizeActions(asManifest(runManifest).actions), [runManifest]);
+  const controlsHint = useMemo(() => normalizeControlsHint(asManifest(runManifest).controls), [runManifest]);
+  const showControls = hasControls(defaults, controlsHint);
+  const [overrides, setOverrides] = useState<ControlOverrides>({});
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const controls = useRef({ defaults, overrides, showControls });
+  controls.current = { defaults, overrides, showControls };
+
+  const post = useCallback((msg: object) => iframeRef.current?.contentWindow?.postMessage(msg, "*"), []);
+  const setPause = usePauseReasons(post);
+  const wasControlsOpen = useRef(false);
+  useEffect(() => {
+    setPause("controls", controlsOpen);
+    if (!controlsOpen && wasControlsOpen.current) iframeRef.current?.focus();
+    wasControlsOpen.current = controlsOpen;
+  }, [controlsOpen, setPause]);
+  useEffect(() => {
+    if (!showControls) setControlsOpen(false);
+  }, [showControls]);
+  useEffect(() => {
+    const onOpen = () => {
+      if (controls.current.showControls) setControlsOpen(true);
+    };
+    window.addEventListener(PLAYER_CONTROLS_EVENT, onOpen);
+    return () => window.removeEventListener(PLAYER_CONTROLS_EVENT, onOpen);
+  }, []);
+
+  const changeOverrides = (o: ControlOverrides) => {
+    const next = pruneOverrides(o, defaults);
+    setOverrides(next);
+    if (defaults.length > 0) post(controlsMessage(defaults, next));
+  };
+
   useEffect(() => {
     let readySeen = false;
     setReady(false);
@@ -97,9 +136,13 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
           source.postMessage({ type: "webgame:studio-load", manifest: manifestForBundle(p.manifest), files: { ...p.files } }, "*");
           return;
         }
-        case "webgame:hello":
+        case "webgame:hello": {
           source.postMessage({ type: "webgame:load", data: save.current }, "*");
+          // F009: the in-memory overrides, right after the load reply (each run and restart).
+          const { defaults: d, overrides: o } = controls.current;
+          if (d.length > 0) source.postMessage(controlsMessage(d, o), "*");
           return;
+        }
         case "webgame:save": {
           const d = data.data;
           if (d && typeof d === "object" && !Array.isArray(d)) save.current = d as Record<string, unknown>;
@@ -195,6 +238,19 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
         <span className="pf-sr-only" aria-live="polite">
           {shots.announcement}
         </span>
+        {showControls && (
+          <button
+            type="button"
+            className="pf-iconbtn pf-iconbtn--sm"
+            onClick={() => setControlsOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={controlsOpen}
+            aria-label="Controls"
+            title="Controls"
+          >
+            ⌨
+          </button>
+        )}
         <button
           type="button"
           className="pf-iconbtn pf-iconbtn--sm"
@@ -208,6 +264,17 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
         </button>
       </div>
       <ScreenshotTray items={shots.items} mode="studio" game={{ title: runTitle }} onRemove={shots.remove} onClear={shots.clear} />
+      {controlsOpen && showControls && (
+        <ControlsPanel
+          mode="studio"
+          title={runTitle}
+          hint={controlsHint}
+          actions={defaults}
+          overrides={overrides}
+          onChange={changeOverrides}
+          onClose={() => setControlsOpen(false)}
+        />
+      )}
     </div>
   );
 }

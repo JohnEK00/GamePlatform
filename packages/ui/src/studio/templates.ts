@@ -25,7 +25,8 @@ export default {
     this.x = engine.math.clamp(this.x, 20, engine.width - 20);
     this.y = engine.math.clamp(this.y, 20, engine.height - 20);
 
-    if (engine.input.wasPressed("Space")) {
+    // "beep" is declared in game.json "actions", so players can remap it (⌨ under the player).
+    if (engine.input.actionPressed("beep")) {
       engine.audio.tone({ freq: 520, freqEnd: 880, duration: 0.12 });
       engine.camera.shake(4, 0.15);
       this.beeps += 1;
@@ -38,7 +39,7 @@ export default {
     r.clear("#14162b");
     r.drawCircle(this.x, this.y, 20, "#ff7a3d");
     r.drawText("Hello, Pixelforge!", engine.width / 2, 48, { size: 32, color: "#ffffff", align: "center" });
-    r.drawText("Arrows / WASD to move · Space to beep (" + this.beeps + ")", engine.width / 2, engine.height - 36, {
+    r.drawText("Arrows / WASD to move · " + engine.input.actionLabel("beep") + " to beep (" + this.beeps + ")", engine.width / 2, engine.height - 36, {
       size: 16,
       color: "#8b91b0",
       align: "center",
@@ -47,7 +48,7 @@ export default {
 };
 `;
 
-const SHOOTER_MAIN = `// Arcade shooter: move with arrows/WASD (or the mouse), hold Space to fire. Don't let rocks hit you.
+const SHOOTER_MAIN = `// Arcade shooter: move with arrows/WASD (or the mouse), hold "fire" (Space by default) to shoot. Don't let rocks hit you.
 export default class Shooter {
   load(engine) {
     this.best = engine.storage.get("best", 0);
@@ -80,7 +81,7 @@ export default class Shooter {
     const { input, random } = engine;
     this.sparks.update(dt);
     if (this.over) {
-      if (input.wasPressed("Space") || input.mouse.pressed) this.reset(engine);
+      if (input.actionPressed("fire") || input.mouse.pressed) this.reset(engine);
       return;
     }
 
@@ -94,7 +95,7 @@ export default class Shooter {
 
     // Shoot
     this.cooldown -= dt;
-    if ((input.isDown("Space") || input.mouse.down) && this.cooldown <= 0) {
+    if ((input.actionDown("fire") || input.mouse.down) && this.cooldown <= 0) {
       this.cooldown = 0.16;
       this.bullets.push({ x: s.x, y: s.y - s.r, vy: -620 });
       engine.audio.tone({ freq: 880, freqEnd: 440, duration: 0.06, volume: 0.15 });
@@ -173,14 +174,14 @@ export default class Shooter {
       r.drawText("♥".repeat(Math.max(0, this.lives)), engine.width - 12, 10, { size: 18, color: "#ff4f8b", align: "right" });
       if (this.over) {
         r.drawText("GAME OVER", engine.width / 2, engine.height / 2 - 30, { size: 40, color: "#ff7a3d", align: "center" });
-        r.drawText("Press Space or tap to play again", engine.width / 2, engine.height / 2 + 20, { size: 16, color: "#c3c7dc", align: "center" });
+        r.drawText("Press " + engine.input.actionLabel("fire") + " or tap to play again", engine.width / 2, engine.height / 2 + 20, { size: 16, color: "#c3c7dc", align: "center" });
       }
     });
   }
 }
 `;
 
-const PLATFORMER_MAIN = `// Platformer: arrows/WASD to run, Space/Up to jump. Collect every coin to finish the level.
+const PLATFORMER_MAIN = `// Platformer: arrows/A/D to run, Space/Up/W to jump (remappable actions declared in game.json). Collect every coin to finish the level.
 const LEVEL = [
   "##############################",
   "#............................#",
@@ -225,13 +226,12 @@ export default {
 
     const dir = input.axis("horizontal");
     p.ax = dir * 2400;
-    const jump = input.wasPressed("Space") || input.wasPressed("ArrowUp") || input.wasPressed("KeyW");
-    if (jump && p.onGround) {
+    if (input.actionPressed("jump") && p.onGround) {
       p.vy = -620;
       engine.audio.tone({ freq: 330, freqEnd: 660, duration: 0.1, volume: 0.2 });
     }
     // Variable jump height
-    if (p.vy < 0 && !(input.isDown("Space") || input.isDown("ArrowUp") || input.isDown("KeyW"))) p.vy *= 0.88;
+    if (p.vy < 0 && !input.actionDown("jump")) p.vy *= 0.88;
 
     this.world.step(dt);
 
@@ -249,7 +249,7 @@ export default {
       // Faster is better: score = 10000 - centiseconds
       engine.platform.submitScore(Math.max(0, 10000 - Math.round(this.time * 100)));
     }
-    if (this.done && input.wasPressed("KeyR")) this.load(engine);
+    if (this.done && input.actionPressed("restart")) this.load(engine);
 
     engine.camera.follow(p.x + p.w / 2, p.y + p.h / 2, 0.15);
   },
@@ -274,7 +274,7 @@ export default {
       r.drawText(this.time.toFixed(1) + "s", engine.width - 12, 10, { size: 18, color: "#c3c7dc", align: "right" });
       if (this.done) {
         r.drawText("LEVEL CLEAR!", engine.width / 2, engine.height / 2 - 20, { size: 40, color: "#2fd9a6", align: "center" });
-        r.drawText("Press R to play again", engine.width / 2, engine.height / 2 + 24, { size: 16, color: "#c3c7dc", align: "center" });
+        r.drawText("Press " + engine.input.actionLabel("restart") + " to play again", engine.width / 2, engine.height / 2 + 24, { size: 16, color: "#c3c7dc", align: "center" });
       }
     });
   },
@@ -339,7 +339,7 @@ export default {
   update(engine, dt) {
     const { input } = engine;
     if (this.done) {
-      if (input.wasPressed("KeyR") || input.wasPressed("Space")) this.reset(engine);
+      if (input.actionPressed("restart")) this.reset(engine);
       return;
     }
     const ax = input.axis("horizontal");
@@ -395,11 +395,19 @@ export default {
           r.drawText("#" + e.rank + "  " + e.name, cx - 170, y, { size: 16, color: c });
           r.drawText(e.display, cx + 170, y, { size: 16, color: c, align: "right" });
         });
-      r.drawText("Press R or Space to race again", cx, 430, { size: 14, color: "#8b91b0", align: "center" });
+      r.drawText("Press " + engine.input.actionLabel("restart") + " to race again", cx, 430, { size: 14, color: "#8b91b0", align: "center" });
     });
   },
 };
 `;
+
+// F009: game.json "actions" (GAME_FORMAT § F009). Movement actions named left/right/up/down make
+// input.axis() follow the player's remapping.
+const MOVE_LEFT = { id: "left", name: "Move left", keys: ["ArrowLeft", "KeyA"], gamepad: ["Left"] };
+const MOVE_RIGHT = { id: "right", name: "Move right", keys: ["ArrowRight", "KeyD"], gamepad: ["Right"] };
+const MOVE_UP = { id: "up", name: "Move up", keys: ["ArrowUp", "KeyW"], gamepad: ["Up"] };
+const MOVE_DOWN = { id: "down", name: "Move down", keys: ["ArrowDown", "KeyS"], gamepad: ["Down"] };
+const MOVEMENT = () => [MOVE_LEFT, MOVE_RIGHT, MOVE_UP, MOVE_DOWN].map((a) => ({ ...a, keys: [...a.keys], gamepad: [...a.gamepad] }));
 
 export const STUDIO_TEMPLATES: StudioTemplate[] = [
   {
@@ -413,6 +421,8 @@ export const STUDIO_TEMPLATES: StudioTemplate[] = [
       height: 600,
       engine: "1",
       achievements: [{ id: "ten_beeps", name: "Beep Boop", description: "Beep ten times" }],
+      controls: "Move the dot and beep. Remap keys with ⌨.",
+      actions: [...MOVEMENT(), { id: "beep", name: "Beep", keys: ["Space"], gamepad: ["A"] }],
     },
     files: { "main.js": BLANK_MAIN },
   },
@@ -430,6 +440,8 @@ export const STUDIO_TEMPLATES: StudioTemplate[] = [
         { id: "first_blood", name: "First Blood", description: "Destroy your first rock" },
         { id: "rock_breaker", name: "Rock Breaker", description: "Destroy 50 rocks in one run" },
       ],
+      controls: "Hold the mouse or touch to steer and fire. Remap keys with ⌨.",
+      actions: [...MOVEMENT(), { id: "fire", name: "Fire", keys: ["Space", "KeyJ"], gamepad: ["A", "RT"] }],
     },
     files: { "main.js": SHOOTER_MAIN },
   },
@@ -447,6 +459,13 @@ export const STUDIO_TEMPLATES: StudioTemplate[] = [
         { id: "shiny", name: "Shiny!", description: "Collect your first coin" },
         { id: "completionist", name: "Completionist", description: "Collect every coin" },
       ],
+      controls: "Collect every coin as fast as you can. Remap keys with ⌨.",
+      actions: [
+        { ...MOVE_LEFT, keys: [...MOVE_LEFT.keys], gamepad: [...MOVE_LEFT.gamepad] },
+        { ...MOVE_RIGHT, keys: [...MOVE_RIGHT.keys], gamepad: [...MOVE_RIGHT.gamepad] },
+        { id: "jump", name: "Jump", keys: ["Space", "ArrowUp", "KeyW"], gamepad: ["A"] },
+        { id: "restart", name: "Play again", keys: ["KeyR"], gamepad: ["Start"] },
+      ],
     },
     files: { "main.js": PLATFORMER_MAIN },
   },
@@ -462,6 +481,8 @@ export const STUDIO_TEMPLATES: StudioTemplate[] = [
       engine: "1",
       leaderboard: { order: "asc", format: "time", label: "Best time" },
       achievements: [],
+      controls: "Pass the gates in order; the clock starts when you move. Remap keys with ⌨.",
+      actions: [...MOVEMENT(), { id: "restart", name: "Race again", keys: ["KeyR", "Space"], gamepad: ["Start"] }],
     },
     files: { "main.js": TIME_TRIAL_MAIN },
   },

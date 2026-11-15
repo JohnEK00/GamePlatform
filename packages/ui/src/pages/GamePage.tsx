@@ -15,6 +15,7 @@ import { ScreenshotGallery } from "../components/ScreenshotGallery";
 import { ReleaseNotesField } from "../components/ReleaseNotesField";
 import { useModal } from "../components/useModal";
 import { VersionHistory } from "../components/VersionHistory";
+import { ControlsSummary } from "../components/ControlsSummary";
 import { ReportButton } from "../components/Report";
 import { useAuth } from "../context/auth";
 import { Leaderboard } from "../components/Leaderboard";
@@ -435,6 +436,7 @@ export function GamePage() {
         ) : (
           <p className="pf-muted">No description provided.</p>
         )}
+        <ControlsSummary game={game} />
         <VersionHistory game={game} onUpdated={(g) => setData(g)} />
         {(!game.achievements || game.achievements.length > 0) && <GameAchievements gameId={game.id} refreshKey={achKey} />}
         <ScreenshotGallery game={game} onGameUpdated={(g) => setData(g)} />

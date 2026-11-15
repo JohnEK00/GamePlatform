@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isApiError } from "../api/client";
 import type { Game, Score, ScoreSubmitResult, UnlockAchievementResponse } from "../api/types";
@@ -10,6 +10,19 @@ import { Spinner } from "./common";
 import { AchievementIcon } from "./Achievements";
 import { ScreenshotTray } from "./ScreenshotTray";
 import { useScreenshotCapture } from "./useScreenshotCapture";
+import { ControlsPanel } from "./ControlsPanel";
+import { usePauseReasons } from "./usePauseReasons";
+import {
+  controlsMessage,
+  hasControls,
+  normalizeActions,
+  PLAYER_CONTROLS_EVENT,
+  readOverrides,
+  subscribeOverrides,
+  takeControlsHint,
+  useStoredOverrides,
+  writeOverrides,
+} from "../controls";
 import {
   GAME_LEADERBOARD_MAX_LIMIT,
   isRequestId,
@@ -22,7 +35,10 @@ import {
 } from "../leaderboard";
 
 export type GamePlayerGame = Pick<Game, "id" | "title" | "width" | "height"> &
-  Partial<Pick<Game, "playUrl" | "version" | "published" | "isOwner" | "leaderboard">>;
+  Partial<Pick<Game, "playUrl" | "version" | "published" | "isOwner" | "leaderboard" | "actions" | "controlsHint">>;
+
+/** F009: how long the one-time "See and change the controls" hint stays up. */
+export const CONTROLS_HINT_MS = 8000;
 
 export type GamePlayerProps = {
   game: GamePlayerGame;
@@ -201,13 +217,20 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
   const [fullscreen, setFullscreen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const playRecorded = useRef(false);
-  const pausedByVisibility = useRef(false);
   // F005: 📷 requests, game shares, PLAYER_SCREENSHOT_EVENT and the in-memory tray.
   const shots = useScreenshotCapture(iframeRef, { mode: "player", title: game.title, ready: ready && !error });
 
+  // F009: declared actions (defaults), the hint, on-device overrides and the ⌨ panel.
+  const defaults = useMemo(() => normalizeActions(game.actions), [game.actions]);
+  const controlsHint = (game.controlsHint ?? "").trim();
+  const showControls = hasControls(defaults, controlsHint);
+  const overrides = useStoredOverrides(game.id);
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [controlsHinting, setControlsHinting] = useState(false);
+
   // Latest values for the message handler without re-subscribing.
-  const latest = useRef({ user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game });
-  latest.current = { user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game };
+  const latest = useRef({ user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game, defaults, showControls, controlsOpen });
+  latest.current = { user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game, defaults, showControls, controlsOpen };
   /** Achievement ids already sent (or being sent) by this player instance. */
   const unlocked = useRef(new Set<string>());
   /**
@@ -378,7 +401,16 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
         case "webgame:hello": {
           // Reply directly to the verified source (the game frame); opaque origin => "*".
           const source = event.source as Window;
-          const reply = (d: Record<string, unknown> | null) => source.postMessage({ type: "webgame:load", data: d }, "*");
+          let controlsSent = false;
+          const reply = (d: Record<string, unknown> | null) => {
+            source.postMessage({ type: "webgame:load", data: d }, "*");
+            // F009: right after the first load reply to each hello (restarts too). Reads the latest actions and
+            // overrides when it runs, which may be after the cloud-load timeout.
+            if (controlsSent) return;
+            controlsSent = true;
+            const { defaults: d0, game: g0 } = latest.current;
+            if (d0.length > 0) source.postMessage(controlsMessage(d0, readOverrides(g0.id)), "*");
+          };
           const st = cloud.current;
           const best = (): Record<string, unknown> | null => {
             if (st.status === "done" && st.data && !st.savedSinceFetch) {
@@ -475,6 +507,8 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
         case "webgame:ready": {
           setReady(true);
           setError(null);
+          // F009: the one-time "See and change the controls" hint (games with actions only).
+          if (latest.current.defaults.length > 0 && !latest.current.controlsOpen && takeControlsHint(g.id)) setControlsHinting(true);
           if (playRecorded.current) return;
           playRecorded.current = true;
           api.recordPlay(g.id).then(
@@ -597,20 +631,45 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
     return () => window.removeEventListener("message", onMessage);
   }, [api, toast, navigate]);
 
-  // Pause when the tab is hidden, resume when visible again.
+  // Parent pause reasons (F009): the tab is hidden and/or the controls panel is open. Pause when the set becomes
+  // non-empty, resume only when it is empty again.
+  const setPause = usePauseReasons(post);
+  const wasControlsOpen = useRef(false);
   useEffect(() => {
-    const onVis = () => {
-      if (document.hidden) {
-        pausedByVisibility.current = true;
-        post({ type: "webgame:pause" });
-      } else if (pausedByVisibility.current) {
-        pausedByVisibility.current = false;
-        post({ type: "webgame:resume" });
-      }
+    setPause("controls", controlsOpen);
+    if (controlsOpen) setControlsHinting(false);
+    else if (wasControlsOpen.current) iframeRef.current?.focus(); // keys go back to the game
+    wasControlsOpen.current = controlsOpen;
+  }, [controlsOpen, setPause]);
+
+  useEffect(() => {
+    if (!showControls) setControlsOpen(false);
+  }, [showControls]);
+
+  // F009: every override change (this panel, another tab) goes to the running game at once.
+  useEffect(
+    () =>
+      subscribeOverrides(game.id, (o) => {
+        const d = latest.current.defaults;
+        if (d.length > 0) post(controlsMessage(d, o));
+      }),
+    [game.id, post],
+  );
+
+  // F009: hosts (desktop View → Controls) open the panel with a window event.
+  useEffect(() => {
+    const onOpen = () => {
+      if (latest.current.showControls) setControlsOpen(true);
     };
-    document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
-  }, [post]);
+    window.addEventListener(PLAYER_CONTROLS_EVENT, onOpen);
+    return () => window.removeEventListener(PLAYER_CONTROLS_EVENT, onOpen);
+  }, []);
+
+  useEffect(() => {
+    if (!controlsHinting) return;
+    const t = setTimeout(() => setControlsHinting(false), CONTROLS_HINT_MS);
+    return () => clearTimeout(t);
+  }, [controlsHinting]);
 
   useEffect(() => {
     const onFs = () => setFullscreen(document.fullscreenElement === wrapRef.current && !!wrapRef.current);
@@ -696,6 +755,29 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           <button type="button" className="pf-iconbtn" onClick={() => setReloadKey((k) => k + 1)} aria-label="Restart game" title="Restart">
             ↻
           </button>
+          {showControls && (
+            <span className="pf-player__ctrl">
+              <button
+                type="button"
+                className="pf-iconbtn"
+                onClick={() => setControlsOpen(true)}
+                aria-haspopup="dialog"
+                aria-expanded={controlsOpen}
+                aria-label="Controls"
+                title="Controls"
+              >
+                ⌨
+              </button>
+              {controlsHinting && (
+                <span className="pf-controls-hint" role="status">
+                  <span>See and change the controls</span>
+                  <button type="button" className="pf-controls-hint__close" aria-label="Dismiss" onClick={() => setControlsHinting(false)}>
+                    ×
+                  </button>
+                </span>
+              )}
+            </span>
+          )}
           <button type="button" className="pf-iconbtn" onClick={toggleMute} aria-pressed={muted} aria-label={muted ? "Unmute" : "Mute"} title={muted ? "Unmute" : "Mute"}>
             {muted ? "🔇" : "🔊"}
           </button>
@@ -730,6 +812,18 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
         onClear={shots.clear}
         onGameUpdated={onGameUpdated}
       />
+      {controlsOpen && showControls && (
+        // Inside the player wrapper so it also shows in fullscreen.
+        <ControlsPanel
+          mode="player"
+          title={game.title}
+          hint={controlsHint}
+          actions={defaults}
+          overrides={overrides}
+          onChange={(o) => writeOverrides(game.id, o, defaults)}
+          onClose={() => setControlsOpen(false)}
+        />
+      )}
     </div>
   );
 }

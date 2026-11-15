@@ -46,6 +46,24 @@ if (result?.personalBest) this.banner = "NEW BEST! #" + result.ranks.day + " tod
 const board = await engine.platform.getLeaderboard({ period: "week", limit: 5 });
 if (board) this.rows = board.entries.map((e) => (e.isMe ? "> " : "") + e.rank + ". " + e.name + "  " + e.display);`;
 
+const ACTIONS_JSON = `"controls": "Aim with the mouse. Remap keys with ⌨.",
+"actions": [
+  { "id": "left",  "name": "Move left",  "keys": ["ArrowLeft", "KeyA"], "gamepad": ["Left"] },
+  { "id": "right", "name": "Move right", "keys": ["ArrowRight", "KeyD"], "gamepad": ["Right"] },
+  { "id": "jump",  "name": "Jump",       "keys": ["Space", "ArrowUp", "KeyW"], "gamepad": ["A"] },
+  { "id": "fire",  "name": "Fire",       "keys": ["Mouse0", "KeyZ"] }
+]`;
+
+const ACTIONS_JS = `update(engine, dt) {
+  const { input } = engine;
+  this.x += input.axis("horizontal") * 200 * dt;   // follows "left" / "right"
+  if (input.actionPressed("jump")) this.jump();
+  if (input.actionDown("fire")) this.fire();
+},
+render(engine) {
+  engine.renderer.drawText("Press " + engine.input.actionLabel("jump") + " to start", 20, 20);
+}`;
+
 function Code({ children, label }: { children: string; label: string }) {
   return (
     <figure className="pf-code">
@@ -172,6 +190,13 @@ export function DocsPage() {
               <code>isDown(key)</code>, <code>wasPressed</code>, <code>wasReleased</code> (KeyboardEvent.code, e.g. <code>"ArrowLeft"</code>
               , <code>"Space"</code>), <code>mouse</code>, <code>touches</code>, <code>gamepad(i)</code>,{" "}
               <code>axis("horizontal" | "vertical")</code>
+            </p>
+          </div>
+          <div className="pf-panel">
+            <h3>actions &amp; remapping</h3>
+            <p>
+              <code>actionDown(id)</code>, <code>actionPressed</code>, <code>actionReleased</code>, <code>actionLabel(id)</code> for
+              prompts, <code>actions</code>. Declared in <code>game.json</code>; players remap them (see 15).
             </p>
           </div>
           <div className="pf-panel">
@@ -413,6 +438,37 @@ const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
           <li>
             Posted screenshots are public, so never draw secrets (codes, tokens) on a frame you pass to{" "}
             <code>shareScreenshot</code>.
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>15. Actions and remapping</h2>
+        <p>
+          Declare the keys your game uses as named <strong>actions</strong>. Players see them under <strong>⌨</strong> in the
+          player and on your game page, and can remap the keys (up to 3 per action). Their changes reach your running game at
+          once and are saved on their device.
+        </p>
+        <Code label="game.json">{ACTIONS_JSON}</Code>
+        <Code label="main.js">{ACTIONS_JS}</Code>
+        <ul>
+          <li>
+            <code>id</code> is a–z, 0–9, <code>_</code> and <code>-</code> (up to 32 chars); <code>name</code> is 1–40 chars; up to
+            3 <code>keys</code> (<code>KeyboardEvent.code</code> values, or <code>Mouse0</code>–<code>Mouse2</code>) and 2{" "}
+            <code>gamepad</code> buttons, at least one binding in all. Up to 32 actions. <code>Escape</code>, <code>Tab</code>,
+            F-keys and system keys can't be bound. Invalid actions make the upload fail with a message naming the entry.
+          </li>
+          <li>
+            Name movement actions <code>left</code>, <code>right</code>, <code>up</code> and <code>down</code>: <code>axis()</code>{" "}
+            then follows the player's bindings.
+          </li>
+          <li>
+            Read actions, not raw codes: <code>isDown("Space")</code> still reports the physical key and ignores remapping. Use{" "}
+            <code>actionLabel</code> in prompts so they show the player's key (US-layout names).
+          </li>
+          <li>
+            Keep the free-text <code>"controls"</code> string (up to 300 chars) for what actions can't describe, like mouse aiming
+            or touch. It is shown next to the action list.
           </li>
         </ul>
       </section>
