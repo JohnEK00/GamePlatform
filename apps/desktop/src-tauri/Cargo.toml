@@ -29,3 +29,11 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+# Keep debug builds small on disk: line tables keep readable backtraces,
+# dependencies carry no debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
