@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { commentPermalink } from "../api/comments";
 import { useResolveUrl } from "../context/config";
 import type { Report, ReportAction, ReportStatus } from "../api/types";
 import { useApi } from "../context/config";
@@ -35,7 +36,7 @@ const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => s
         ? "The game, its files, ratings, comments and scores are removed permanently."
         : r.targetType === "screenshot"
           ? "The screenshot and its files are removed permanently."
-          : "The comment is removed permanently.",
+          : "The comment is removed permanently, together with any replies to it.",
     danger: true,
   },
 };
@@ -104,8 +105,9 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
         ) : (
           <>
             <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>
-            <Link to={`/games/${report.targetGameId}`} className="pf-small">
-              View the game →
+            {/* F006: the permalink opens the game page with the comment (or reply) highlighted and focused. */}
+            <Link to={commentPermalink(report.targetGameId, report.targetId)} className="pf-small">
+              View in context →
             </Link>
           </>
         )}

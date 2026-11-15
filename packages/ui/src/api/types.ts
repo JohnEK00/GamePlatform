@@ -137,13 +137,51 @@ export type FeedUpdate = {
 
 export type Page<T> = { items: T[]; total: number; page: number; perPage: number };
 
+/**
+ * F006 fields (`parentId` … `canDelete`) are on every comment newer servers return. Older servers omit them:
+ * read them through `normalizeComment` (null / 0 / false defaults).
+ */
 export type Comment = {
   id: string;
   gameId: string;
   author: UserRef;
   body: string;
   createdAt: string;
+  /** F006: null = top-level; otherwise always the id of a top-level comment (one level of nesting). */
+  parentId: string | null;
+  /** F006: replies only, the author of the reply that was answered; null otherwise or if that user was deleted. */
+  replyTo: UserRef | null;
+  /** F006: the author is the game's current owner. */
+  isCreator: boolean;
+  /** F006: distinct users who hearted this comment. */
+  hearts: number;
+  /** F006: the viewer hearted it (false when anonymous). */
+  myHeart: boolean;
+  /** F006: the game's current owner hearted it. */
+  creatorHeart: boolean;
+  /** F006: the viewer may delete it (author, game owner or admin; false when anonymous). */
+  canDelete: boolean;
 };
+
+/** F006: a top-level comment with a preview of its replies. */
+export type CommentThread = Comment & {
+  /** All replies in the thread. Older servers omit it (treat as 0). */
+  replyCount: number;
+  /** The oldest replies, oldest first, at most 3. Older servers omit it (treat as []). */
+  replies: Comment[];
+};
+
+/** F006: `GET /api/games/{id}/comments`. `total` counts top-level comments only. */
+export type CommentListPage = Page<CommentThread> & {
+  /** Comments + replies on the game. Older servers omit it (treat as `total`). */
+  totalAll: number;
+};
+
+/** F006: `GET /api/comments/{id}`. `thread.id === comment.id` when the comment is top-level. */
+export type CommentContext = { comment: Comment; thread: CommentThread };
+
+/** F006: `PUT` / `DELETE /api/comments/{id}/heart`. */
+export type HeartResponse = { hearted: boolean; hearts: number; creatorHeart: boolean };
 
 export type Score = {
   id: string;

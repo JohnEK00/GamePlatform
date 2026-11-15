@@ -5,6 +5,8 @@ export type { WebGameAppProps } from "./WebGameApp";
 // API
 export { ApiClient, ApiError, isApiError, buildQuery, resolveApiUrl, parseRetryAfter, rateLimitMessage, KEEPALIVE_MAX_BODY_BYTES } from "./api/client";
 export type { ApiClientOptions } from "./api/client";
+export { normalizeComment, normalizeThread, normalizeCommentListPage, commentPermalink } from "./api/comments";
+export type { RawComment, RawCommentThread } from "./api/comments";
 export type * from "./api/types";
 
 // Contexts / hooks
@@ -189,7 +191,14 @@ export {
   sliceLeaderboardView,
 } from "./leaderboard";
 export type { LeaderboardView, LeaderboardViewEntry, ScoreResultView } from "./leaderboard";
-export { Comments } from "./components/Comments";
+export { Comments, REPLIES_PER_PAGE } from "./components/Comments";
+export type { CommentsProps } from "./components/Comments";
+export { CommentItem } from "./components/CommentItem";
+export type { CommentItemProps } from "./components/CommentItem";
+export { CommentForm, COMMENT_MAX_LENGTH } from "./components/CommentForm";
+export type { CommentFormProps } from "./components/CommentForm";
+export { HeartButton } from "./components/HeartButton";
+export type { HeartButtonProps, HeartState } from "./components/HeartButton";
 export { FileDrop } from "./components/FileDrop";
 export type { FileDropProps } from "./components/FileDrop";
 export { Layout, Header, Footer, Logo, RequireAuth } from "./components/Layout";

@@ -351,7 +351,10 @@ export function GamePage() {
   const [achKey, setAchKey] = useState(0);
   useDocumentTitle(game?.title);
   const location = useLocation();
-  const wantsVersions = new URLSearchParams(location.search).get("section") === VERSIONS_SECTION;
+  const searchParams = new URLSearchParams(location.search);
+  const wantsVersions = searchParams.get("section") === VERSIONS_SECTION;
+  // F006: `?comment={id}` permalinks (a query, so it works under the desktop HashRouter).
+  const focusCommentId = searchParams.get("comment") || null;
   const gameLoaded = !!game && game.id === id;
 
   // F004: `?section=versions` (feed links; works under HashRouter, unlike a #hash) scrolls to "What's new".
@@ -440,7 +443,7 @@ export function GamePage() {
         <VersionHistory game={game} onUpdated={(g) => setData(g)} />
         {(!game.achievements || game.achievements.length > 0) && <GameAchievements gameId={game.id} refreshKey={achKey} />}
         <ScreenshotGallery game={game} onGameUpdated={(g) => setData(g)} />
-        <Comments gameId={game.id} isGameOwner={game.isOwner} />
+        <Comments gameId={game.id} isGameOwner={game.isOwner} focusCommentId={focusCommentId} />
       </div>
       <aside className="pf-gamepage__side">
         {game.isOwner && <OwnerActions game={game} onUpdated={(g) => setData(g)} onReload={refetch} />}

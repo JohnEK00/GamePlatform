@@ -3,6 +3,8 @@ import type {
   AuthResponse,
   CloudSave,
   Comment,
+  CommentContext,
+  CommentListPage,
   CreateGameInput,
   CreateReportRequest,
   CreatorStats,
@@ -16,6 +18,7 @@ import type {
   GameAchievement,
   GameStats,
   GameVersion,
+  HeartResponse,
   ListReportsQuery,
   PutSaveResponse,
   Report,
@@ -393,11 +396,40 @@ export class ApiClient {
   clearRating(id: string): Promise<RatingResponse> {
     return this.request(`/api/games/${encodeURIComponent(id)}/rating`, { method: "DELETE" });
   }
-  listComments(id: string, query: PageQuery = {}): Promise<Page<Comment>> {
+  /**
+   * F006: top-level comments (newest first) with up to 3 replies each. `total` counts threads, `totalAll`
+   * everything. Older servers omit the F006 fields; read the result through `normalizeCommentListPage`.
+   */
+  listComments(id: string, query: PageQuery = {}): Promise<CommentListPage> {
     return this.request(`/api/games/${encodeURIComponent(id)}/comments`, { query });
   }
-  postComment(id: string, body: string): Promise<Comment> {
-    return this.request(`/api/games/${encodeURIComponent(id)}/comments`, { method: "POST", json: { body } });
+  /** F006: `parentId` (a top-level comment or a reply on the same game) posts a reply; omitted when not given. */
+  postComment(id: string, body: string, parentId?: string | null): Promise<Comment> {
+    const json = parentId ? { body, parentId } : { body };
+    return this.request(`/api/games/${encodeURIComponent(id)}/comments`, { method: "POST", json });
+  }
+  /** F006: a comment (top-level or reply) with its thread, for permalinks. */
+  getComment(commentId: string, signal?: AbortSignal): Promise<CommentContext> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}`, { signal });
+  }
+  /** F006: a thread's replies, oldest first; server default 50 per page (1–100). `total` = the thread's reply count. */
+  listReplies(commentId: string, query: PageQuery = {}, signal?: AbortSignal): Promise<Page<Comment>> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/replies`, {
+      query: { page: query.page, perPage: query.perPage },
+      signal,
+    });
+  }
+  /** F006: heart a comment (idempotent). */
+  heartComment(commentId: string): Promise<HeartResponse> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/heart`, { method: "PUT" });
+  }
+  /** F006: remove the viewer's heart (idempotent). */
+  unheartComment(commentId: string): Promise<HeartResponse> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/heart`, { method: "DELETE" });
+  }
+  /** F006 convenience: PUT or DELETE depending on `heart`. */
+  setCommentHeart(commentId: string, heart: boolean): Promise<HeartResponse> {
+    return heart ? this.heartComment(commentId) : this.unheartComment(commentId);
   }
   deleteComment(commentId: string): Promise<void> {
     return this.request(`/api/comments/${encodeURIComponent(commentId)}`, { method: "DELETE" });
