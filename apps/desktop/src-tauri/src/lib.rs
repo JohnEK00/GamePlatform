@@ -190,6 +190,7 @@ pub fn run() {
         .manage(project::OpenProjects::default())
         .manage(project::ProjectFolders::default())
         .manage(menu::FullscreenToggle::default())
+        .manage(save::LastImageDir::default())
         .menu(|app| menu::build(app))
         .on_menu_event(menu::handle)
         .invoke_handler(tauri::generate_handler![
