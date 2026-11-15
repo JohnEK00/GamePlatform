@@ -492,3 +492,171 @@ Comment replies and reactions (spec: `docs/features/F006-comment-replies-and-rea
 - **Permalinks.** `?comment={id}` on the game page (a query string, so it works under the desktop HashRouter, like F004's `?section=versions`). The UI resolves it with `GET /api/comments/{id}`.
 - **UI**: `Comments.tsx` is split into `Comments` (state), `CommentItem`, `CommentForm` and `HeartButton`. Threads are nested `<ul>`s of `<article>`s (spec § 2.6), not an ARIA tree.
 - **Ownership**: the migration, `routes/comments.rs`, the hearts handlers, `Limit::Heart` and the `reports.rs` change belong to backend-dev. The four components, the client and types, `GamePage`/`AdminPage` changes and styles belong to frontend-dev. Desktop has no code changes.
+
+
+## F007 additions
+In-app notifications (spec: `docs/features/F007-in-app-notifications.md`).
+- **Fan-out on write, unlike the F002 feed.** The feed is fan-out on read: one `activity_events` row per action, selected through the viewer's follows at read time. Notifications are written per recipient instead (one row per recipient and group), because:
+  1. Each notification has **per-recipient state** (read/unread, coalescing that stops once read). Storing that against a shared event would need a per-recipient table anyway.
+  2. **Recipients per event are few and known at write time** for four of the five kinds (the game owner, the thread author and `replyTo` user, the comment author, the followee). The write is one or two small upserts.
+  3. The **unread count is polled** by every signed-in tab about once a minute. With per-recipient rows it is an index-prefix count; computing it on read would repeat the feed's follow/favorite joins plus read-state joins on every poll.
+  4. **Coalescing** ("Mia and 3 others…") is a property of one recipient's unread state, which a shared event row can't express.
+  The one wide kind is `gamePublished` (every follower of the owner). It fires at most once per game ever (the F002 `first_published_at` condition), and creating games is limited to 20/hour, so its total volume is bounded by games × followers. It is written in chunks of ≤ 500 recipients per transaction after the publish has committed, so the SQLite write lock is never held for long. If follower counts grow large, this is the step to move to a background task.
+- **Groups and events.** A `notifications` row is a group (recipient, kind, `group_key`) with read state and timestamps. Each contributing action is a `notification_events` row (actor, optional comment). Counts, actors and the target comment are derived from the events at read time, so:
+  - deleting a comment cascades its events away and the group shows what remains (or disappears when nothing remains);
+  - an un-heart or unfollow can retract exactly one actor's event;
+  - there are no counters to keep in sync.
+  `group_key` values (built in Rust, never from input): `game:{gameId}` (`comment`, `gamePublished`), `thread:{rootCommentId}` (`reply`), `comment:{commentId}` (`heart`), `follow` (`follow`).
+- **Data**: migration `backend/migrations/0013_f007.sql` runs after F006's `0012_f006.sql`:
+  ```sql
+  CREATE TABLE notifications (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,      -- Notification.id; stable
+      recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind         TEXT NOT NULL CHECK (kind IN ('comment','reply','heart','follow','gamePublished')),
+      group_key    TEXT NOT NULL,
+      game_id      TEXT REFERENCES games(id) ON DELETE CASCADE,      -- NULL only for 'follow'
+      comment_id   TEXT REFERENCES comments(id) ON DELETE CASCADE,   -- 'heart': the hearted comment; 'reply': the thread root; else NULL
+      read_at      TEXT,                                   -- NULL = unread; RFC3339 millis Z
+      created_at   TEXT NOT NULL,                          -- first event
+      updated_at   TEXT NOT NULL                           -- latest event (ordering key)
+  );
+  -- At most one UNREAD group per (recipient, kind, group): the upsert's conflict target, and the unread count's index.
+  CREATE UNIQUE INDEX idx_notifications_open_group ON notifications(recipient_id, kind, group_key) WHERE read_at IS NULL;
+  CREATE INDEX idx_notifications_group             ON notifications(recipient_id, kind, group_key);   -- dedupe across read states
+  CREATE INDEX idx_notifications_recipient_updated ON notifications(recipient_id, updated_at DESC, id DESC);
+  CREATE INDEX idx_notifications_game     ON notifications(game_id)    WHERE game_id IS NOT NULL;     -- game delete cascade
+  CREATE INDEX idx_notifications_comment  ON notifications(comment_id) WHERE comment_id IS NOT NULL;  -- comment delete cascade
+  CREATE INDEX idx_notifications_read_at  ON notifications(read_at)    WHERE read_at IS NOT NULL;     -- pruning
+  CREATE INDEX idx_notifications_updated  ON notifications(updated_at);                               -- pruning
+
+  CREATE TABLE notification_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      notification_id INTEGER NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+      actor_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      comment_id      TEXT REFERENCES comments(id) ON DELETE CASCADE,   -- 'comment'/'reply': the new comment; else NULL
+      created_at      TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX idx_notification_events_dedupe  ON notification_events(notification_id, actor_id, IFNULL(comment_id, ''));
+  CREATE INDEX idx_notification_events_actor          ON notification_events(actor_id);                               -- user delete cascade
+  CREATE INDEX idx_notification_events_comment        ON notification_events(comment_id) WHERE comment_id IS NOT NULL; -- comment delete cascade
+
+  CREATE TABLE notification_settings (            -- no row = everything on
+      user_id    TEXT PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      comments   INTEGER NOT NULL DEFAULT 1 CHECK (comments  IN (0, 1)),
+      replies    INTEGER NOT NULL DEFAULT 1 CHECK (replies   IN (0, 1)),
+      hearts     INTEGER NOT NULL DEFAULT 1 CHECK (hearts    IN (0, 1)),
+      follows    INTEGER NOT NULL DEFAULT 1 CHECK (follows   IN (0, 1)),
+      new_games  INTEGER NOT NULL DEFAULT 1 CHECK (new_games IN (0, 1)),
+      updated_at TEXT NOT NULL
+  );
+  ```
+  No backfill: notifications start at the migration. The comment-delete cascades (F006 `remove_comment`, admin resolve) need the two `comment_id` indexes, or every comment delete would scan the notification tables.
+- **Write path** (`backend/src/notifications.rs`, best effort like `activity.rs`: nested transaction / SAVEPOINT, `tracing::warn!` on failure, never fails the request). Normative statements; `{col}` is the kind's settings column from a fixed Rust `match`:
+  ```sql
+  -- 1. dedupe (heart, follow only): skip when this actor already has an event in any group row
+  SELECT EXISTS (SELECT 1 FROM notifications n JOIN notification_events e ON e.notification_id = n.id
+                 WHERE n.recipient_id = ?1 AND n.kind = ?2 AND n.group_key = ?3 AND e.actor_id = ?4);
+
+  -- 2. join the unread group or open a new one; settings checked in the same statement.
+  --    (The WHERE clause also resolves SQLite's INSERT … SELECT … ON CONFLICT parsing ambiguity.)
+  INSERT INTO notifications (recipient_id, kind, group_key, game_id, comment_id, created_at, updated_at)
+  SELECT ?1, ?2, ?3, ?5, ?6, ?7, ?7
+  WHERE NOT EXISTS (SELECT 1 FROM notification_settings s WHERE s.user_id = ?1 AND s.{col} = 0)
+  ON CONFLICT (recipient_id, kind, group_key) WHERE read_at IS NULL
+  DO UPDATE SET updated_at = excluded.updated_at
+  RETURNING id;                                         -- no row: the kind is muted, stop
+
+  -- 3. the event
+  INSERT OR IGNORE INTO notification_events (notification_id, actor_id, comment_id, created_at) VALUES (?, ?, ?, ?);
+
+  -- retraction (un-heart, unfollow): only from the unread group
+  DELETE FROM notification_events
+   WHERE actor_id = ?4
+     AND notification_id IN (SELECT id FROM notifications
+                             WHERE recipient_id = ?1 AND kind = ?2 AND group_key = ?3 AND read_at IS NULL);
+  ```
+  Steps 1–3 run in one nested transaction per recipient, so a committed group row always has at least one event. Marking a row read takes it out of the partial unique index, which is what makes the next event open a new group.
+- **Hook points**: `routes/comments.rs` `create_comment` (comment/reply) and `heart`/`unheart` (the F006 `// F007:` markers), `routes/follows.rs` `put_follow`/`delete_follow` (only when a row was inserted/deleted), and `routes/games.rs` create + `PATCH` first publish (fan-out after `tx.commit()`). Recipient selection follows API § F007 "Triggers and recipients", which supersedes the "recommended recipients" note in § F006 (all hearts notify, coalesced, not only creator hearts).
+- **Read shape** (normative; `?1` = recipient, `?2` = 1 for `unread=true`, `?3`/`?4` = cursor `updatedAt`/`id` or NULL, `?5` = limit + 1):
+  ```sql
+  SELECT n.id, n.kind, n.group_key, n.game_id, n.comment_id, n.read_at, n.created_at, n.updated_at,
+         g.title, g.owner_id /* + the columns GAME_SELECT uses for thumbnailUrl */,
+         EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id AND e.actor_id = g.owner_id) AS creator_heart
+  FROM notifications n
+  LEFT JOIN games g ON g.id = n.game_id
+  WHERE n.recipient_id = ?1
+    AND (n.game_id IS NULL OR g.published = 1 OR g.owner_id = ?1)
+    AND EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id)
+    AND (?2 = 0 OR n.read_at IS NULL)
+    AND (?3 IS NULL OR n.updated_at < ?3 OR (n.updated_at = ?3 AND n.id < ?4))
+  ORDER BY n.updated_at DESC, n.id DESC
+  LIMIT ?5
+  ```
+  Then, batched over the page's ids (never one query per row):
+  ```sql
+  -- counts
+  SELECT notification_id, COUNT(*) AS events, COUNT(DISTINCT actor_id) AS actors
+  FROM notification_events WHERE notification_id IN (/* ids */) GROUP BY notification_id;
+  -- up to 3 most recent distinct actors
+  SELECT notification_id, actor_id FROM (
+      SELECT notification_id, actor_id,
+             ROW_NUMBER() OVER (PARTITION BY notification_id ORDER BY MAX(created_at) DESC, actor_id) AS rn
+      FROM notification_events WHERE notification_id IN (/* ids */) GROUP BY notification_id, actor_id)
+  WHERE rn <= 3;
+  -- newest comment of comment/reply groups
+  SELECT notification_id, comment_id FROM (
+      SELECT notification_id, comment_id,
+             ROW_NUMBER() OVER (PARTITION BY notification_id ORDER BY created_at DESC, id DESC) AS rn
+      FROM notification_events WHERE notification_id IN (/* comment/reply ids */) AND comment_id IS NOT NULL)
+  WHERE rn = 1;
+  -- excerpts and thread authors (substr counts characters on TEXT)
+  SELECT id, user_id, substr(body, 1, 140) FROM comments WHERE id IN (/* target comment ids + reply roots */);
+  ```
+  plus one `users` query for the actors' `UserRef`s and the recipient's username (for the `follow` path). `creatorHeart` = `creator_heart` for `heart` rows and `false` for every other kind. `ownsThread` = the root comment's `user_id` equals the recipient. The cursor is `"{updatedAt}|{id}"`, base64url-encoded; it is opaque to clients.
+- **Count shape** (the poll; walks the partial unique index by its `recipient_id` prefix):
+  ```sql
+  SELECT COUNT(*), MAX(updated_at) FROM (
+      SELECT n.updated_at FROM notifications n LEFT JOIN games g ON g.id = n.game_id
+      WHERE n.recipient_id = ?1 AND n.read_at IS NULL
+        AND (n.game_id IS NULL OR g.published = 1 OR g.owner_id = ?1)
+        AND EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id)
+      ORDER BY n.updated_at DESC LIMIT 100)
+  ```
+- **Mark read**: `UPDATE notifications SET read_at = ?now WHERE recipient_id = ?1 AND read_at IS NULL AND updated_at <= ?upTo [AND id IN (…)]`. `upTo` is normalised in Rust to RFC3339 millis `Z` before the string comparison (all stored times use that format).
+- **Pruning** (`notifications::prune(pool, now)`, called from `trending::spawn_maintenance` at most once per hour; each statement is repeated while it deletes 1000 rows):
+  ```sql
+  DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE read_at IS NOT NULL AND read_at < ?30_days_ago LIMIT 1000);
+  DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE updated_at < ?90_days_ago LIMIT 1000);
+  DELETE FROM notifications WHERE id IN (SELECT n.id FROM notifications n
+      WHERE NOT EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id) LIMIT 1000);
+  DELETE FROM notifications WHERE id IN (SELECT id FROM (
+      SELECT id, ROW_NUMBER() OVER (PARTITION BY recipient_id ORDER BY updated_at DESC, id DESC) AS rn
+      FROM notifications) WHERE rn > 200 LIMIT 1000);
+  ```
+  The last two scan the table; at hourly cadence and with the 200-per-recipient cap that is acceptable at this platform's scale.
+- **Polling, not push.** The UI polls `GET /api/notifications/unread-count` (about 1/min per visible tab; cadence in the spec § 2.7, server-suggested via `pollAfterSecs`).
+  - **No websockets or SSE.** They would need long-lived connections per tab, a broadcast layer inside the single axum process, proxy buffering configuration, and reconnection logic in two hosts. The rate limiter and auth are per request. A minute of latency is fine for this content.
+  - **No ETag / `If-None-Match`.** The count response is about 80 bytes, so a 304 saves almost nothing. `If-None-Match` is not a CORS-safelisted request header, so the desktop and dev origins would need a CORS change. The count query is an index-prefix scan capped at 100 rows. A dedicated count endpoint is the cheaper design.
+  - The list (`GET /api/notifications`) is fetched only when the panel or page is open, or when the desktop OS step needs the newest items.
+- **UI**:
+  - `NotificationsProvider` (in `WebGameProviders`, inside `AuthProvider`/`ToastProvider`) owns the poll loop, unread state, the polite live region and the OS notification step. `NotificationBell` sits in `Header` outside the collapsible nav. New route `/notifications` (auth). `src/notifications.ts` holds the normative summary text (spec § 2.5).
+  - **Host contract** (`PlatformConfig` in `packages/ui/src/context/config.tsx`; optional, so older hosts conform):
+    ```ts
+    type OsNotifications = {
+      isEnabled(): boolean;                                       // the user opted in on this device; checked before every use
+      show(n: { title: string; body: string }): Promise<void>;    // best effort; never rejects
+    }
+    type PlatformConfig = { ...F013, osNotifications?: OsNotifications }
+    ```
+    The UI decides *when* to show (window not focused, newer than the device watermark `webgame.notifications.osShown.{userId}`, at most 3 or one summary per poll) and *what* (summary text only, never excerpts). The host only displays.
+- **Desktop OS notifications** (desktop-dev):
+  - **Dependency decision.** `tauri-plugin-notification` (official, v2) is used from Rust only. Weighed against the alternatives:
+    - The Web Notification API inside the webview is not available in WKWebView (macOS), and its permission and behaviour in WebView2 and WebKitGTK differ per platform.
+    - Calling WinRT toasts, `NSUserNotification` and D-Bus ourselves would mean writing three per-OS backends, which is the plugin's job.
+    - The plugin pulls `notify-rust` (Linux/macOS: `zbus`, `mac-notification-sys`) and `tauri-winrt-notification` on Windows (which mostly reuses the `windows` crates already built for WebView2).
+  - **Disk.** The plugin is an **optional dependency behind the default-on Cargo feature `os-notifications`**, so space-constrained dev machines can build with `--no-default-features`. The dev profile already builds dependencies without debug info. desktop-dev records the measured `target/debug` delta in `apps/desktop/README.md`.
+  - **No npm package, no plugin permissions for the webview.** The webview calls three app commands in `src-tauri/src/notify.rs` (`os_notifications_status`, `request_os_notifications`, `show_os_notification`). `show_os_notification` sanitises (control and bidi characters), length-limits (title ≤ 64, body ≤ 240) and rate-limits (5 per 60 s) in Rust. `capabilities/default.json` gains no `notification:*` permission.
+  - **Opt-in.** Off by default, stored per device in `localStorage["webgame.desktop.osNotifications"] = "1"`, toggled in the desktop `extraSettings`, and OS permission is requested only when the user turns it on.
+  - OS notification clicks use the platform default (focus or open the app). The plugin has no desktop click callback, so there is no deep link.
+  - The native menu forwards a new `"notifications"` id (View → Notifications, `CmdOrCtrl+Shift+N`) → `/notifications`.
+- **Ownership**: the migration, `notifications.rs`, `routes/notifications.rs`, the hooks, `Limit::Notifications`, `NOTIFICATION_POLL_SECS` and pruning belong to backend-dev. `notifications.ts`, `context/notifications.tsx`, `NotificationBell`, `NotificationItem`, `NotificationsPage`, the settings fieldset, the `OsNotifications` type and styles belong to frontend-dev. `notify.rs`, the Cargo feature, `OsNotificationSetting.tsx`, the `platform.ts` implementation and the menu item belong to desktop-dev.

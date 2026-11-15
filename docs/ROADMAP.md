@@ -30,15 +30,16 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F005 | Screenshot capture and share | M | shipped |
 | F009 | Controls overlay and key remapping | M | shipped |
 | F006 | Comment replies and reactions | M | specced |
-| F007 | In-app notifications | M | proposed |
-| F012 | Engine bitmap fonts and 9-slice UI widgets | M | proposed |
+| F007 | In-app notifications | M | specced |
+| F017 | Creator comment tools: pin, lock and "top" sort | S | proposed |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
+| F012 | Engine bitmap fonts and 9-slice UI widgets | M | proposed |
 | F008 | Collections (curated game lists) | M | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
 | F016 | Gamepad remapping and synced control bindings | M | proposed |
-| F017 | Creator comment tools: pin, lock and "top" sort | S | proposed |
+| F018 | Notification controls: mute a game or thread, shared polling across tabs | S | proposed |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
@@ -101,10 +102,17 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0012_f006.sql`: `comments.parent_id`, `comments.reply_to_user_id`, `comment_hearts`; replies/heart/context endpoints; `Limit::Heart`; delete cascade + report resolution), frontend (threaded `Comments` split into `CommentItem`/`CommentForm`/`HeartButton`, permalinks, admin link, accessibility), desktop (verification only). No engine changes.
 - **Depends on**: nothing unshipped. Writes no F002 activity events; F007 consumes its hook points.
 
-### F007: In-app notifications (M, proposed; after F006; can reuse F002's `activity_events` and F006's hook points and `?comment=` permalinks)
-- **Pitch**: a bell menu listing new comments on your games, replies, new followers, and games from creators you follow. Desktop shows native OS notifications.
-- **User value**: creators notice feedback quickly, and players notice new content.
-- **Areas**: backend (notifications table, unread count), frontend (bell, list), desktop (native notifications via a Rust plugin).
+### F007: In-app notifications (M, specced → [spec](features/F007-in-app-notifications.md))
+- **Pitch**:
+  - A header bell with an unread count and a panel of the latest 10, plus a `/notifications` page (All/Unread, paging, "Mark all as read").
+  - Five kinds: comments on your games, replies in your threads or to you, hearts on your comments, new followers, and first publishes by creators you follow. Items link to F006 permalinks, the followers list or the game.
+  - Coalescing while unread ("Mia and 3 others hearted your comment"); hearts and follows notify once per actor, and an un-heart or unfollow retracts.
+  - Per-kind switches in Settings. Visibility is checked at read time, deletes cascade, and old rows are pruned (30 days after read, 90 days max, 200 per user).
+  - The client polls a small count endpoint (`pollAfterSecs`, default 60 s; paused in hidden tabs). No websockets.
+  - Desktop: opt-in native OS notifications (no comment text) via `tauri-plugin-notification`, used from Rust only and behind a default-on Cargo feature. View → Notifications.
+- **User value**: creators notice feedback quickly, F006 conversations get answered, and players hear about new games from creators they follow.
+- **Areas**: backend (migration `0013_f007.sql`: `notifications`, `notification_events`, `notification_settings`; `notifications.rs`; five endpoints; `Limit::Notifications`; hooks in comments/hearts/follows/publish; pruning), frontend (provider + poll loop, bell, page, settings, `OsNotifications` host contract), desktop (`notify.rs` commands, feature-gated plugin, settings toggle, menu item). No engine changes.
+- **Depends on**: F006 (hook points, permalinks). Fan-out on write per recipient, unlike the F002 feed (see ARCHITECTURE § F007).
 
 ### F015: Screenshots in the feed and on profiles (S, proposed; after F005)
 - **Pitch**: a new F002 feed kind `screenshotPosted` (coalesced per author, game and UTC day), and a "Screenshots" tab on profiles (`GET /api/users/{username}/screenshots`), with published games only.
@@ -155,3 +163,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: the game owner can pin one thread to the top of the comments and lock a thread against new replies, and players can sort threads by "Top" (hearts, then newest) instead of "Newest".
 - **User value**: creators can keep an FAQ or known-issues answer visible and stop a thread that has gone off the rails, and the most useful tips surface first.
 - **Areas**: backend (`games.pinned_comment_id`, `comments.locked`, `sort=top` on the list), frontend (owner menu on threads, sort toggle). No engine changes.
+
+### F018: Notification controls: mute a game or thread, shared polling across tabs (S, proposed; after F007)
+- **Pitch**: "Mute notifications for this game" (owners of busy games) and "Mute this thread" (players in long threads), stored per user and checked in the F007 upsert. Plus a `BroadcastChannel` leader tab, so only one tab per browser polls `unread-count` and the others receive the result.
+- **User value**: creators of popular games keep the bell useful, and heavy users with many tabs make fewer requests.
+- **Areas**: backend (`notification_mutes` table, two endpoints, a `NOT EXISTS` in the upsert), frontend (mute actions on the game page and threads, tab leader election in `NotificationsProvider`). No engine or desktop changes.

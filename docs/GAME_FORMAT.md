@@ -408,3 +408,7 @@ engine.input.keyLabel(code: string): string            // default label table; a
 Comment replies and reactions (spec: `docs/features/F006-comment-replies-and-reactions.md`). **No changes** to the bundle format, the engine API or the game ↔ parent messages. Games can neither read nor write comments, replies or hearts.
 
 - **Screenshot laundering, pre-decode check (review 3, M1):** before calling `createImageBitmap`, the parent sniffs the magic bytes (PNG, JPEG or WebP only) and reads the image dimensions from the header. It rejects any side outside 1–4096, more than 4096² pixels, and malformed or unknown headers. A share that fails laundering still uses its throttle slot (1 per 3000 ms).
+
+
+## F007 additions
+In-app notifications (spec: `docs/features/F007-in-app-notifications.md`). **No changes** to the bundle format, the engine API or the game ↔ parent messages. Games can neither read nor create notifications, and no notification data is ever posted into the game iframe. Desktop OS notifications are shown only by the parent app (through the `PlatformConfig.osNotifications` host contract), never by games.

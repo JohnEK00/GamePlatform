@@ -748,3 +748,127 @@ type HeartResponse = { hearted: boolean; hearts: number; creatorHeart: boolean }
 - Top-level comments and replies share `Limit::Comment`: 30 per 10 min, per user (unchanged).
 - Hearts (`PUT` and `DELETE …/heart`, shared bucket): **120 per 10 min, per user** (`Limit::Heart`). Over the limit → 429 `rate_limited` with `Retry-After`.
 - `GET /api/comments/{id}` and `/replies` are unlimited public reads, like the comment list. `DELETE /api/comments/{id}` is unlimited.
+
+
+---
+
+## F007 additions
+
+In-app notifications (spec: `docs/features/F007-in-app-notifications.md`). All earlier rules apply, including F002 (follows), F006 (comments, replies, hearts, permalinks) and the v2 error shape.
+
+### Types
+```ts
+type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished"
+
+type NotificationGame = { id: string; title: string; thumbnailUrl: string | null }
+
+type Notification = {
+  id: string;                     // decimal string; stable for the row's lifetime
+  kind: NotificationKind;
+  actors: UserRef[];              // 1–3 most recent distinct actors, newest first
+  actorCount: number;             // distinct actors in the group, >= 1
+  eventCount: number;             // events in the group, >= actorCount; comment/reply: comments posted; heart/follow/gamePublished: = actorCount
+  game: NotificationGame | null;  // null only for "follow"
+  commentId: string | null;       // comment: the newest comment in the group; reply: the newest reply; heart: the hearted comment; else null
+  excerpt: string | null;         // first 140 chars (Unicode scalar values) of commentId's current body; plain text; null when commentId is null
+  ownsThread: boolean;            // reply: the recipient wrote the thread's top-level comment; false otherwise
+  creatorHeart: boolean;          // heart: the game's current owner is among the actors; false otherwise
+  read: boolean;
+  createdAt: string;              // RFC3339 millis Z, first event of the group
+  updatedAt: string;              // RFC3339 millis Z, latest event of the group (the ordering key)
+  path: string;                   // in-app route to open, see "Paths"
+}
+
+type NotificationPage = {
+  items: Notification[];          // updatedAt desc, then id desc
+  nextCursor: string | null;      // opaque; null when there are no more items
+  unread: number;                 // same value as UnreadCount.unread
+}
+
+type UnreadCount = {
+  unread: number;                 // visible unread notifications, capped at 100 (clients show "99+" at 100)
+  latestAt: string | null;        // updatedAt of the newest visible unread notification; null when unread = 0
+  pollAfterSecs: number;          // suggested delay before the next poll (env NOTIFICATION_POLL_SECS)
+}
+
+type NotificationSettings = {     // all default to true
+  comments: boolean;              // "comment" kind
+  replies: boolean;               // "reply" kind
+  hearts: boolean;                // "heart" kind
+  follows: boolean;               // "follow" kind
+  newGames: boolean;              // "gamePublished" kind
+}
+
+type MarkReadRequest = {
+  ids?: string[];                 // 1–100 notification ids; absent = every unread notification of the caller
+  upTo: string;                   // RFC3339; only rows with updatedAt <= upTo are marked (race guard)
+}
+type MarkReadResponse = { unread: number }   // UnreadCount.unread after the change
+```
+Clients must ignore notifications with an unknown `kind` (more kinds may be added later).
+
+### Endpoints
+| Method | Path | Query / Body | Response |
+|---|---|---|---|
+| GET 🔒 | /api/notifications | `?cursor=&limit=20&unread=false` | `NotificationPage` |
+| GET 🔒 | /api/notifications/unread-count | – | `UnreadCount` |
+| POST 🔒 | /api/notifications/read | `MarkReadRequest` | `MarkReadResponse` |
+| GET 🔒 | /api/notifications/settings | – | `NotificationSettings` |
+| PUT 🔒 | /api/notifications/settings | `Partial<NotificationSettings>` | `NotificationSettings` (after the change) |
+
+- Order in every handler: auth → 401; `Limit::Notifications` → 429; validation → 400/422.
+- **`GET /api/notifications`**:
+  - `limit`: 1–50, clamped, default 20. Non-integer → 400 `bad_request`.
+  - `unread`: `true` lists unread notifications only; `false` or absent lists all. Any other value → 400.
+  - `cursor`: a `nextCursor` from a previous response; returns items strictly after it in the order `updatedAt desc, id desc`. Malformed → 400. The cursor is opaque; clients must not build or parse it.
+  - Across pages, a group that received a new event moves to the top; clients dedupe by `id`.
+- **`POST /api/notifications/read`**:
+  - `upTo` missing or not an RFC3339 timestamp → 422 `validation`.
+  - `ids`: not an array of strings, empty, or more than 100 entries → 422; an entry that is not a positive decimal integer → 400.
+  - Marks the caller's matching unread notifications with `updatedAt <= upTo` as read. Ids that don't exist or belong to someone else are ignored (no error). Idempotent.
+- **`PUT /api/notifications/settings`**: each present field must be a boolean, else 422. Unknown fields are ignored. An empty object is valid (no change). A setting turned off stops **new** notifications of that kind; existing ones are kept until they expire.
+
+### Triggers and recipients (server side; no new client calls)
+| Kind | Written when | Recipients | Group | Joins an unread group? |
+|---|---|---|---|---|
+| `comment` | `POST /api/games/{id}/comments` creates a top-level comment | the game owner | per game | yes; each comment is one event |
+| `reply` | `POST /api/games/{id}/comments` creates a reply | the thread's top-level author, and the reply's `replyTo` user | per thread | yes; each reply is one event |
+| `heart` | `PUT /api/comments/{id}/heart` inserts a heart | the comment's author | per comment | yes; one event per hearting user |
+| `follow` | `PUT /api/users/{username}/follow` creates a follow | the followed user | one per recipient | yes; one event per follower |
+| `gamePublished` | a game becomes published for the first time (the F002 `gamePublished` condition) | every follower of the owner | per game | n/a (written once per recipient per game, ever) |
+
+- **Never the actor.** The user who caused the event is never a recipient, and each recipient gets at most one notification per event (e.g. a reply whose thread author is also the `replyTo` user).
+- **Coalescing.** While a recipient has an unread notification for the same (kind, group), new events join it: `actorCount`/`eventCount` grow and `updatedAt` moves to the new event. Once it is read, it never changes again, and the next event creates a new unread notification.
+- **Dedupe (hearts and follows).** A user's heart on a comment, or follow of a user, notifies at most once while an earlier event of theirs for the same group is stored (read or unread).
+- **Retraction.** `DELETE /api/comments/{id}/heart` and `DELETE /api/users/{username}/follow` remove that user's event from the recipient's **unread** notification of that group. A read notification is not changed. A notification left with no events is no longer listed or counted.
+- **Settings** are checked when the notification is written. A recipient with the kind turned off gets nothing.
+- Writing notifications is best effort: a failure is logged and never changes the response of the triggering request. `gamePublished` notifications are written before the publishing request responds.
+- **Deletions.** Deleting a comment (any path, including admin resolve `delete`) removes its events; deleting a thread or a hearted comment removes the whole `reply`/`heart` notification. Deleting a game removes all its notifications.
+
+### Visibility
+A notification is listed and counted only when (a) it has at least one event and (b) its game, if any, is visible to the recipient under `GET /api/games/{id}` rules (published, or owned by the recipient). Unpublishing hides a game's notifications; re-publishing shows them again unless they were pruned.
+
+### Paths
+| Kind | `path` |
+|---|---|
+| `comment`, `reply`, `heart` | `/games/{gameId}?comment={commentId}` (F006 permalink) |
+| `follow` | `/u/{recipient username}/followers` |
+| `gamePublished` | `/games/{gameId}` |
+
+### Retention
+Pruned by the server's maintenance task (about hourly):
+- read notifications 30 days after they were read;
+- any notification 90 days after its `updatedAt`;
+- beyond the newest **200** notifications per recipient;
+- notifications with no events.
+
+### Privacy
+- The author of a comment learns who hearted it (through `heart` notification actors). Nobody else does; there is still no public list of who hearted a comment (F006).
+- `excerpt` is read from the current comment at request time, so deletions apply immediately.
+
+### Rate limits
+- All five endpoints share **`Limit::Notifications`: 120/min, per user**. Over the limit → 429 `rate_limited` with `Retry-After`.
+- The writes that create notifications keep their existing buckets (`Limit::Comment`, `Limit::Heart`, `Limit::Follow`, `Limit::Upload`) and don't use this one.
+
+### Backend env
+`NOTIFICATION_POLL_SECS` (default `60`): the `pollAfterSecs` value returned by `GET /api/notifications/unread-count`. Integer 15–600; anything else is a startup error.
