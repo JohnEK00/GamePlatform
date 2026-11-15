@@ -305,6 +305,15 @@ async fn n2_score_bests_match_window_functions() {
         .await
         .unwrap();
     assert_boards_match(&t, &asc, &users, "after order change").await;
+    // L4: the flip only marked the game stale (served by the fallback above); the deferred
+    // rebuild (small batches) then makes the table itself match.
+    assert!(
+        webgame_server::bests::rebuild_game(&t.state.db, &asc, 5)
+            .await
+            .unwrap()
+    );
+    assert_eq!(stale_count(&t, &asc).await, 0);
+    assert_boards_match(&t, &asc, &users, "after rebuild").await;
 
     // Deleting a user removes their bests.
     sqlx::query("DELETE FROM users WHERE id = ?")
@@ -340,6 +349,216 @@ async fn n2_score_bests_match_window_functions() {
     assert_eq!(left, 0);
 }
 
+async fn stale_count(t: &TestApp, game_id: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM score_bests_stale WHERE game_id = ?")
+        .bind(game_id)
+        .fetch_one(&t.state.db)
+        .await
+        .unwrap()
+}
+
+async fn bests_rows(t: &TestApp, game_id: &str) -> Vec<(String, String, String, String, i64)> {
+    sqlx::query_as(
+        "SELECT period, period_start, user_id, score_id, rank_score FROM score_bests \
+         WHERE game_id = ? ORDER BY period, period_start, user_id",
+    )
+    .bind(game_id)
+    .fetch_all(&t.state.db)
+    .await
+    .unwrap()
+}
+
+/// L4 (review 3): an order flip no longer rewrites `score_bests` in the flipping transaction;
+/// boards stay correct through the fallback, and the batched rebuild restores the table,
+/// restarting when another flip lands meanwhile.
+#[tokio::test]
+async fn l4_order_flip_defers_bests_rebuild() {
+    let t = setup().await;
+    let (owner, _) = t.register("owner").await;
+    let gid = t.create_game(&owner, "Flip", "", true).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut users = Vec::new();
+    for i in 0..9 {
+        users.push(t.register(&format!("flipper{i}")).await.1);
+    }
+    let now = Utc::now();
+    for (i, u) in users.iter().enumerate() {
+        for k in 0..4i64 {
+            let at = now - chrono::Duration::days(k * 3) - chrono::Duration::minutes(i as i64);
+            sqlx::query(
+                "INSERT INTO scores (id, game_id, user_id, score, created_at) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(&gid)
+            .bind(u)
+            .bind((i as i64 * 7 + k * 5) % 11)
+            .bind(at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+            .execute(&t.state.db)
+            .await
+            .unwrap();
+        }
+    }
+    let before = bests_rows(&t, &gid).await;
+    assert!(!before.is_empty());
+
+    // The flip touches no score_bests row; it only marks the game.
+    sqlx::query("UPDATE games SET score_order = 'asc' WHERE id = ?")
+        .bind(&gid)
+        .execute(&t.state.db)
+        .await
+        .unwrap();
+    assert_eq!(bests_rows(&t, &gid).await, before);
+    assert_eq!(stale_count(&t, &gid).await, 1);
+    assert_boards_match(&t, &gid, &users, "stale (fallback)").await;
+
+    // Scores submitted while stale are ranked correctly (through the API and the fallback).
+    let (tok, uid) = t.register("latecomer").await;
+    users.push(uid);
+    let r = t
+        .json(
+            Method::POST,
+            &format!("/api/games/{gid}/scores"),
+            Some(&tok),
+            json!({ "score": 0 }),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text());
+    assert_eq!(r.json()["ranks"]["all"], 1);
+    assert_boards_match(&t, &gid, &users, "stale + submit").await;
+
+    // A second flip bumps the generation; a rebuild clears the mark only for the latest one.
+    sqlx::query("UPDATE games SET score_order = 'desc' WHERE id = ?")
+        .bind(&gid)
+        .execute(&t.state.db)
+        .await
+        .unwrap();
+    let generation: i64 =
+        sqlx::query_scalar("SELECT generation FROM score_bests_stale WHERE game_id = ?")
+            .bind(&gid)
+            .fetch_one(&t.state.db)
+            .await
+            .unwrap();
+    assert_eq!(generation, 2);
+    assert_boards_match(&t, &gid, &users, "flipped back (fallback)").await;
+
+    // Batches of 2 users → several short transactions.
+    assert!(
+        webgame_server::bests::rebuild_game(&t.state.db, &gid, 2)
+            .await
+            .unwrap()
+    );
+    assert_eq!(stale_count(&t, &gid).await, 0);
+    assert_boards_match(&t, &gid, &users, "rebuilt").await;
+    // Rebuilding an up-to-date game is a no-op.
+    assert_eq!(
+        webgame_server::bests::rebuild_stale(&t.state.db, 2)
+            .await
+            .unwrap(),
+        0
+    );
+
+    // Corrupted rows are fixed by a rebuild of a stale game (the batches rewrite every user).
+    sqlx::query("UPDATE games SET score_order = 'asc' WHERE id = ?")
+        .bind(&gid)
+        .execute(&t.state.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE score_bests SET rank_score = 999 WHERE game_id = ?")
+        .bind(&gid)
+        .execute(&t.state.db)
+        .await
+        .unwrap();
+    assert_boards_match(&t, &gid, &users, "corrupt but stale").await;
+    assert_eq!(
+        webgame_server::bests::rebuild_stale(&t.state.db, 3)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_boards_match(&t, &gid, &users, "rebuilt after corruption").await;
+
+    // Deleting a stale game drops its mark.
+    sqlx::query("UPDATE games SET score_order = 'desc' WHERE id = ?")
+        .bind(&gid)
+        .execute(&t.state.db)
+        .await
+        .unwrap();
+    t.send(
+        Method::DELETE,
+        &format!("/api/games/{gid}"),
+        Some(&owner),
+        None,
+        vec![],
+        &[],
+    )
+    .await;
+    assert_eq!(stale_count(&t, &gid).await, 0);
+}
+
+/// L4: a bundle replace that changes `leaderboard.order` commits without rebuilding and then
+/// rebuilds in the background; boards are correct throughout.
+#[tokio::test]
+async fn l4_bundle_replace_order_change_rebuilds_in_background() {
+    let t = setup().await;
+    let (owner, _) = t.register("owner").await;
+    let gid = t.create_game(&owner, "Replace", "", true).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut users = Vec::new();
+    for (i, s) in [5, 9, 1].iter().enumerate() {
+        let (tok, uid) = t.register(&format!("player{i}")).await;
+        users.push(uid);
+        let r = t
+            .json(
+                Method::POST,
+                &format!("/api/games/{gid}/scores"),
+                Some(&tok),
+                json!({ "score": s }),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::CREATED);
+    }
+    let game_json = json!({ "name": "Replace", "entry": "main.js", "width": 800,
+        "height": 600, "engine": "1",
+        "leaderboard": { "order": "asc", "format": "number", "label": "Moves" } })
+    .to_string();
+    let bundle = make_zip(&[
+        ("game.json", game_json.as_bytes()),
+        ("main.js", b"export default { update() {}, render() {} };"),
+    ]);
+    // Subscribed before the replace, so the run it spawns is always observed.
+    let mut runs = t.state.bests_runs.subscribe();
+    let r = t
+        .multipart(
+            Method::PUT,
+            &format!("/api/games/{gid}/bundle"),
+            Some(&owner),
+            &[Part::File("bundle", "g.zip", "application/zip", &bundle)],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["leaderboard"]["order"], "asc");
+    // Correct immediately (fallback or rebuilt, whichever the background task reached).
+    let lb = t
+        .get(&format!("/api/games/{gid}/leaderboard"), None)
+        .await
+        .json();
+    assert_eq!(lb["entries"][0]["score"], 1);
+    assert_eq!(lb["entries"][2]["score"], 9);
+    assert_boards_match(&t, &gid, &users, "after replace").await;
+    // Await the background run the replace spawned (no polling).
+    tokio::time::timeout(Duration::from_secs(30), runs.changed())
+        .await
+        .expect("background rebuild did not finish")
+        .unwrap();
+    assert_eq!(stale_count(&t, &gid).await, 0);
+    assert_boards_match(&t, &gid, &users, "after background rebuild").await;
+}
+
 #[tokio::test]
 async fn n2_board_plan_uses_rank_index() {
     let t = setup().await;
@@ -373,7 +592,15 @@ async fn n2_scores_list_is_rate_limited() {
     let r = t.get(&format!("/api/games/{gid}/scores"), None).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.error_code(), "rate_limited");
-    assert!(!r.header("retry-after").is_empty());
+    assert_eq!(r.header("retry-after"), "1");
+    // M2: deterministic refill (one token per 0.5 s).
+    t.clock.advance(Duration::from_millis(500));
+    let uri = format!("/api/games/{gid}/scores");
+    assert_eq!(t.get(&uri, None).await.status, StatusCode::OK);
+    assert_eq!(
+        t.get(&uri, None).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
     // The leaderboard bucket is separate.
     let r = t.get(&format!("/api/games/{gid}/leaderboard"), None).await;
     assert_eq!(r.status, StatusCode::OK);
@@ -557,8 +784,29 @@ async fn n5_thumbnail_and_avatar_share_image_limit() {
             .await;
         assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{uri}");
         assert_eq!(r.error_code(), "rate_limited");
-        assert!(!r.header("retry-after").is_empty());
+        // 20/hour: one token every 180 s.
+        assert_eq!(r.header("retry-after"), "180");
     }
+    // M2: after 180 s (manual clock) exactly one more upload is accepted.
+    t.clock.advance(Duration::from_secs(180));
+    let r = t
+        .multipart(
+            Method::PUT,
+            "/api/users/me/avatar",
+            Some(&tok),
+            &[Part::File("avatar", "a.png", "image/png", &png)],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let r = t
+        .multipart(
+            Method::PUT,
+            "/api/users/me/avatar",
+            Some(&tok),
+            &[Part::File("avatar", "a.png", "image/png", &png)],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     // Another user is unaffected.
     let (other, _) = t.register("other").await;
     let r = t

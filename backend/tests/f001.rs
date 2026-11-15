@@ -589,7 +589,20 @@ async fn leaderboard_rate_limit() {
     let r = t.get(&url, None).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.error_code(), "rate_limited");
-    assert!(!r.header("retry-after").is_empty());
+    // 120/min refills one token every 0.5 s.
+    assert_eq!(r.header("retry-after"), "1");
+    // M2: the limiter's clock is frozen; refills happen only when the test advances it.
+    t.clock.advance(std::time::Duration::from_millis(499));
+    assert_eq!(
+        t.get(&url, None).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    t.clock.advance(std::time::Duration::from_millis(1));
+    assert_eq!(t.get(&url, None).await.status, StatusCode::OK);
+    assert_eq!(
+        t.get(&url, None).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 
     // Authenticated users have their own bucket.
     assert_eq!(t.get(&url, Some(&a)).await.status, StatusCode::OK);

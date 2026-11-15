@@ -1034,6 +1034,7 @@ async fn runtime_missing_is_503() {
         router: webgame_server::app(state.clone()),
         state,
         dir,
+        clock: Default::default(),
     };
     let r = t.get("/runtime/engine.js", None).await;
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
@@ -1203,6 +1204,7 @@ async fn spa_fallback_with_web_dist() {
         router: webgame_server::app(state.clone()),
         state,
         dir,
+        clock: Default::default(),
     };
 
     let (owner, _) = t.register("sam").await;

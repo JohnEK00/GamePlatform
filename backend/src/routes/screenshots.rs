@@ -221,19 +221,41 @@ pub async fn create_screenshot(
         return Err(cap_error());
     }
 
-    // 8-9: a decode slot, then decode + re-encode off the async runtime.
+    // 8-9: a decode slot, then decode + re-encode off the async runtime. L5: when the server
+    // is busy (503), the image can't be decoded (422) or a server-side step fails, the
+    // screenshot token taken in step 3 is refunded.
+    let refund = || {
+        state
+            .limiter
+            .refund(Limit::Screenshot, &format!("user:{}", user.id))
+    };
     let Ok(permit) = state.image_slots.clone().try_acquire_owned() else {
+        refund();
         return Ok(busy());
     };
-    let processed = tokio::task::spawn_blocking(move || {
+    let processed = match tokio::task::spawn_blocking(move || {
         let _permit = permit;
         process_screenshot(&bytes)
     })
-    .await??;
+    .await
+    {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => {
+            refund();
+            return Err(e);
+        }
+        Err(e) => {
+            refund();
+            return Err(e.into());
+        }
+    };
 
     // 10: files.
     let id = uuid::Uuid::new_v4().to_string();
-    write_screenshot_files(&state.storage, &id, &processed).await?;
+    if let Err(e) = write_screenshot_files(&state.storage, &id, &processed).await {
+        refund();
+        return Err(e.into());
+    }
 
     // 11: guarded insert; the game version is read in the same statement.
     let inserted = sqlx::query(
@@ -259,6 +281,7 @@ pub async fn create_screenshot(
         Ok(r) => r.rows_affected(),
         Err(e) => {
             remove_screenshot_files(&state.storage, &id).await;
+            refund();
             return Err(e.into());
         }
     };

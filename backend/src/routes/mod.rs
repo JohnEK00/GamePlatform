@@ -176,18 +176,26 @@ pub fn public_router(state: &AppState) -> Router<AppState> {
         )
 }
 
-/// F005: stored screenshots never change (ids are never reused) and must never be sniffed or
-/// run as a document.
+/// L8: `Cache-Control` of stored screenshot files (full image and thumbnail). The bytes never
+/// change, but a moderation delete must reach caches: without `immutable` and with a 1 hour
+/// lifetime, browsers and shared caches revalidate (cheap `If-Modified-Since` → 304) and get
+/// the 404 within an hour of a delete.
+pub const SCREENSHOT_CACHE_CONTROL: &str = "public, max-age=3600";
+
+/// F005: stored screenshots must never be sniffed or run as a document. Successful responses
+/// are cacheable for [`SCREENSHOT_CACHE_CONTROL`]; anything else (404 after a delete) is
+/// `no-store`.
 async fn screenshot_media_headers(mut res: axum::response::Response) -> axum::response::Response {
     let ok = res.status().is_success() || res.status() == axum::http::StatusCode::NOT_MODIFIED;
     let h = res.headers_mut();
-    if ok {
-        // Only real files are immutable: a 404 (deleted screenshot) must not be cached.
-        h.insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=31536000, immutable"),
-        );
-    }
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if ok {
+            SCREENSHOT_CACHE_CONTROL
+        } else {
+            "no-store"
+        }),
+    );
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),

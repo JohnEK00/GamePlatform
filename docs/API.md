@@ -644,3 +644,12 @@ type Game = { ...F004, actions: ControlAction[]; controlsHint: string }
 ### Existing games
 - Games uploaded before F009 are backfilled once at backend startup from their stored `game.json` (ARCHITECTURE § F009). Until the backfill has processed a game, it reports `actions: []` and `controlsHint: ""`.
 - A stored `game.json` whose `actions` would now fail validation is backfilled as `actions: []` (no error). The next upload of that bundle gets the 422.
+
+
+## Review-fix additions (REVIEW-2026-11-15-3)
+- **`Report.targetImageFullUrl: string | null`** (L7): the full-size screenshot URL (`/media/screenshots/{id}.{png|jpg}`) while the screenshot exists. It is `null` for other target types and for deleted screenshots. It appears wherever `targetImageUrl` does (create response, admin list, resolve response). `targetImageUrl` stays the thumbnail.
+- **Screenshot media caching** (L8): responses send `Cache-Control: public, max-age=3600`, no longer `immutable`, and use `Last-Modified` for revalidation. Non-2xx responses, such as the 404 after a delete, send `no-store`. A shared cache may keep serving a deleted screenshot for up to 1 hour unless it is purged.
+- **`POST …/screenshots`:**
+  - New 422 message: "image is too large to process; use fewer pixels or 8-bit color", returned when the estimated decode memory exceeds 80 MiB (L3).
+  - A 503 (decode slots busy) or a 422 decode/processing failure no longer uses up the 10/hour quota (L5).
+- **Leaderboards after a `leaderboard.order` change** (L4): boards are served by a slower fallback query until a background rebuild of `score_bests` finishes (migration `0011_review3.sql`). Results are identical.

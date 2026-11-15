@@ -82,16 +82,91 @@ struct Bucket {
 
 const PRUNE_THRESHOLD: usize = 10_000;
 
+/// Monotonic time source of the rate limiter (M2): [`Clock::real`] in production, a
+/// [`ManualClock`] in tests so bucket refills are deterministic.
+#[derive(Clone)]
+pub struct Clock(Arc<dyn Fn() -> Instant + Send + Sync>);
+
+impl Clock {
+    /// `Instant::now()`.
+    pub fn real() -> Self {
+        Self(Arc::new(Instant::now))
+    }
+
+    pub fn from_fn(f: impl Fn() -> Instant + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    pub fn now(&self) -> Instant {
+        (self.0)()
+    }
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self::real()
+    }
+}
+
+impl std::fmt::Debug for Clock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Clock")
+    }
+}
+
+/// A clock that only moves when [`ManualClock::advance`] is called (tests).
+#[derive(Clone, Debug)]
+pub struct ManualClock {
+    base: Instant,
+    offset: Arc<Mutex<Duration>>,
+}
+
+impl Default for ManualClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ManualClock {
+    pub fn new() -> Self {
+        Self {
+            base: Instant::now(),
+            offset: Arc::new(Mutex::new(Duration::ZERO)),
+        }
+    }
+
+    pub fn now(&self) -> Instant {
+        self.base + *self.offset.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn advance(&self, by: Duration) {
+        *self.offset.lock().unwrap_or_else(|p| p.into_inner()) += by;
+    }
+
+    /// A [`Clock`] reading this manual clock.
+    pub fn clock(&self) -> Clock {
+        let me = self.clone();
+        Clock::from_fn(move || me.now())
+    }
+}
+
 #[derive(Clone)]
 pub struct RateLimiter {
     enabled: bool,
+    clock: Clock,
     buckets: Arc<Mutex<HashMap<(Limit, String), Bucket>>>,
 }
 
 impl RateLimiter {
+    /// A limiter on the real clock.
     pub fn new(enabled: bool) -> Self {
+        Self::with_clock(enabled, Clock::real())
+    }
+
+    pub fn with_clock(enabled: bool, clock: Clock) -> Self {
         Self {
             enabled,
+            clock,
             buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -105,7 +180,20 @@ impl RateLimiter {
         if !self.enabled {
             return Ok(());
         }
-        self.check_at(limit, key, Instant::now())
+        self.check_at(limit, key, self.clock.now())
+    }
+
+    /// Return a token taken by [`RateLimiter::check`] (the request was not served for a
+    /// reason that is not the client's fault, e.g. 503 busy). Never exceeds the capacity.
+    pub fn refund(&self, limit: Limit, key: &str) {
+        if !self.enabled {
+            return;
+        }
+        let cap = f64::from(limit.quota().0);
+        let mut map = self.buckets.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(b) = map.get_mut(&(limit, key.to_string())) {
+            b.tokens = (b.tokens + 1.0).min(cap);
+        }
     }
 
     fn check_at(&self, limit: Limit, key: &str, now: Instant) -> Result<(), AppError> {
@@ -128,8 +216,10 @@ impl RateLimiter {
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
         bucket.tokens = (bucket.tokens + elapsed * rate).min(cap);
         bucket.last = now;
-        if bucket.tokens >= 1.0 {
-            bucket.tokens -= 1.0;
+        // A refill split over several calls can land a hair under a whole token (f64
+        // rounding), so compare with a tolerance far below one request.
+        if bucket.tokens >= 1.0 - 1e-9 {
+            bucket.tokens = (bucket.tokens - 1.0).max(0.0);
             Ok(())
         } else {
             let wait = ((1.0 - bucket.tokens) / rate).ceil().max(1.0) as u64;
@@ -322,6 +412,32 @@ mod tests {
         assert!(d.should_count_at("g", "ip:2", t0));
         assert!(d.should_count_at("h", "ip:1", t0));
         assert!(d.should_count_at("g", "ip:1", t0 + Duration::from_secs(600)));
+    }
+
+    #[test]
+    fn manual_clock_drives_refill_and_refund() {
+        let clock = ManualClock::new();
+        let rl = RateLimiter::with_clock(true, clock.clock());
+        for _ in 0..10 {
+            rl.check(Limit::Auth, "a").unwrap();
+        }
+        assert!(rl.check(Limit::Auth, "a").is_err());
+        clock.advance(Duration::from_millis(5999));
+        assert!(rl.check(Limit::Auth, "a").is_err());
+        clock.advance(Duration::from_millis(1));
+        rl.check(Limit::Auth, "a").unwrap();
+        assert!(rl.check(Limit::Auth, "a").is_err());
+        // A refund gives the token back, but never above the capacity.
+        rl.refund(Limit::Auth, "a");
+        rl.check(Limit::Auth, "a").unwrap();
+        rl.check(Limit::Auth, "b").unwrap();
+        for _ in 0..5 {
+            rl.refund(Limit::Auth, "b");
+        }
+        for _ in 0..10 {
+            rl.check(Limit::Auth, "b").unwrap();
+        }
+        assert!(rl.check(Limit::Auth, "b").is_err());
     }
 
     #[test]

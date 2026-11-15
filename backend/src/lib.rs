@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod auth;
+pub mod bests;
 pub mod bundle;
 pub mod config;
 pub mod controls_backfill;
@@ -44,6 +45,10 @@ pub struct AppState {
     pub export_slots: Arc<tokio::sync::Semaphore>,
     /// F005: concurrent screenshot decodes (`IMAGE_SLOTS` permits, `try_acquire`).
     pub image_slots: Arc<tokio::sync::Semaphore>,
+    /// L4: serialises the deferred `score_bests` rebuilds ([`bests::spawn_rebuild`]).
+    pub bests_rebuild: Arc<tokio::sync::Mutex<()>>,
+    /// L4: count of finished background rebuild runs (tests await it instead of polling).
+    pub bests_runs: Arc<tokio::sync::watch::Sender<u64>>,
 }
 
 /// F013: at most this many `GET /api/games/{id}/bundle` archives are built at once.
@@ -67,6 +72,8 @@ impl AppState {
             trending: trending::TrendingCache::new(),
             export_slots: Arc::new(tokio::sync::Semaphore::new(EXPORT_SLOTS)),
             image_slots: Arc::new(tokio::sync::Semaphore::new(IMAGE_SLOTS)),
+            bests_rebuild: Arc::new(tokio::sync::Mutex::new(())),
+            bests_runs: Arc::new(tokio::sync::watch::Sender::new(0)),
             config: Arc::new(config),
             storage,
         };
@@ -74,6 +81,13 @@ impl AppState {
         // refreshes run in `trending::spawn_maintenance` (started by `serve`).
         state.trending.refresh_now(&state.db).await;
         Ok(state)
+    }
+
+    /// Replace the rate limiter's clock (M2: tests use a [`ratelimit::ManualClock`]). Call
+    /// before building the router; existing buckets are dropped.
+    pub fn with_clock(mut self, clock: ratelimit::Clock) -> Self {
+        self.limiter = ratelimit::RateLimiter::with_clock(self.config.rate_limit, clock);
+        self
     }
 }
 

@@ -15,7 +15,7 @@ use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
 use crate::ratelimit::Limit;
 use crate::routes::games::{fetch_visible_game, limit_user, parse_paging, remove_game};
 use crate::routes::screenshots::remove_screenshot;
-use crate::screenshots::thumb_url;
+use crate::screenshots::{image_url, thumb_url};
 
 pub const REPORT_DETAILS_MAX: usize = 1000;
 pub const PREVIEW_MAX: usize = 140;
@@ -38,16 +38,21 @@ pub struct Report {
     pub resolved_at: Option<String>,
     /// F005: the screenshot's `thumbUrl` while it exists; null for other target types.
     pub target_image_url: Option<String>,
+    /// L7: the screenshot's full-size `imageUrl` while it exists; null for other target types.
+    pub target_image_full_url: Option<String>,
 }
 
 const REPORT_SELECT: &str = "SELECT r.id, r.target_type, r.target_id, r.target_preview, \
      r.target_game_id, r.reason, r.details, r.status, r.resolution, r.created_at, \
      r.resolved_at, u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
-     u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version, s.id AS s_id \
+     u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version, s.id AS s_id, \
+     s.ext AS s_ext \
      FROM reports r JOIN users u ON u.id = r.reporter_id \
      LEFT JOIN screenshots s ON r.target_type = 'screenshot' AND s.id = r.target_id";
 
 fn report_from_row(row: &SqliteRow) -> Result<Report, sqlx::Error> {
+    let shot: Option<String> = row.try_get("s_id")?;
+    let ext: Option<String> = row.try_get("s_ext")?;
     Ok(Report {
         id: row.try_get("id")?,
         target_type: row.try_get("target_type")?,
@@ -61,9 +66,11 @@ fn report_from_row(row: &SqliteRow) -> Result<Report, sqlx::Error> {
         resolution: row.try_get("resolution")?,
         created_at: row.try_get("created_at")?,
         resolved_at: row.try_get("resolved_at")?,
-        target_image_url: row
-            .try_get::<Option<String>, _>("s_id")?
-            .map(|id| thumb_url(&id)),
+        target_image_url: shot.as_deref().map(thumb_url),
+        target_image_full_url: shot
+            .as_deref()
+            .zip(ext.as_deref())
+            .map(|(id, ext)| image_url(id, ext)),
     })
 }
 

@@ -633,7 +633,11 @@ async fn edit_version_notes_rate_limited() {
     let r = patch_notes(&t, Some(&owner), &id, "1", json!({ "notes": "late" })).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.error_code(), "rate_limited");
-    assert!(!r.header("retry-after").is_empty());
+    // 30 per 10 min: one token every 20 s.
+    assert_eq!(r.header("retry-after"), "20");
+    t.clock.advance(std::time::Duration::from_secs(20));
+    let r = patch_notes(&t, Some(&owner), &id, "1", json!({ "notes": "later" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     // Reads stay unlimited.
     for _ in 0..40 {
         assert_eq!(versions(&t, &id, None, "").await.status, StatusCode::OK);

@@ -989,7 +989,20 @@ async fn follow_and_feed_rate_limits() {
     let r = follow(&t, Some(&a), "bob").await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.error_code(), "rate_limited");
-    assert!(!r.header("retry-after").is_empty());
+    // 60 per 10 min: one token every 10 s.
+    assert_eq!(r.header("retry-after"), "10");
+    // M2: deterministic refill on the manual clock.
+    t.clock.advance(std::time::Duration::from_secs(9));
+    assert_eq!(
+        follow(&t, Some(&a), "bob").await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    t.clock.advance(std::time::Duration::from_secs(1));
+    assert_eq!(follow(&t, Some(&a), "bob").await.status, StatusCode::OK);
+    assert_eq!(
+        unfollow(&t, Some(&a), "bob").await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 
     for i in 0..60 {
         let path = if i % 2 == 0 {
@@ -1002,6 +1015,13 @@ async fn follow_and_feed_rate_limits() {
     let r = t.get("/api/feed", Some(&a)).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.error_code(), "rate_limited");
+    assert_eq!(r.header("retry-after"), "1");
+    t.clock.advance(std::time::Duration::from_secs(1));
+    assert_eq!(t.get("/api/feed", Some(&a)).await.status, StatusCode::OK);
+    assert_eq!(
+        t.get("/api/feed/suggestions", Some(&a)).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
     // Lists and profiles stay unlimited.
     for _ in 0..70 {
         assert_eq!(

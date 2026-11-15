@@ -211,6 +211,7 @@ pub fn spawn_maintenance(state: &AppState) -> Option<tokio::task::JoinHandle<()>
     }
     let db = state.db.clone();
     let cache = state.trending.clone();
+    let state = state.clone();
     Some(tokio::spawn(async move {
         let mut wait = ttl;
         loop {
@@ -221,6 +222,8 @@ pub fn spawn_maintenance(state: &AppState) -> Option<tokio::task::JoinHandle<()>
                 ttl.min(FAILURE_BACKOFF)
             };
             crate::db::optimize(&db, false).await;
+            // L4: retry `score_bests` rebuilds that failed earlier (a no-op when none).
+            let _ = crate::bests::spawn_rebuild(&state).await;
         }
     }))
 }

@@ -156,7 +156,14 @@ async fn r2_play_rate_limited() {
     let r = play(&t, id, None).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.error_code(), "rate_limited");
-    assert!(!r.header("retry-after").is_empty());
+    // 30/min: one token every 2 s (M2: manual clock, so exact).
+    assert_eq!(r.header("retry-after"), "2");
+    t.clock.advance(std::time::Duration::from_secs(2));
+    assert_eq!(play(&t, id, None).await.status, StatusCode::OK);
+    assert_eq!(
+        play(&t, id, None).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
     // Another viewer has its own bucket.
     assert_eq!(play(&t, id, Some(&tok)).await.status, StatusCode::OK);
 }

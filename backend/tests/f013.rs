@@ -264,8 +264,14 @@ async fn download_rate_limit() {
     let r = download(&t, id, Some(&tok)).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.error_code(), "rate_limited");
-    let wait: u64 = r.header("retry-after").parse().unwrap();
-    assert!(wait >= 1);
+    // 30/hour: one token every 120 s.
+    assert_eq!(r.header("retry-after"), "120");
+    t.clock.advance(std::time::Duration::from_secs(120));
+    assert_eq!(download(&t, id, Some(&tok)).await.status, StatusCode::OK);
+    assert_eq!(
+        download(&t, id, Some(&tok)).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }
 
 #[tokio::test]

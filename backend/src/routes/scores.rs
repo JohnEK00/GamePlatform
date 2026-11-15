@@ -116,6 +116,17 @@ fn score_from_best(row: &sqlx::sqlite::SqliteRow, rank: i64) -> Result<Score, sq
     })
 }
 
+/// The bests a board reads (aliased `b`; binds `?1` game, `?2` period, `?3` period start) and
+/// its index hint: the `score_bests` rank index, or, while the game awaits a rebuild after an
+/// order change (L4), the same rows computed from `scores`.
+fn bests_source(stale: bool) -> (&'static str, &'static str) {
+    if stale {
+        (crate::bests::FALLBACK_SOURCE, "")
+    } else {
+        ("score_bests", "INDEXED BY idx_score_bests_rank")
+    }
+}
+
 /// Competition rank of `rank_score` in a window: 1 + players with a strictly better best.
 async fn rank_in_window(
     conn: &mut SqliteConnection,
@@ -123,12 +134,14 @@ async fn rank_in_window(
     key: &(&'static str, String),
     rank_score: i64,
     exclude_user: Option<&str>,
+    stale: bool,
 ) -> AppResult<i64> {
-    let better: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM score_bests INDEXED BY idx_score_bests_rank \
-         WHERE game_id = ?1 AND period = ?2 AND period_start = ?3 AND rank_score < ?4 \
-           AND (?5 IS NULL OR user_id <> ?5)",
-    )
+    let (src, indexed) = bests_source(stale);
+    let better: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM {src} b {indexed} \
+         WHERE b.game_id = ?1 AND b.period = ?2 AND b.period_start = ?3 AND b.rank_score < ?4 \
+           AND (?5 IS NULL OR b.user_id <> ?5)"
+    ))
     .bind(game_id)
     .bind(key.0)
     .bind(&key.1)
@@ -145,9 +158,11 @@ async fn my_best(
     game_id: &str,
     key: &(&'static str, String),
     user_id: &str,
+    stale: bool,
 ) -> AppResult<Option<Score>> {
+    let (src, _) = bests_source(stale);
     let row = sqlx::query(&format!(
-        "SELECT {BEST_COLS} FROM score_bests b CROSS JOIN users u ON u.id = b.user_id \
+        "SELECT {BEST_COLS} FROM {src} b CROSS JOIN users u ON u.id = b.user_id \
          WHERE b.game_id = ?1 AND b.period = ?2 AND b.period_start = ?3 AND b.user_id = ?4"
     ))
     .bind(game_id)
@@ -157,7 +172,8 @@ async fn my_best(
     .fetch_optional(&mut *conn)
     .await?;
     let Some(row) = row else { return Ok(None) };
-    let rank = rank_in_window(conn, game_id, key, row.try_get("rank_score")?, None).await?;
+    let rs = row.try_get("rank_score")?;
+    let rank = rank_in_window(conn, game_id, key, rs, None, stale).await?;
     Ok(Some(score_from_best(&row, rank)?))
 }
 
@@ -165,6 +181,8 @@ async fn my_best(
 /// asc; ties → earlier `created_at`), ranked with competition ranking. Reads `score_bests`:
 /// the entries are an index walk of `limit` rows, ranks and the total are index counts.
 /// `limit` may be 0 (only `me` is wanted; the total is then not computed and is 0).
+/// While the game awaits a `score_bests` rebuild after an order change (L4), the same rows are
+/// computed from `scores` instead ([`crate::bests::FALLBACK_SOURCE`]).
 pub async fn window_board(
     conn: &mut SqliteConnection,
     game_id: &str,
@@ -174,6 +192,8 @@ pub async fn window_board(
     me: Option<&str>,
 ) -> AppResult<Board> {
     let key = period_key(period, now);
+    let stale = crate::bests::is_stale(conn, game_id).await?;
+    let (src, indexed) = bests_source(stale);
     let mut board = Board {
         entries: Vec::new(),
         total_players: 0,
@@ -181,7 +201,7 @@ pub async fn window_board(
     };
     if limit > 0 {
         let rows = sqlx::query(&format!(
-            "SELECT {BEST_COLS} FROM score_bests b INDEXED BY idx_score_bests_rank \
+            "SELECT {BEST_COLS} FROM {src} b {indexed} \
              CROSS JOIN users u ON u.id = b.user_id \
              WHERE b.game_id = ?1 AND b.period = ?2 AND b.period_start = ?3 \
              ORDER BY b.rank_score, b.created_at, b.score_rowid LIMIT ?4"
@@ -204,10 +224,10 @@ pub async fn window_board(
             prev = Some((rs, rank));
             board.entries.push(score_from_best(row, rank)?);
         }
-        board.total_players = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM score_bests INDEXED BY idx_score_bests_rank \
-             WHERE game_id = ?1 AND period = ?2 AND period_start = ?3",
-        )
+        board.total_players = sqlx::query_scalar(&format!(
+            "SELECT COUNT(*) FROM {src} b {indexed} \
+             WHERE b.game_id = ?1 AND b.period = ?2 AND b.period_start = ?3"
+        ))
         .bind(game_id)
         .bind(key.0)
         .bind(&key.1)
@@ -215,7 +235,7 @@ pub async fn window_board(
         .await?;
     }
     if let Some(uid) = me {
-        board.me = my_best(conn, game_id, &key, uid).await?;
+        board.me = my_best(conn, game_id, &key, uid, stale).await?;
     }
     Ok(board)
 }
@@ -423,6 +443,8 @@ pub async fn submit_score(
     let personal_best = prev.is_none_or(|p| if asc { score < p } else { score > p });
 
     prune_scores(&mut tx, &game_id, &user.id, asc, now_dt).await?;
+    // L4: read from `scores` while the game's bests await a rebuild.
+    let stale = crate::bests::is_stale(&mut tx, &game_id).await?;
 
     // v1 `rank`: this score's rank among other users' all-time bests (competition ranking).
     let all_key = period_key(Period::All, now_dt);
@@ -432,16 +454,23 @@ pub async fn submit_score(
         &all_key,
         rank_score(score, asc),
         Some(&user.id),
+        stale,
     )
     .await?;
 
     // Rank of the user's best in each window, after this submit.
     let mut r = [0i64; 3];
     for (slot, period) in r.iter_mut().zip([Period::Day, Period::Week, Period::All]) {
-        *slot = my_best(&mut tx, &game_id, &period_key(period, now_dt), &user.id)
-            .await?
-            .map(|m| m.rank)
-            .ok_or_else(|| AppError::Internal("submitted score missing from its window".into()))?;
+        *slot = my_best(
+            &mut tx,
+            &game_id,
+            &period_key(period, now_dt),
+            &user.id,
+            stale,
+        )
+        .await?
+        .map(|m| m.rank)
+        .ok_or_else(|| AppError::Internal("submitted score missing from its window".into()))?;
     }
     let ranks = Ranks {
         day: r[0],

@@ -231,20 +231,68 @@ async fn upload_png_strips_text_chunks() {
         .await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.body, full);
-    assert_eq!(
-        r.header("cache-control"),
-        "public, max-age=31536000, immutable"
-    );
+    // L8: cacheable for an hour, never `immutable`, so a moderation delete reaches caches.
+    assert_eq!(r.header("cache-control"), "public, max-age=3600");
+    assert!(!r.header("last-modified").is_empty());
     assert_eq!(r.header("x-content-type-options"), "nosniff");
     assert_eq!(r.header("content-security-policy"), "sandbox");
     assert_eq!(r.header("access-control-allow-origin"), "*");
-    // A missing file is a 404 that is not cached as immutable.
+    let r = t.get(&format!("/media/screenshots/{id}_t.jpg"), None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.header("cache-control"), "public, max-age=3600");
+    // A missing file is a 404 that is never stored.
     let r = t.get("/media/screenshots/nope.png", None).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
-    assert_ne!(
-        r.header("cache-control"),
-        "public, max-age=31536000, immutable"
+    assert_eq!(r.header("cache-control"), "no-store");
+    assert_eq!(r.header("x-content-type-options"), "nosniff");
+}
+
+#[tokio::test]
+async fn l8_deleted_screenshot_is_not_served_or_cached() {
+    let t = setup().await;
+    let (a, _) = t.register("ana").await;
+    let gid = game_id(&t, &a, true).await;
+    let v = post_ok(&t, &a, &gid, None).await;
+    let id = sid(&v);
+    let full = v["imageUrl"].as_str().unwrap().to_string();
+    let thumb = v["thumbUrl"].as_str().unwrap().to_string();
+    let r = t.get(&full, None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let last_modified = r.header("last-modified");
+    // Revalidation while it exists is a 304 (cheap for caches after max-age).
+    let r = t
+        .send(
+            Method::GET,
+            &full,
+            None,
+            None,
+            vec![],
+            &[("if-modified-since", last_modified.as_str())],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED);
+    assert_eq!(r.header("cache-control"), "public, max-age=3600");
+    assert_eq!(
+        delete(&t, Some(&a), &id).await.status,
+        StatusCode::NO_CONTENT
     );
+    for url in [&full, &thumb] {
+        let r = t.get(url, None).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{url}");
+        assert_eq!(r.header("cache-control"), "no-store", "{url}");
+        // A cache revalidating after max-age gets the 404, too.
+        let r = t
+            .send(
+                Method::GET,
+                url,
+                None,
+                None,
+                vec![],
+                &[("if-modified-since", last_modified.as_str())],
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{url}");
+    }
 }
 
 #[tokio::test]
@@ -501,7 +549,94 @@ async fn screenshot_rate_limit() {
     let r = post(&t, &a, &gid, &png(64, 64), None).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.error_code(), "rate_limited");
-    assert!(r.header("retry-after").parse::<u64>().unwrap() >= 1);
+    // 10/hour: one token every 360 s.
+    assert_eq!(r.header("retry-after"), "360");
+    t.clock.advance(std::time::Duration::from_secs(360));
+    post_ok(&t, &a, &gid, None).await;
+    let r = post(&t, &a, &gid, &png(64, 64), None).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+/// A PNG with only a header for `w`×`h` at `depth` bits / colour type `ct` (broken IDAT).
+fn png_header_only(w: u32, h: u32, depth: u8, ct: u8) -> Vec<u8> {
+    let chunk = |kind: &[u8], data: &[u8]| {
+        let mut typed = kind.to_vec();
+        typed.extend_from_slice(data);
+        let mut out = (data.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(&typed);
+        out.extend_from_slice(&crc32(&typed).to_be_bytes());
+        out
+    };
+    let mut ihdr = w.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[depth, ct, 0, 0, 0]);
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    out.extend(chunk(b"IHDR", &ihdr));
+    out.extend(chunk(b"IDAT", &[0x78, 0x9C, 0x03, 0x00]));
+    out.extend(chunk(b"IEND", &[]));
+    out
+}
+
+/// L5: a 503 (decode slots busy) or a decode failure returns the screenshot token; only
+/// accepted posts (and body-level rejections) use the 10/hour quota.
+#[tokio::test]
+async fn l5_busy_and_undecodable_posts_do_not_use_quota() {
+    let t = setup_with(|c| c.rate_limit = true).await;
+    let (a, _) = t.register("ana").await;
+    let gid = game_id(&t, &a, true).await;
+    let permits = t
+        .state
+        .image_slots
+        .clone()
+        .try_acquire_many_owned(2)
+        .unwrap();
+    for _ in 0..12 {
+        let r = post(&t, &a, &gid, &png(64, 64), None).await;
+        assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+    drop(permits);
+    let mut broken = png(200, 200);
+    broken.truncate(broken.len() / 2);
+    for img in [broken, png(32, 32), png_header_only(4096, 4096, 16, 6)] {
+        for _ in 0..4 {
+            let r = post(&t, &a, &gid, &img, None).await;
+            assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+        }
+    }
+    // The full quota is still there.
+    for _ in 0..10 {
+        post_ok(&t, &a, &gid, None).await;
+    }
+    let r = post(&t, &a, &gid, &png(64, 64), None).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    // A magic-byte rejection (before decoding) still uses a token.
+    t.clock.advance(std::time::Duration::from_secs(360));
+    let r = post(&t, &a, &gid, b"<!doctype html>", None).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let r = post(&t, &a, &gid, &png(64, 64), None).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+/// L3: a 16-bit RGBA 4096² PNG (128 MiB decoded, a few bytes on the wire) is refused from its
+/// header, before any pixel buffer is allocated.
+#[tokio::test]
+async fn l3_sixteen_bit_4096_png_is_rejected() {
+    let t = setup().await;
+    let (a, _) = t.register("ana").await;
+    let gid = game_id(&t, &a, true).await;
+    let r = post(&t, &a, &gid, &png_header_only(4096, 4096, 16, 6), None).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        r.json()["error"]["message"],
+        "image is too large to process; use fewer pixels or 8-bit color"
+    );
+    // A small 16-bit image is converted to 8 bits and accepted.
+    let src =
+        image::ImageBuffer::<Rgba<u16>, Vec<u16>>::from_pixel(96, 64, Rgba([0, 65535, 0, 65535]));
+    let img = encode(&DynamicImage::ImageRgba16(src), ImageFormat::Png);
+    let r = post(&t, &a, &gid, &img, None).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text());
+    assert_eq!(r.json()["width"], 96);
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +761,12 @@ async fn screenshot_reports() {
     assert_eq!(rep1["targetGameId"], gid);
     assert_eq!(rep1["targetPreview"], "Nice view");
     assert_eq!(rep1["targetImageUrl"], captioned["thumbUrl"]);
+    // L7: the full-size image for moderators.
+    assert_eq!(rep1["targetImageFullUrl"], captioned["imageUrl"]);
+    assert_eq!(
+        rep1["targetImageFullUrl"],
+        format!("/media/screenshots/{s1}.png")
+    );
     let r = report(&t, &bob, "screenshot", &s1).await;
     assert_eq!(r.status, StatusCode::CONFLICT);
     let rep2 = report(&t, &bob, "screenshot", &s2).await.json();
@@ -636,6 +777,7 @@ async fn screenshot_reports() {
     );
     let game_rep = report(&t, &bob, "game", &gid).await.json();
     assert!(game_rep["targetImageUrl"].is_null());
+    assert!(game_rep["targetImageFullUrl"].is_null());
 
     // Admin list carries targetImageUrl on every report.
     let v = t.get("/api/admin/reports", Some(&boss)).await.json();
@@ -652,7 +794,12 @@ async fn screenshot_reports() {
         by_id(&v, &rep1["id"])["targetImageUrl"],
         captioned["thumbUrl"]
     );
+    assert_eq!(
+        by_id(&v, &rep1["id"])["targetImageFullUrl"],
+        captioned["imageUrl"]
+    );
     assert!(by_id(&v, &game_rep["id"])["targetImageUrl"].is_null());
+    assert!(by_id(&v, &game_rep["id"])["targetImageFullUrl"].is_null());
 
     // Resolve: unpublish → 422, delete removes the screenshot.
     let r = resolve(&t, &boss, rep1["id"].as_str().unwrap(), "unpublish").await;
@@ -663,6 +810,7 @@ async fn screenshot_reports() {
     assert_eq!(v["status"], "resolved");
     assert_eq!(v["resolution"], "delete");
     assert!(v["targetImageUrl"].is_null());
+    assert!(v["targetImageFullUrl"].is_null());
     assert!(files_of(&t, &s1).is_empty());
     assert_eq!(list(&t, None, &gid, "").await.json()["total"], 1);
 
@@ -676,6 +824,7 @@ async fn screenshot_reports() {
     assert_eq!(r2["status"], "resolved");
     assert_eq!(r2["resolution"], "delete");
     assert!(r2["targetImageUrl"].is_null());
+    assert!(r2["targetImageFullUrl"].is_null());
     assert_eq!(by_id(&v, &game_rep["id"])["status"], "open");
 
     // A screenshot on an unpublished game can't be reported by others.

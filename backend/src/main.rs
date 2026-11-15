@@ -78,6 +78,9 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     // F009: fill actions/controls hint of games stored before 0010_f009.sql (best effort,
     // in the background; requests see `[]`/`""` until a row is processed).
     let _backfill = webgame_server::controls_backfill::spawn_backfill(&state);
+    // L4: finish `score_bests` rebuilds interrupted by a restart (boards use the fallback
+    // until then).
+    let _bests = webgame_server::bests::spawn_rebuild(&state);
     // N1/N3: periodic trending refresh + PRAGMA optimize, off the request path.
     let maintenance = webgame_server::trending::spawn_maintenance(&state);
     let listener = tokio::net::TcpListener::bind(addr).await?;

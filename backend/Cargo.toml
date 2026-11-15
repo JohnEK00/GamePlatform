@@ -33,3 +33,11 @@ http-body-util = "0.1.5"
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Keep debug builds small on disk: line tables keep readable backtraces,
+# dependencies carry no debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

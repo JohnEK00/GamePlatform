@@ -807,6 +807,11 @@ pub async fn upload_bundle(
         Ok(true) => {
             // Only after the commit: the old version is no longer referenced.
             let _ = tokio::fs::remove_dir_all(state.storage.version_dir(&id, old_version)).await;
+            // L4: a changed `leaderboard.order` only marked the game's bests stale (boards use
+            // the fallback meanwhile); they are rebuilt outside the replace transaction.
+            if meta.leaderboard.order != game.leaderboard.order {
+                crate::bests::spawn_rebuild(&state);
+            }
         }
         Ok(false) => {
             let _ = tokio::fs::remove_dir_all(&new_dir).await;
