@@ -49,6 +49,12 @@ import type {
   UploadProgress,
   User,
   UserProfileResponse,
+  MarkReadRequest,
+  MarkReadResponse,
+  NotificationListQuery,
+  NotificationPage,
+  NotificationSettings,
+  UnreadCount,
 } from "./types";
 
 const STATUS_CODES: Record<number, ApiErrorCode> = {
@@ -573,6 +579,31 @@ export class ApiClient {
   }
   deleteScreenshot(id: string): Promise<void> {
     return this.request(`/api/screenshots/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  // ---------- F007: Notifications ----------
+  /** Newest first (updatedAt desc). `unread: true` lists unread only (the param is omitted otherwise). */
+  listNotifications(query: NotificationListQuery = {}, signal?: AbortSignal): Promise<NotificationPage> {
+    return this.request("/api/notifications", {
+      query: { cursor: query.cursor, limit: query.limit, unread: query.unread ? true : undefined },
+      signal,
+    });
+  }
+  /** The poll: unread count (capped at 100), newest unread `updatedAt`, suggested poll delay. */
+  unreadNotificationCount(signal?: AbortSignal): Promise<UnreadCount> {
+    return this.request("/api/notifications/unread-count", { signal });
+  }
+  /** Marks the caller's unread notifications with `updatedAt <= upTo` (only `ids`, when given) as read. */
+  markNotificationsRead(body: MarkReadRequest): Promise<MarkReadResponse> {
+    const json: MarkReadRequest = body.ids !== undefined ? { ids: body.ids, upTo: body.upTo } : { upTo: body.upTo };
+    return this.request("/api/notifications/read", { method: "POST", json });
+  }
+  getNotificationSettings(): Promise<NotificationSettings> {
+    return this.request("/api/notifications/settings");
+  }
+  /** Send only the changed fields; returns the settings after the change. */
+  updateNotificationSettings(partial: Partial<NotificationSettings>): Promise<NotificationSettings> {
+    return this.request("/api/notifications/settings", { method: "PUT", json: partial });
   }
 }
 

@@ -4512,3 +4512,362 @@ a.pf-tab {
     color: var(--pf-muted);
   }
 }
+
+/* ---------- F007: notifications ---------- */
+.pf-bell-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.pf-bell {
+  position: relative;
+  color: var(--pf-text-2);
+}
+.pf-bell:hover,
+.pf-bell[aria-expanded="true"] {
+  color: var(--pf-text);
+  background: var(--pf-surface-3);
+  border-color: var(--pf-border);
+}
+.pf-bell svg {
+  display: block;
+}
+.pf-bell__badge {
+  position: absolute;
+  top: -3px;
+  right: -5px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--pf-accent);
+  color: #1a0d05;
+  border: 2px solid var(--pf-bg);
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pf-bell--pop .pf-bell__badge {
+    animation: pf-bell-pop 0.42s cubic-bezier(0.3, 1.6, 0.6, 1);
+  }
+  .pf-bell--pop svg {
+    animation: pf-bell-ring 0.5s ease-in-out;
+    transform-origin: 50% 10%;
+  }
+  .pf-notif-panel {
+    animation: pf-pop 0.12s ease-out;
+  }
+}
+@keyframes pf-bell-pop {
+  0% {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes pf-bell-ring {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  25% {
+    transform: rotate(14deg);
+  }
+  50% {
+    transform: rotate(-10deg);
+  }
+  75% {
+    transform: rotate(5deg);
+  }
+}
+
+.pf-notif-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  z-index: 45;
+  width: min(400px, 92vw);
+  max-height: min(560px, calc(100vh - var(--pf-header-h) - 24px));
+  display: flex;
+  flex-direction: column;
+  background: var(--pf-surface);
+  border: 1px solid var(--pf-border-strong);
+  border-radius: var(--pf-radius);
+  box-shadow: var(--pf-shadow-lg);
+  overflow: hidden;
+}
+.pf-notif-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px 10px 16px;
+  border-bottom: 1px solid var(--pf-border);
+}
+.pf-app .pf-notif-panel__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+.pf-notif-panel__title:focus {
+  outline: none;
+}
+.pf-notif-panel__title:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.pf-notif-panel__markall {
+  font-size: 0.82rem;
+  color: var(--pf-accent);
+  cursor: pointer;
+}
+.pf-notif-panel__markall:hover {
+  text-decoration: underline;
+}
+.pf-notif-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pf-notif-panel__status {
+  display: grid;
+  place-items: center;
+  padding: 32px 16px;
+}
+.pf-notif-panel__alert {
+  padding: 12px 14px;
+}
+.pf-notif-panel__alert .pf-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.pf-notif-panel__foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--pf-border);
+  background: var(--pf-bg-2);
+  font-size: 0.86rem;
+}
+.pf-notif-panel__foot a {
+  color: var(--pf-accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+.pf-notif-panel__foot a:hover {
+  text-decoration: underline;
+}
+.pf-notif-empty {
+  padding: 32px 20px;
+  text-align: center;
+}
+.pf-notif-empty p {
+  margin: 0 0 4px;
+}
+.pf-notif-empty__title {
+  font-weight: 600;
+}
+
+.pf-notif-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  display: grid;
+  gap: 2px;
+}
+.pf-notif-list--page {
+  padding: 0;
+  gap: 6px;
+}
+.pf-notif__link {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 28px 10px 10px;
+  border-radius: var(--pf-radius-sm);
+  text-decoration: none;
+  color: var(--pf-text-2);
+  transition: background 0.15s;
+}
+.pf-notif__link:hover {
+  background: var(--pf-surface-2);
+}
+.pf-notif__link:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: -2px;
+}
+.pf-notif--page .pf-notif__link {
+  padding: 14px 34px 14px 14px;
+  border: 1px solid var(--pf-border);
+  background: var(--pf-surface);
+  border-radius: var(--pf-radius);
+}
+.pf-notif--page .pf-notif__link:hover {
+  background: var(--pf-surface-2);
+}
+.pf-notif--unread .pf-notif__link {
+  background: rgba(255, 122, 61, 0.08);
+  color: var(--pf-text);
+}
+.pf-notif--unread .pf-notif__link:hover {
+  background: rgba(255, 122, 61, 0.14);
+}
+.pf-notif--page.pf-notif--unread .pf-notif__link {
+  border-color: rgba(255, 122, 61, 0.35);
+}
+.pf-notif__dot {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 9px;
+  height: 9px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--pf-accent);
+  box-shadow: 0 0 0 3px rgba(255, 122, 61, 0.2);
+}
+.pf-notif__avatars {
+  flex-shrink: 0;
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+.pf-notif__avatars .pf-avatar {
+  box-shadow: 0 0 0 2px var(--pf-surface);
+}
+.pf-notif__avatars--stack .pf-avatar {
+  position: absolute;
+}
+.pf-notif__avatars--stack .pf-avatar:first-child {
+  top: 0;
+  left: 0;
+  z-index: 1;
+}
+.pf-notif__avatars--stack .pf-avatar:nth-child(2) {
+  right: -4px;
+  bottom: -4px;
+}
+.pf-notif__body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.pf-notif__text strong {
+  color: var(--pf-text);
+  font-weight: 700;
+}
+.pf-notif__game {
+  color: var(--pf-text);
+  font-weight: 600;
+}
+.pf-notif__excerpt {
+  color: var(--pf-muted);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-notif--page .pf-notif__excerpt {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+.pf-notif__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--pf-muted);
+  font-size: 0.76rem;
+}
+
+.pf-notifs__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.pf-notifs__panel:focus {
+  outline: none;
+}
+
+.pf-notif-settings__fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.pf-notif-settings__fieldset legend {
+  padding: 0;
+}
+.pf-notif-settings__list {
+  gap: 14px;
+}
+.pf-notif-settings__text {
+  display: grid;
+  gap: 1px;
+}
+.pf-notif-settings__note {
+  margin: 14px 0 0;
+}
+.pf-notif-settings {
+  scroll-margin-top: calc(var(--pf-header-h) + 16px);
+}
+
+/* Wide screens: the bell sits outside #pf-mainnav in the DOM (so it stays visible on narrow screens),
+   but is shown just before "+ Upload". */
+@media (min-width: 861px) {
+  .pf-header__inner > .pf-header__nav {
+    display: contents;
+  }
+  .pf-header__inner > .pf-header__nav > nav,
+  .pf-header__inner > .pf-header__nav > .pf-search {
+    order: 1;
+  }
+  .pf-header__inner > .pf-bell-wrap {
+    order: 2;
+    margin-left: auto;
+  }
+  .pf-header__inner > .pf-header__nav > .pf-header__actions {
+    order: 3;
+  }
+  .pf-header__inner > .pf-bell-wrap ~ .pf-header__nav > .pf-header__actions {
+    margin-left: 0;
+  }
+}
+@media (max-width: 860px) {
+  .pf-header__inner > .pf-bell-wrap {
+    margin-left: auto;
+  }
+  .pf-header__inner > .pf-bell-wrap + .pf-header__toggle {
+    margin-left: 0;
+  }
+  .pf-notif-panel {
+    position: fixed;
+    top: calc(var(--pf-header-h) + 6px);
+    left: 4vw;
+    right: 4vw;
+    width: auto;
+    max-width: 92vw;
+    max-height: calc(100vh - var(--pf-header-h) - 18px);
+    max-height: calc(100dvh - var(--pf-header-h) - 18px);
+  }
+}

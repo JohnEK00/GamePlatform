@@ -2,6 +2,17 @@ import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { ApiClient } from "../api/client";
 import type { LocalProject } from "../studio/project";
 
+/**
+ * F007: native OS notifications provided by the host (desktop). The UI decides when and what to show
+ * (window not focused, newer than the device watermark, summary text only); the host only displays.
+ */
+export type OsNotifications = {
+  /** The user opted in on this device; checked before every use. */
+  isEnabled(): boolean;
+  /** Best effort; never rejects. */
+  show(n: { title: string; body: string }): Promise<void>;
+};
+
 export type PlatformConfig = {
   /** Shown in the footer, e.g. "Desktop". */
   name?: string;
@@ -27,6 +38,8 @@ export type PlatformConfig = {
    * Without it the Studio's Export .zip falls back to an <a download> link.
    */
   saveFile?: (suggestedName: string, data: Blob) => Promise<boolean>;
+  /** F007: OS notifications (desktop, opt-in per device). Absent on the web. */
+  osNotifications?: OsNotifications;
 };
 
 export type WebGameConfig = {

@@ -501,3 +501,89 @@ export type Screenshot = {
 };
 
 export type ScreenshotPage = Page<Screenshot>;
+
+// ---- F007: in-app notifications ----
+
+export type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished";
+
+export type NotificationGame = { id: string; title: string; thumbnailUrl: string | null };
+
+export type Notification = {
+  /** Decimal string; stable for the row's lifetime. */
+  id: string;
+  /** Clients must ignore unknown kinds (see `isKnownNotification`). */
+  kind: NotificationKind;
+  /** 1–3 most recent distinct actors, newest first. */
+  actors: UserRef[];
+  /** Distinct actors in the group, >= 1. */
+  actorCount: number;
+  /** Events in the group, >= actorCount (comment/reply: comments posted; else = actorCount). */
+  eventCount: number;
+  /** Null only for "follow". */
+  game: NotificationGame | null;
+  /** comment: the newest comment; reply: the newest reply; heart: the hearted comment; else null. */
+  commentId: string | null;
+  /** First 140 chars of commentId's current body; plain text (render as text only); null when commentId is null. */
+  excerpt: string | null;
+  /** reply: the recipient wrote the thread's top-level comment; false otherwise. */
+  ownsThread: boolean;
+  /** heart: the game's current owner is among the actors; false otherwise. */
+  creatorHeart: boolean;
+  read: boolean;
+  /** RFC3339 millis Z, first event of the group. */
+  createdAt: string;
+  /** RFC3339 millis Z, latest event of the group (the ordering key). */
+  updatedAt: string;
+  /** In-app route to open. */
+  path: string;
+};
+
+export type NotificationPage = {
+  /** updatedAt desc, then id desc. */
+  items: Notification[];
+  /** Opaque; null when there are no more items. */
+  nextCursor: string | null;
+  /** Same value as UnreadCount.unread. */
+  unread: number;
+};
+
+export type UnreadCount = {
+  /** Visible unread notifications, capped at 100 (show "99+" at 100). */
+  unread: number;
+  /** updatedAt of the newest visible unread notification; null when unread = 0. */
+  latestAt: string | null;
+  /** Suggested delay before the next poll. */
+  pollAfterSecs: number;
+};
+
+/** All default to true. */
+export type NotificationSettings = {
+  /** "comment" kind */
+  comments: boolean;
+  /** "reply" kind */
+  replies: boolean;
+  /** "heart" kind */
+  hearts: boolean;
+  /** "follow" kind */
+  follows: boolean;
+  /** "gamePublished" kind */
+  newGames: boolean;
+};
+
+export type MarkReadRequest = {
+  /** 1–100 notification ids; absent = every unread notification of the caller. */
+  ids?: string[];
+  /** RFC3339; only rows with updatedAt <= upTo are marked (race guard). */
+  upTo: string;
+};
+
+export type MarkReadResponse = { unread: number };
+
+export type NotificationListQuery = {
+  /** A `nextCursor` from a previous page (opaque). */
+  cursor?: string;
+  /** 1–50, default 20. */
+  limit?: number;
+  /** true = unread only. */
+  unread?: boolean;
+};

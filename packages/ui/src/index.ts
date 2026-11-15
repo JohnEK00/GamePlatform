@@ -11,7 +11,9 @@ export type * from "./api/types";
 
 // Contexts / hooks
 export { ConfigProvider, useConfig, usePlatform, useApi, useResolveUrl } from "./context/config";
-export type { WebGameConfig, PlatformConfig } from "./context/config";
+export type { WebGameConfig, PlatformConfig, OsNotifications } from "./context/config";
+export { NotificationsProvider, useNotifications } from "./context/notifications";
+export type { NotificationsState } from "./context/notifications";
 export { AuthProvider, useAuth, TOKEN_STORAGE_KEY, readStoredToken } from "./context/auth";
 export type { AuthState } from "./context/auth";
 export { ToastProvider, useToast } from "./context/toast";
@@ -199,6 +201,33 @@ export { CommentForm, COMMENT_MAX_LENGTH } from "./components/CommentForm";
 export type { CommentFormProps } from "./components/CommentForm";
 export { HeartButton } from "./components/HeartButton";
 export type { HeartButtonProps, HeartState } from "./components/HeartButton";
+// F007: notifications
+export { NotificationBell, NOTIFICATION_PANEL_ID, NOTIFICATION_PANEL_LIMIT } from "./components/NotificationBell";
+export { NotificationItem } from "./components/NotificationItem";
+export type { NotificationItemProps } from "./components/NotificationItem";
+export { NotificationSettingsSection, NOTIFICATION_SETTING_FIELDS } from "./components/NotificationSettings";
+export {
+  NOTIFICATION_KINDS,
+  isKnownNotification,
+  notificationParts,
+  notificationText,
+  safeNotificationPath,
+  mergeNotifications,
+  unreadBadgeText,
+  bellLabel,
+  OS_WATERMARK_PREFIX,
+  readOsWatermark,
+  writeOsWatermark,
+  OS_NOTIFICATION_TITLE,
+  OS_NOTIFICATION_MAX,
+  osNotificationsFor,
+  DEFAULT_POLL_SECS,
+  POLL_MAX_BACKOFF_SECS,
+  POLL_STALE_MS,
+  normalizePollSecs,
+  notificationPollDelay,
+} from "./notifications";
+export type { NotificationPart, PollOutcome, PollDelayInput } from "./notifications";
 export { FileDrop } from "./components/FileDrop";
 export type { FileDropProps } from "./components/FileDrop";
 export { Layout, Header, Footer, Logo, RequireAuth } from "./components/Layout";
@@ -240,6 +269,8 @@ export { StudioPage, STUDIO_OPEN_FOLDER_EVENT } from "./pages/StudioPage";
 export { FeedPage, FEED_TAB_KEY } from "./pages/FeedPage";
 export type { FeedTab } from "./pages/FeedPage";
 export { FollowListPage } from "./pages/FollowListPage";
+export { NotificationsPage, NOTIFICATIONS_PER_PAGE } from "./pages/NotificationsPage";
+export type { NotificationsFilter } from "./pages/NotificationsPage";
 export type { FollowListMode } from "./pages/FollowListPage";
 
 // Utils

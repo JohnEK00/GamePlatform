@@ -4,6 +4,7 @@ import type { ApiClient } from "./api/client";
 import { AuthProvider } from "./context/auth";
 import { ConfigProvider, type WebGameConfig } from "./context/config";
 import { ToastProvider } from "./context/toast";
+import { NotificationsProvider } from "./context/notifications";
 import { Layout, RequireAuth } from "./components/Layout";
 import { FavoritesProvider } from "./components/Favorite";
 import { FollowProvider } from "./components/Follow";
@@ -23,6 +24,7 @@ import { AdminPage } from "./pages/AdminPage";
 import { StudioPage } from "./pages/StudioPage";
 import { FeedPage } from "./pages/FeedPage";
 import { FollowListPage } from "./pages/FollowListPage";
+import { NotificationsPage } from "./pages/NotificationsPage";
 
 /** Config + ApiClient + Auth + Toast providers, without a router. */
 export function WebGameProviders({ config, client, children }: { config: WebGameConfig; client?: ApiClient; children: ReactNode }) {
@@ -30,9 +32,11 @@ export function WebGameProviders({ config, client, children }: { config: WebGame
     <ConfigProvider config={config} client={client}>
       <AuthProvider>
         <ToastProvider>
-          <FavoritesProvider>
-            <FollowProvider>{children}</FollowProvider>
-          </FavoritesProvider>
+          <NotificationsProvider>
+            <FavoritesProvider>
+              <FollowProvider>{children}</FollowProvider>
+            </FavoritesProvider>
+          </NotificationsProvider>
         </ToastProvider>
       </AuthProvider>
     </ConfigProvider>
@@ -100,6 +104,14 @@ export function WebGameRoutes({ extraRoutes }: { extraRoutes?: ReactNode }) {
           element={
             <RequireAuth>
               <FeedPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="notifications"
+          element={
+            <RequireAuth>
+              <NotificationsPage />
             </RequireAuth>
           }
         />

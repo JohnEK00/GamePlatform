@@ -3,6 +3,7 @@ import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate, useSearchPar
 import { useAuth } from "../context/auth";
 import { usePlatform } from "../context/config";
 import { Avatar, Spinner } from "./common";
+import { NotificationBell } from "./NotificationBell";
 
 export function Logo() {
   return (
@@ -88,6 +89,9 @@ function UserMenu() {
           <Link role="menuitem" to="/feed">
             Feed
           </Link>
+          <Link role="menuitem" to="/notifications">
+            Notifications
+          </Link>
           <Link role="menuitem" to="/favorites">
             Favorites
           </Link>
@@ -127,6 +131,7 @@ export function Header() {
     <header className="pf-header">
       <div className="pf-header__inner pf-container">
         <Logo />
+        <NotificationBell />
         <button
           type="button"
           className="pf-iconbtn pf-header__toggle"
