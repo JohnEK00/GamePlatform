@@ -56,7 +56,9 @@ fn clean(input: &str, max: usize, what: &str) -> Result<String, String> {
         return Err(format!("notification {what} is empty"));
     }
     if len > max {
-        return Err(format!("notification {what} is too long (max {max} characters)"));
+        return Err(format!(
+            "notification {what} is too long (max {max} characters)"
+        ));
     }
     Ok(cleaned.to_string())
 }
@@ -64,7 +66,10 @@ fn clean(input: &str, max: usize, what: &str) -> Result<String, String> {
 /// Validated `(title, body)`.
 #[cfg(any(feature = "os-notifications", test))]
 fn sanitize(title: &str, body: &str) -> Result<(String, String), String> {
-    Ok((clean(title, TITLE_MAX, "title")?, clean(body, BODY_MAX, "body")?))
+    Ok((
+        clean(title, TITLE_MAX, "title")?,
+        clean(body, BODY_MAX, "body")?,
+    ))
 }
 
 /// Token bucket: `RATE_BURST` tokens, refilled continuously over `RATE_WINDOW`.
@@ -108,7 +113,11 @@ fn state_name(state: tauri_plugin_notification::PermissionState) -> &'static str
 #[tauri::command]
 pub fn os_notifications_status(app: tauri::AppHandle) -> String {
     use tauri_plugin_notification::NotificationExt;
-    app.notification().permission_state().map(state_name).unwrap_or("prompt").into()
+    app.notification()
+        .permission_state()
+        .map(state_name)
+        .unwrap_or("prompt")
+        .into()
 }
 
 #[cfg(not(feature = "os-notifications"))]
@@ -122,7 +131,11 @@ pub fn os_notifications_status() -> String {
 #[tauri::command]
 pub async fn request_os_notifications(app: tauri::AppHandle) -> String {
     use tauri_plugin_notification::NotificationExt;
-    app.notification().request_permission().map(state_name).unwrap_or("denied").into()
+    app.notification()
+        .request_permission()
+        .map(state_name)
+        .unwrap_or("denied")
+        .into()
 }
 
 #[cfg(not(feature = "os-notifications"))]
@@ -167,7 +180,11 @@ mod tests {
 
     #[test]
     fn strips_control_and_bidi_characters() {
-        let (t, b) = sanitize("  Mia\u{202E}gnp.exe\u{0007} ", "replied\nto\tyou\u{200F} on \u{2066}Space\u{2069} Dodge\u{7F}").unwrap();
+        let (t, b) = sanitize(
+            "  Mia\u{202E}gnp.exe\u{0007} ",
+            "replied\nto\tyou\u{200F} on \u{2066}Space\u{2069} Dodge\u{7F}",
+        )
+        .unwrap();
         assert_eq!(t, "Miagnp.exe");
         assert_eq!(b, "replied to you on Space Dodge");
     }
@@ -175,8 +192,14 @@ mod tests {
     #[test]
     fn enforces_lengths_in_characters() {
         assert!(sanitize("", "body").is_err());
-        assert!(sanitize("title", " \u{202A}\n ").is_err(), "only stripped characters → empty");
-        assert!(sanitize(&"x".repeat(TITLE_MAX), &"é".repeat(BODY_MAX)).is_ok(), "limits are inclusive, in chars");
+        assert!(
+            sanitize("title", " \u{202A}\n ").is_err(),
+            "only stripped characters → empty"
+        );
+        assert!(
+            sanitize(&"x".repeat(TITLE_MAX), &"é".repeat(BODY_MAX)).is_ok(),
+            "limits are inclusive, in chars"
+        );
         assert!(sanitize(&"x".repeat(TITLE_MAX + 1), "body").is_err());
         assert!(sanitize("title", &"é".repeat(BODY_MAX + 1)).is_err());
     }
@@ -186,9 +209,15 @@ mod tests {
         let bucket = ShowBucket::default();
         let start = Instant::now();
         for i in 0..5 {
-            assert!(bucket.try_take(start + Duration::from_millis(i)), "burst of 5 is allowed");
+            assert!(
+                bucket.try_take(start + Duration::from_millis(i)),
+                "burst of 5 is allowed"
+            );
         }
-        assert!(!bucket.try_take(start + Duration::from_secs(1)), "6th within the window is dropped");
+        assert!(
+            !bucket.try_take(start + Duration::from_secs(1)),
+            "6th within the window is dropped"
+        );
         assert!(!bucket.try_take(start + Duration::from_secs(5)));
         // One token refills every 12 s.
         assert!(bucket.try_take(start + Duration::from_secs(13)));
@@ -205,7 +234,13 @@ mod tests {
     #[test]
     fn unsupported_without_the_feature() {
         assert_eq!(os_notifications_status(), UNSUPPORTED);
-        assert_eq!(tauri::async_runtime::block_on(request_os_notifications()), UNSUPPORTED);
-        assert_eq!(show_os_notification("Pixelforge Arcade".into(), "Hello".into()), Ok(false));
+        assert_eq!(
+            tauri::async_runtime::block_on(request_os_notifications()),
+            UNSUPPORTED
+        );
+        assert_eq!(
+            show_os_notification("Pixelforge Arcade".into(), "Hello".into()),
+            Ok(false)
+        );
     }
 }

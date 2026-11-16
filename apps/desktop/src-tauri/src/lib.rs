@@ -61,7 +61,10 @@ impl PickedFiles {
     fn insert(&self, bytes: Vec<u8>) -> String {
         let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
         while map.len() >= MAX_PENDING {
-            let oldest = map.iter().min_by_key(|(_, p)| p.created).map(|(k, _)| k.clone());
+            let oldest = map
+                .iter()
+                .min_by_key(|(_, p)| p.created)
+                .map(|(k, _)| k.clone());
             match oldest {
                 Some(k) => map.remove(&k),
                 None => break,
@@ -71,13 +74,23 @@ impl PickedFiles {
         while map.contains_key(&ticket) {
             ticket = new_ticket();
         }
-        map.insert(ticket.clone(), Pending { bytes, created: Instant::now() });
+        map.insert(
+            ticket.clone(),
+            Pending {
+                bytes,
+                created: Instant::now(),
+            },
+        );
         ticket
     }
 
     /// Removes and returns the bytes for `ticket` (each ticket works once).
     fn take(&self, ticket: &str) -> Option<Vec<u8>> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(ticket).map(|p| p.bytes)
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(ticket)
+            .map(|p| p.bytes)
     }
 }
 
@@ -97,14 +110,28 @@ fn sanitize_filters(filters: Vec<DialogFilter>) -> Vec<(String, Vec<String>)> {
                 .extensions
                 .iter()
                 .map(|e| e.trim().trim_start_matches('.').to_ascii_lowercase())
-                .filter(|e| !e.is_empty() && e.len() <= 16 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+                .filter(|e| {
+                    !e.is_empty() && e.len() <= 16 && e.chars().all(|c| c.is_ascii_alphanumeric())
+                })
                 .take(MAX_EXTENSIONS)
                 .collect();
             if exts.is_empty() {
                 return None;
             }
-            let name: String = f.name.chars().filter(|c| !c.is_control()).take(64).collect();
-            Some((if name.trim().is_empty() { "Files".into() } else { name }, exts))
+            let name: String = f
+                .name
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(64)
+                .collect();
+            Some((
+                if name.trim().is_empty() {
+                    "Files".into()
+                } else {
+                    name
+                },
+                exts,
+            ))
         })
         .collect()
 }
@@ -118,30 +145,38 @@ async fn pick_file(
     filters: Option<Vec<DialogFilter>>,
 ) -> Result<Option<PickedFile>, String> {
     let filters = sanitize_filters(filters.unwrap_or_default());
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<Option<(String, Vec<u8>)>, String> {
-        let mut builder = window.dialog().file().set_parent(&window);
-        for (name, exts) in &filters {
-            let refs: Vec<&str> = exts.iter().map(String::as_str).collect();
-            builder = builder.add_filter(name.as_str(), &refs);
-        }
-        // Blocking is fine here: this runs on a worker thread, not the main/event-loop thread.
-        let Some(choice) = builder.blocking_pick_file() else {
-            return Ok(None);
-        };
-        let path = choice.into_path().map_err(|e| format!("unsupported file location: {e}"))?;
-        let bytes = read_limited(&path)?;
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "file".into());
-        Ok(Some((name, bytes)))
-    })
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<Option<(String, Vec<u8>)>, String> {
+            let mut builder = window.dialog().file().set_parent(&window);
+            for (name, exts) in &filters {
+                let refs: Vec<&str> = exts.iter().map(String::as_str).collect();
+                builder = builder.add_filter(name.as_str(), &refs);
+            }
+            // Blocking is fine here: this runs on a worker thread, not the main/event-loop thread.
+            let Some(choice) = builder.blocking_pick_file() else {
+                return Ok(None);
+            };
+            let path = choice
+                .into_path()
+                .map_err(|e| format!("unsupported file location: {e}"))?;
+            let bytes = read_limited(&path)?;
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".into());
+            Ok(Some((name, bytes)))
+        },
+    )
     .await
     .map_err(|e| format!("file picker task failed: {e}"))??;
 
     Ok(result.map(|(name, bytes)| {
         let size = bytes.len() as u64;
-        PickedFile { ticket: picked.insert(bytes), name, size }
+        PickedFile {
+            ticket: picked.insert(bytes),
+            name,
+            size,
+        }
     }))
 }
 
@@ -177,7 +212,10 @@ fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
         .read_to_end(&mut buf)
         .map_err(|e| format!("cannot read file: {e}"))?;
     if buf.len() as u64 > MAX_READ_BYTES {
-        return Err(format!("file is too large (max {} MB)", MAX_READ_BYTES / 1_048_576));
+        return Err(format!(
+            "file is too large (max {} MB)",
+            MAX_READ_BYTES / 1_048_576
+        ));
     }
     Ok(buf)
 }
@@ -198,7 +236,7 @@ pub fn run() {
         .manage(project::ProjectFolders::default())
         .manage(menu::FullscreenToggle::default())
         .manage(save::LastImageDir::default())
-        .menu(|app| menu::build(app))
+        .menu(menu::build)
         .on_menu_event(menu::handle)
         .invoke_handler(tauri::generate_handler![
             pick_file,
@@ -227,12 +265,16 @@ mod tests {
         assert!(read_limited(Path::new("relative.zip")).is_err());
         let missing = std::env::temp_dir().join("pixelforge-definitely-missing.zip");
         assert!(read_limited(&missing).is_err());
-        assert_eq!(read_limited(&std::env::temp_dir()).unwrap_err(), "not a regular file");
+        assert_eq!(
+            read_limited(&std::env::temp_dir()).unwrap_err(),
+            "not a regular file"
+        );
     }
 
     #[test]
     fn reads_small_file() {
-        let p: PathBuf = std::env::temp_dir().join(format!("pixelforge-read-test-{}.bin", std::process::id()));
+        let p: PathBuf =
+            std::env::temp_dir().join(format!("pixelforge-read-test-{}.bin", std::process::id()));
         std::fs::write(&p, b"hello").unwrap();
         assert_eq!(read_limited(&p).unwrap(), b"hello");
         std::fs::remove_file(p).ok();
@@ -253,8 +295,13 @@ mod tests {
     fn pending_files_are_bounded() {
         let store = PickedFiles::default();
         let first = store.insert(vec![1]);
-        let rest: Vec<String> = (0..MAX_PENDING).map(|i| store.insert(vec![i as u8])).collect();
-        assert!(store.take(&first).is_none(), "oldest pending file is evicted");
+        let rest: Vec<String> = (0..MAX_PENDING)
+            .map(|i| store.insert(vec![i as u8]))
+            .collect();
+        assert!(
+            store.take(&first).is_none(),
+            "oldest pending file is evicted"
+        );
         assert_eq!(store.0.lock().unwrap().len(), MAX_PENDING);
         assert!(rest.iter().all(|t| store.take(t).is_some()));
     }
@@ -262,10 +309,25 @@ mod tests {
     #[test]
     fn filters_are_sanitized() {
         let f = sanitize_filters(vec![
-            DialogFilter { name: "Bundle".into(), extensions: vec![".ZIP".into(), "../x".into(), "*".into(), "".into()] },
-            DialogFilter { name: "Bad".into(), extensions: vec!["a/b".into()] },
-            DialogFilter { name: " ".into(), extensions: vec!["png".into()] },
+            DialogFilter {
+                name: "Bundle".into(),
+                extensions: vec![".ZIP".into(), "../x".into(), "*".into(), "".into()],
+            },
+            DialogFilter {
+                name: "Bad".into(),
+                extensions: vec!["a/b".into()],
+            },
+            DialogFilter {
+                name: " ".into(),
+                extensions: vec!["png".into()],
+            },
         ]);
-        assert_eq!(f, vec![("Bundle".to_string(), vec!["zip".to_string()]), ("Files".to_string(), vec!["png".to_string()])]);
+        assert_eq!(
+            f,
+            vec![
+                ("Bundle".to_string(), vec!["zip".to_string()]),
+                ("Files".to_string(), vec!["png".to_string()])
+            ]
+        );
     }
 }

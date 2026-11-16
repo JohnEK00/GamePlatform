@@ -25,7 +25,8 @@ use crate::new_ticket;
 
 /// Bundle file extensions accepted by the backend (backend/src/bundle.rs `ALLOWED_EXTS`).
 pub const ALLOWED_EXTS: &[&str] = &[
-    "png", "jpg", "jpeg", "webp", "gif", "svg", "json", "txt", "wav", "mp3", "ogg", "js", "css", "woff2", "ttf",
+    "png", "jpg", "jpeg", "webp", "gif", "svg", "json", "txt", "wav", "mp3", "ogg", "js", "css",
+    "woff2", "ttf",
 ];
 /// Extensions sent to the Studio as strings (everything else is an ArrayBuffer).
 pub const TEXT_EXTS: &[&str] = &["js", "json", "txt", "css", "svg", "md", "csv"];
@@ -49,7 +50,11 @@ pub struct Limits {
 
 impl Limits {
     /// Same limits as uploads: ≤ 2000 files, ≤ 200 MB uncompressed.
-    pub const UPLOAD: Limits = Limits { max_files: 2000, max_total_bytes: 200 * 1024 * 1024, max_depth: 32 };
+    pub const UPLOAD: Limits = Limits {
+        max_files: 2000,
+        max_total_bytes: 200 * 1024 * 1024,
+        max_depth: 32,
+    };
 }
 
 /// A folder read from disk. `files` excludes game.json; paths are bundle-relative with `/` separators.
@@ -93,7 +98,10 @@ fn list_dir(dir: &Path) -> Result<Vec<fs::DirEntry>, String> {
 }
 
 fn is_real_dir(entry: &fs::DirEntry) -> bool {
-    entry.file_type().map(|t| t.is_dir() && !t.is_symlink()).unwrap_or(false)
+    entry
+        .file_type()
+        .map(|t| t.is_dir() && !t.is_symlink())
+        .unwrap_or(false)
 }
 
 /// Like uploads, a folder that only wraps the project in one top-level folder is accepted:
@@ -103,7 +111,10 @@ fn project_root(root: &Path) -> Result<PathBuf, String> {
         return Ok(root.to_path_buf());
     }
     let entries = list_dir(root)?;
-    if entries.len() == 1 && is_real_dir(&entries[0]) && entries[0].path().join("game.json").is_file() {
+    if entries.len() == 1
+        && is_real_dir(&entries[0])
+        && entries[0].path().join("game.json").is_file()
+    {
         return Ok(entries[0].path());
     }
     Ok(root.to_path_buf())
@@ -122,12 +133,18 @@ struct Walk<'a> {
 impl Walk<'_> {
     fn walk(&mut self, dir: &Path, prefix: &str, depth: usize) -> Result<(), String> {
         if depth > self.limits.max_depth {
-            return Err(format!("folders are nested too deeply (max {} levels)", self.limits.max_depth));
+            return Err(format!(
+                "folders are nested too deeply (max {} levels)",
+                self.limits.max_depth
+            ));
         }
         for entry in list_dir(dir)? {
             let os_name = entry.file_name();
             let Some(name) = os_name.to_str() else {
-                self.skipped.push(format!("{prefix}{} (unsupported file name)", os_name.to_string_lossy()));
+                self.skipped.push(format!(
+                    "{prefix}{} (unsupported file name)",
+                    os_name.to_string_lossy()
+                ));
                 continue;
             };
             let rel = format!("{prefix}{name}");
@@ -136,7 +153,9 @@ impl Walk<'_> {
                 continue;
             }
             // DirEntry::file_type does not follow links; on Windows `is_symlink` also covers junctions.
-            let ft = entry.file_type().map_err(|e| format!("cannot read {rel}: {e}"))?;
+            let ft = entry
+                .file_type()
+                .map_err(|e| format!("cannot read {rel}: {e}"))?;
             if ft.is_symlink() {
                 self.skipped.push(format!("{rel} (symbolic link)"));
             } else if ft.is_dir() {
@@ -157,13 +176,18 @@ impl Walk<'_> {
             return Ok(());
         }
         // Defence in depth: the resolved path must still be inside the chosen folder.
-        let real = path.canonicalize().map_err(|e| format!("cannot open {rel}: {e}"))?;
+        let real = path
+            .canonicalize()
+            .map_err(|e| format!("cannot open {rel}: {e}"))?;
         if !real.starts_with(self.root) {
             return Err(format!("{rel} points outside the selected folder"));
         }
         self.count += 1;
         if self.count > self.limits.max_files {
-            return Err(format!("the folder has too many files (max {})", self.limits.max_files));
+            return Err(format!(
+                "the folder has too many files (max {})",
+                self.limits.max_files
+            ));
         }
         let too_big = || {
             format!(
@@ -187,8 +211,8 @@ impl Walk<'_> {
         self.total += buf.len() as u64;
         if is_manifest {
             let body = buf.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&buf);
-            let value: Value =
-                serde_json::from_slice(body).map_err(|e| format!("game.json is not valid JSON: {e}"))?;
+            let value: Value = serde_json::from_slice(body)
+                .map_err(|e| format!("game.json is not valid JSON: {e}"))?;
             if !value.is_object() {
                 return Err("game.json must contain a JSON object".into());
             }
@@ -209,8 +233,14 @@ pub fn read_project_dir(dir: &Path, limits: Limits) -> Result<ProjectData, Strin
     if !meta.is_dir() {
         return Err("not a folder".into());
     }
-    let root = project_root(&dir.canonicalize().map_err(|e| format!("cannot open folder: {e}"))?)?;
-    let folder = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let root = project_root(
+        &dir.canonicalize()
+            .map_err(|e| format!("cannot open folder: {e}"))?,
+    )?;
+    let folder = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let mut walk = Walk {
         root: &root,
         limits,
@@ -221,9 +251,20 @@ pub fn read_project_dir(dir: &Path, limits: Limits) -> Result<ProjectData, Strin
         skipped: Vec::new(),
     };
     walk.walk(&root, "", 0)?;
-    let Walk { manifest, files, skipped, .. } = walk;
+    let Walk {
+        manifest,
+        files,
+        skipped,
+        ..
+    } = walk;
     let manifest = manifest.ok_or("No game.json found in the selected folder.")?;
-    Ok(ProjectData { root, folder, manifest, files, skipped })
+    Ok(ProjectData {
+        root,
+        folder,
+        manifest,
+        files,
+        skipped,
+    })
 }
 
 /// Decodes a text file like the browser's `File.text()` (UTF-8, BOM stripped, invalid bytes replaced).
@@ -279,7 +320,10 @@ impl OpenProjects {
     pub fn insert(&self, files: HashMap<String, Vec<u8>>) -> String {
         let mut map = self.lock();
         while map.len() >= MAX_PENDING_PROJECTS {
-            let oldest = map.iter().min_by_key(|(_, p)| p.seq).map(|(k, _)| k.clone());
+            let oldest = map
+                .iter()
+                .min_by_key(|(_, p)| p.seq)
+                .map(|(k, _)| k.clone());
             match oldest {
                 Some(k) => map.remove(&k),
                 None => break,
@@ -289,15 +333,27 @@ impl OpenProjects {
         while map.contains_key(&ticket) {
             ticket = new_ticket();
         }
-        map.insert(ticket.clone(), PendingProject { files, created: Instant::now(), seq: NEXT_SEQ.fetch_add(1, Ordering::Relaxed) });
+        map.insert(
+            ticket.clone(),
+            PendingProject {
+                files,
+                created: Instant::now(),
+                seq: NEXT_SEQ.fetch_add(1, Ordering::Relaxed),
+            },
+        );
         ticket
     }
 
     /// Removes and returns one file; the ticket is dropped once its last file was taken.
     pub fn take_file(&self, ticket: &str, path: &str) -> Result<Vec<u8>, String> {
         let mut map = self.lock();
-        let project = map.get_mut(ticket).ok_or("unknown or expired project ticket")?;
-        let bytes = project.files.remove(path).ok_or("unknown or already read project file")?;
+        let project = map
+            .get_mut(ticket)
+            .ok_or("unknown or expired project ticket")?;
+        let bytes = project
+            .files
+            .remove(path)
+            .ok_or("unknown or already read project file")?;
         if project.files.is_empty() {
             map.remove(ticket);
         }
@@ -334,7 +390,11 @@ impl ProjectFolders {
     pub fn register(&self, root: PathBuf) -> String {
         let mut inner = self.lock();
         while inner.map.len() >= MAX_FOLDERS {
-            let oldest = inner.map.iter().min_by_key(|(_, e)| e.used).map(|(k, _)| k.clone());
+            let oldest = inner
+                .map
+                .iter()
+                .min_by_key(|(_, e)| e.used)
+                .map(|(k, _)| k.clone());
             match oldest {
                 Some(k) => inner.map.remove(&k),
                 None => break,
@@ -392,12 +452,20 @@ fn into_index(data: ProjectData, folder_id: String, projects: &OpenProjects) -> 
     for (path, bytes) in data.files {
         let size = bytes.len() as u64;
         if TEXT_EXTS.contains(&extension(&path).as_str()) {
-            entries.push(IndexEntry { path, size, text: Some(decode_text(&bytes)) });
+            entries.push(IndexEntry {
+                path,
+                size,
+                text: Some(decode_text(&bytes)),
+            });
         } else {
             if size > 0 {
                 binaries.insert(path.clone(), bytes);
             }
-            entries.push(IndexEntry { path, size, text: None });
+            entries.push(IndexEntry {
+                path,
+                size,
+                text: None,
+            });
         }
     }
     let skipped_count = data.skipped.len();
@@ -419,21 +487,24 @@ pub async fn pick_project_folder(
     projects: State<'_, OpenProjects>,
     folders: State<'_, ProjectFolders>,
 ) -> Result<Option<ProjectIndex>, String> {
-    let data = tauri::async_runtime::spawn_blocking(move || -> Result<Option<ProjectData>, String> {
-        let choice = window
-            .dialog()
-            .file()
-            .set_parent(&window)
-            .set_title("Open local game folder")
-            .blocking_pick_folder();
-        let Some(choice) = choice else {
-            return Ok(None);
-        };
-        let path = choice.into_path().map_err(|e| format!("unsupported folder location: {e}"))?;
-        read_project_dir(&path, Limits::UPLOAD).map(Some)
-    })
-    .await
-    .map_err(|e| format!("folder picker task failed: {e}"))??;
+    let data =
+        tauri::async_runtime::spawn_blocking(move || -> Result<Option<ProjectData>, String> {
+            let choice = window
+                .dialog()
+                .file()
+                .set_parent(&window)
+                .set_title("Open local game folder")
+                .blocking_pick_folder();
+            let Some(choice) = choice else {
+                return Ok(None);
+            };
+            let path = choice
+                .into_path()
+                .map_err(|e| format!("unsupported folder location: {e}"))?;
+            read_project_dir(&path, Limits::UPLOAD).map(Some)
+        })
+        .await
+        .map_err(|e| format!("folder picker task failed: {e}"))??;
     Ok(data.map(|d| {
         let id = folders.register(d.root.clone());
         into_index(d, id, &projects)
@@ -443,10 +514,17 @@ pub async fn pick_project_folder(
 /// Re-reads a folder picked earlier in this session (no dialog). Returns a fresh index with a new ticket and
 /// the same `folderId`. Errors with `FOLDER_GONE` for an unknown id or a folder that was moved or deleted.
 #[tauri::command]
-pub async fn reload_project_folder(app: tauri::AppHandle, folder_id: String) -> Result<Option<ProjectIndex>, String> {
+pub async fn reload_project_folder(
+    app: tauri::AppHandle,
+    folder_id: String,
+) -> Result<Option<ProjectIndex>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let data = reload_data(&app.state::<ProjectFolders>(), &folder_id)?;
-        Ok(Some(into_index(data, folder_id, &app.state::<OpenProjects>())))
+        Ok(Some(into_index(
+            data,
+            folder_id,
+            &app.state::<OpenProjects>(),
+        )))
     })
     .await
     .map_err(|e| format!("folder reload task failed: {e}"))?
@@ -454,7 +532,11 @@ pub async fn reload_project_folder(app: tauri::AppHandle, folder_id: String) -> 
 
 /// Returns one binary file of an opened project as raw bytes (ArrayBuffer in the webview). Each file once.
 #[tauri::command]
-pub fn read_project_file(projects: State<'_, OpenProjects>, ticket: String, path: String) -> Result<Response, String> {
+pub fn read_project_file(
+    projects: State<'_, OpenProjects>,
+    ticket: String,
+    path: String,
+) -> Result<Response, String> {
     projects.take_file(&ticket, &path).map(Response::new)
 }
 
@@ -473,7 +555,11 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> Self {
-            let p = std::env::temp_dir().join(format!("pixelforge-proj-{tag}-{}-{}", std::process::id(), new_ticket()));
+            let p = std::env::temp_dir().join(format!(
+                "pixelforge-proj-{tag}-{}-{}",
+                std::process::id(),
+                new_ticket()
+            ));
             fs::create_dir_all(&p).unwrap();
             TempDir(p)
         }
@@ -518,13 +604,22 @@ mod tests {
     fn requires_valid_game_json_object() {
         let t = TempDir::new("manifest");
         t.write("main.js", b"");
-        assert!(read_project_dir(&t.0, Limits::UPLOAD).unwrap_err().contains("No game.json"));
+        assert!(read_project_dir(&t.0, Limits::UPLOAD)
+            .unwrap_err()
+            .contains("No game.json"));
         t.write("game.json", b"{ nope");
-        assert!(read_project_dir(&t.0, Limits::UPLOAD).unwrap_err().contains("not valid JSON"));
+        assert!(read_project_dir(&t.0, Limits::UPLOAD)
+            .unwrap_err()
+            .contains("not valid JSON"));
         t.write("game.json", b"[1, 2]");
-        assert!(read_project_dir(&t.0, Limits::UPLOAD).unwrap_err().contains("JSON object"));
+        assert!(read_project_dir(&t.0, Limits::UPLOAD)
+            .unwrap_err()
+            .contains("JSON object"));
         t.write("game.json", b"\xEF\xBB\xBF{\"name\":\"bom\"}");
-        assert_eq!(read_project_dir(&t.0, Limits::UPLOAD).unwrap().manifest["name"], "bom");
+        assert_eq!(
+            read_project_dir(&t.0, Limits::UPLOAD).unwrap().manifest["name"],
+            "bom"
+        );
         // game.json must be at the project root, not in a sub-folder next to other files.
         let u = TempDir::new("nested-manifest");
         u.write("src/game.json", MANIFEST);
@@ -549,15 +644,25 @@ mod tests {
         t.write("game.json", MANIFEST);
         t.write("a.js", &[b'a'; 100]);
         t.write("b.js", &[b'b'; 100]);
-        let small = |max_files, max_total_bytes, max_depth| Limits { max_files, max_total_bytes, max_depth };
+        let small = |max_files, max_total_bytes, max_depth| Limits {
+            max_files,
+            max_total_bytes,
+            max_depth,
+        };
         // game.json counts towards both limits, like in a zip.
         assert!(read_project_dir(&t.0, small(3, 10_000, 4)).is_ok());
-        assert!(read_project_dir(&t.0, small(2, 10_000, 4)).unwrap_err().contains("too many files"));
+        assert!(read_project_dir(&t.0, small(2, 10_000, 4))
+            .unwrap_err()
+            .contains("too many files"));
         let total = MANIFEST.len() as u64 + 200;
         assert!(read_project_dir(&t.0, small(10, total, 4)).is_ok());
-        assert!(read_project_dir(&t.0, small(10, total - 1, 4)).unwrap_err().contains("too large"));
+        assert!(read_project_dir(&t.0, small(10, total - 1, 4))
+            .unwrap_err()
+            .contains("too large"));
         t.write("x/y/z/deep.js", b"");
-        assert!(read_project_dir(&t.0, small(10, 10_000, 2)).unwrap_err().contains("nested too deeply"));
+        assert!(read_project_dir(&t.0, small(10, 10_000, 2))
+            .unwrap_err()
+            .contains("nested too deeply"));
         assert!(read_project_dir(&t.0, small(10, 10_000, 3)).is_ok());
     }
 
@@ -566,7 +671,10 @@ mod tests {
         assert!(read_project_dir(Path::new("relative/dir"), Limits::UPLOAD).is_err());
         let t = TempDir::new("file");
         t.write("game.json", MANIFEST);
-        assert_eq!(read_project_dir(&t.0.join("game.json"), Limits::UPLOAD).unwrap_err(), "not a folder");
+        assert_eq!(
+            read_project_dir(&t.0.join("game.json"), Limits::UPLOAD).unwrap_err(),
+            "not a folder"
+        );
     }
 
     #[test]
@@ -577,18 +685,26 @@ mod tests {
         t.write("game.json", MANIFEST);
         #[cfg(unix)]
         let made = std::os::unix::fs::symlink(&outside.0, t.0.join("linked")).is_ok()
-            && std::os::unix::fs::symlink(outside.0.join("secret.txt"), t.0.join("secret.txt")).is_ok();
+            && std::os::unix::fs::symlink(outside.0.join("secret.txt"), t.0.join("secret.txt"))
+                .is_ok();
         // Creating symlinks on Windows needs Developer Mode or admin rights; skip when unavailable.
         #[cfg(windows)]
         let made = std::os::windows::fs::symlink_dir(&outside.0, t.0.join("linked")).is_ok()
-            && std::os::windows::fs::symlink_file(outside.0.join("secret.txt"), t.0.join("secret.txt")).is_ok();
+            && std::os::windows::fs::symlink_file(
+                outside.0.join("secret.txt"),
+                t.0.join("secret.txt"),
+            )
+            .is_ok();
         if !made {
             eprintln!("symlinks unavailable; skipping");
             return;
         }
         let d = read_project_dir(&t.0, Limits::UPLOAD).unwrap();
         assert!(d.files.is_empty(), "linked files must not be read");
-        assert_eq!(d.skipped, vec!["linked (symbolic link)", "secret.txt (symbolic link)"]);
+        assert_eq!(
+            d.skipped,
+            vec!["linked (symbolic link)", "secret.txt (symbolic link)"]
+        );
     }
 
     #[test]
@@ -608,14 +724,33 @@ mod tests {
         let index = into_index(data, "id".into(), &store);
         assert_eq!(index.folder_id, "id");
         assert_eq!(index.files[0].text.as_deref(), Some("let x = 1;"));
-        assert_eq!(index.files[1], IndexEntry { path: "a.png".into(), size: 3, text: None });
+        assert_eq!(
+            index.files[1],
+            IndexEntry {
+                path: "a.png".into(),
+                size: 3,
+                text: None
+            }
+        );
         assert_eq!(index.files[2].size, 0);
-        assert_eq!((index.skipped.len(), index.skipped_count), (MAX_SKIPPED_LISTED, 60));
+        assert_eq!(
+            (index.skipped.len(), index.skipped_count),
+            (MAX_SKIPPED_LISTED, 60)
+        );
         let ticket = index.ticket.unwrap();
-        assert!(store.take_file(&ticket, "main.js").is_err(), "text files are not stored");
-        assert!(store.take_file(&ticket, "empty.wav").is_err(), "empty files are not stored");
+        assert!(
+            store.take_file(&ticket, "main.js").is_err(),
+            "text files are not stored"
+        );
+        assert!(
+            store.take_file(&ticket, "empty.wav").is_err(),
+            "empty files are not stored"
+        );
         assert_eq!(store.take_file(&ticket, "a.png").unwrap(), vec![1, 2, 3]);
-        assert!(store.take_file(&ticket, "a.png").is_err(), "ticket is gone after the last file");
+        assert!(
+            store.take_file(&ticket, "a.png").is_err(),
+            "ticket is gone after the last file"
+        );
         assert!(store.0.lock().unwrap().is_empty());
     }
 
@@ -626,7 +761,10 @@ mod tests {
         let first = store.insert(files());
         let second = store.insert(files());
         let third = store.insert(files());
-        assert!(store.take_file(&first, "a.png").is_err(), "oldest project is evicted");
+        assert!(
+            store.take_file(&first, "a.png").is_err(),
+            "oldest project is evicted"
+        );
         store.release(&second);
         assert!(store.take_file(&second, "a.png").is_err());
         assert!(store.take_file(&third, "../a.png").is_err());
@@ -640,7 +778,9 @@ mod tests {
         let a2 = folders.register(PathBuf::from("/a"));
         assert_ne!(a, a2, "ids are random, not derived from the path");
         assert_eq!(a.len(), 32);
-        let others: Vec<String> = (2..MAX_FOLDERS).map(|i| folders.register(PathBuf::from(format!("/f{i}")))).collect();
+        let others: Vec<String> = (2..MAX_FOLDERS)
+            .map(|i| folders.register(PathBuf::from(format!("/f{i}"))))
+            .collect();
         assert_eq!(folders.lock().map.len(), MAX_FOLDERS);
         // Touch `a`, so `a2` is now the least recently used.
         assert_eq!(folders.get(&a), Some(PathBuf::from("/a")));
@@ -672,11 +812,27 @@ mod tests {
         t.write("hero.png", &[1, 2]);
         let index = into_index(reload_data(&folders, &id).unwrap(), id.clone(), &projects);
         assert_eq!(index.folder_id, id);
-        assert_eq!(index.files.iter().find(|f| f.path == "main.js").unwrap().text.as_deref(), Some("v2"));
-        assert_eq!(projects.take_file(index.ticket.as_deref().unwrap(), "hero.png").unwrap(), vec![1, 2]);
+        assert_eq!(
+            index
+                .files
+                .iter()
+                .find(|f| f.path == "main.js")
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("v2")
+        );
+        assert_eq!(
+            projects
+                .take_file(index.ticket.as_deref().unwrap(), "hero.png")
+                .unwrap(),
+            vec![1, 2]
+        );
         // Validation still applies: an invalid game.json is reported, and the folder stays registered.
         t.write("game.json", b"{ nope");
-        assert!(reload_data(&folders, &id).unwrap_err().contains("not valid JSON"));
+        assert!(reload_data(&folders, &id)
+            .unwrap_err()
+            .contains("not valid JSON"));
         assert!(folders.get(&id).is_some());
     }
 
