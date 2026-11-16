@@ -22,7 +22,7 @@ export type * from "./api/types";
 export { ConfigProvider, useConfig, usePlatform, useApi, useResolveUrl } from "./context/config";
 export type { WebGameConfig, PlatformConfig, OsNotifications } from "./context/config";
 export { NotificationsProvider, useNotifications } from "./context/notifications";
-export type { NotificationsState } from "./context/notifications";
+export type { NotificationsState, NotificationsProviderProps } from "./context/notifications";
 export { AuthProvider, useAuth, TOKEN_STORAGE_KEY, readStoredToken } from "./context/auth";
 export type { AuthState } from "./context/auth";
 export { ToastProvider, useToast } from "./context/toast";
@@ -242,6 +242,34 @@ export {
   notificationPollDelay,
 } from "./notifications";
 export type { NotificationPart, PollOutcome, PollDelayInput } from "./notifications";
+// F018: notification controls
+export { muteActionFor } from "./notifications";
+export type { MuteAction } from "./notifications";
+export {
+  tabScope,
+  parseTabMessage,
+  createTabCoordinator,
+  followerWatchdogMs,
+  VISIBLE_TTL_MS,
+  VISIBLE_PING_MS,
+  FOLLOWER_START_GRACE_MS,
+} from "./notificationsTabs";
+export type {
+  TabMessage,
+  TabMessageBody,
+  TabDeps,
+  TabHandlers,
+  TabSession,
+  TabCoordinator,
+  LockManagerLike,
+  ChannelLike,
+} from "./notificationsTabs";
+export { MuteGameButton } from "./components/MuteGameButton";
+export type { MuteGameButtonProps } from "./components/MuteGameButton";
+export { MuteThreadButton } from "./components/MuteThreadButton";
+export type { MuteThreadButtonProps } from "./components/MuteThreadButton";
+export { MutedList, MUTES_PER_USER, MUTES_COUNT_FROM } from "./components/MutedList";
+export { useSetMute, useMuteToggle, useMuteToasts, muteToastText } from "./components/muteSupport";
 export { FileDrop } from "./components/FileDrop";
 export type { FileDropProps } from "./components/FileDrop";
 export { Layout, Header, Footer, Logo, RequireAuth } from "./components/Layout";

@@ -23,6 +23,8 @@ export function normalizeComment(c: RawComment, canDeleteFallback?: (c: RawComme
     pinned: c.pinned === true,
     locked: c.locked === true,
     canModerate: c.canModerate === true,
+    // F018 (missing on older servers → undefined: muting not supported).
+    threadMuted: typeof c.threadMuted === "boolean" ? c.threadMuted : undefined,
   };
 }
 

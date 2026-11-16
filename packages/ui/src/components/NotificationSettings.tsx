@@ -6,14 +6,19 @@ import { useApi } from "../context/config";
 import { useToast } from "../context/toast";
 import { errorMessage } from "../util";
 import { LoadError, Spinner } from "./common";
+import { MutedList } from "./MutedList";
 
 type Key = keyof Settings;
 
-/** The five switches, in display order (spec § 2.4). */
+/**
+ * The switches, in display order (F007 spec § 2.4; F018 adds `pins`). A switch is shown only when the server's
+ * settings have its field (older servers omit `pins`).
+ */
 export const NOTIFICATION_SETTING_FIELDS: readonly { key: Key; label: string; hint: string }[] = [
   { key: "comments", label: "Comments on my games", hint: "Someone comments on a game you made." },
   { key: "replies", label: "Replies to my comments and to me", hint: "Someone answers in your thread or replies to you." },
   { key: "hearts", label: "Hearts on my comments", hint: "Someone hearts a comment you wrote." },
+  { key: "pins", label: "Pins on your comments", hint: "A creator pins a comment you wrote." },
   { key: "follows", label: "New followers", hint: "Someone starts following you." },
   { key: "newGames", label: "New games from creators I follow", hint: "A creator you follow publishes a new game." },
 ];
@@ -88,11 +93,11 @@ export function NotificationSettingsSection() {
           <Spinner size={18} label="Loading notification settings" />
         ) : (
           <div className="pf-stack pf-notif-settings__list">
-            {NOTIFICATION_SETTING_FIELDS.map((f) => (
+            {NOTIFICATION_SETTING_FIELDS.filter((f) => typeof settings[f.key] === "boolean").map((f) => (
               <label key={f.key} className="pf-switch">
                 <input
                   type="checkbox"
-                  checked={settings[f.key]}
+                  checked={settings[f.key] === true}
                   onChange={(e) => void change(f.key, e.target.checked)}
                   aria-labelledby={`pf-notif-set-${f.key}-label`}
                   aria-describedby={`pf-notif-set-${f.key}-hint`}
@@ -112,6 +117,8 @@ export function NotificationSettingsSection() {
       <p className="pf-muted pf-small pf-notif-settings__note">
         Turning a type off stops new notifications of that type. Existing ones stay until they expire.
       </p>
+      {/* F018: only servers with mutes send `pins`; the list hides itself on a 404 as well. */}
+      {settings && typeof settings.pins === "boolean" && <MutedList />}
     </section>
   );
 }

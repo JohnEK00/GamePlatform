@@ -81,6 +81,11 @@ export type Game = GameSummary & {
   actions?: ControlAction[];
   /** F009: normalised game.json `controls` text (0–300 chars, plain text); "" when absent. Older servers omit it. */
   controlsHint?: string;
+  /**
+   * F018: the viewer muted notifications about this game (`GET /api/games/{id}` only; false when anonymous).
+   * Older servers omit it: hide the mute button.
+   */
+  notificationsMuted?: boolean;
 };
 
 /** F009: gamepad buttons an action can use (the engine's `GamepadButtons` names without `Home`). */
@@ -167,6 +172,11 @@ export type Comment = {
   locked: boolean;
   /** F017: top-level only, the viewer is the game's current owner or an admin (may pin/lock). Older servers omit it (false). */
   canModerate: boolean;
+  /**
+   * F018: top-level only, the viewer muted notifications for this thread (false on replies and when anonymous).
+   * Older servers omit it: hide the mute button.
+   */
+  threadMuted?: boolean;
 };
 
 /** F017: thread order of `GET /api/games/{id}/comments`. */
@@ -534,7 +544,8 @@ export type ScreenshotPage = Page<Screenshot>;
 
 // ---- F007: in-app notifications ----
 
-export type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished";
+/** F018 adds "pinned". */
+export type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished" | "pinned";
 
 export type NotificationGame = { id: string; title: string; thumbnailUrl: string | null };
 
@@ -566,6 +577,11 @@ export type Notification = {
   updatedAt: string;
   /** In-app route to open. */
   path: string;
+  /**
+   * F018: reply → the thread's top-level comment; heart → the top-level comment of the hearted comment's thread;
+   * pinned → the pinned comment; else null. Older servers omit it (treat as null).
+   */
+  threadId?: string | null;
 };
 
 export type NotificationPage = {
@@ -598,6 +614,40 @@ export type NotificationSettings = {
   follows: boolean;
   /** "gamePublished" kind */
   newGames: boolean;
+  /** F018: "pinned" kind. Older servers omit it: hide the switch. */
+  pins?: boolean;
+};
+
+// ---- F018: notification mutes ----
+
+export type MuteTarget = "game" | "thread";
+
+export type NotificationMute = {
+  target: MuteTarget;
+  /** The game (for threads: the thread's game). */
+  game: NotificationGame;
+  /** thread: the top-level comment id; game: null. */
+  threadId: string | null;
+  /** thread: first 80 chars of the top-level comment's current body (plain text); game: null. */
+  excerpt: string | null;
+  /** game: "/games/{gameId}"; thread: "/games/{gameId}?comment={threadId}". */
+  path: string;
+  /** RFC3339 millis Z, when it was muted. */
+  createdAt: string;
+};
+
+export type NotificationMuteList = {
+  /** createdAt desc; only mutes whose game is visible to the caller. */
+  items: NotificationMute[];
+  /** items.length (no paging). */
+  total: number;
+};
+
+export type MuteState = {
+  /** The state after the request. */
+  muted: boolean;
+  /** UnreadCount.unread after the request (mutes mark matching notifications read). */
+  unread: number;
 };
 
 export type MarkReadRequest = {

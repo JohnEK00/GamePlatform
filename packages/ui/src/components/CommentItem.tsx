@@ -5,6 +5,8 @@ import { formatDate, timeAgo } from "../util";
 import { Avatar } from "./common";
 import { HeartButton, type HeartState } from "./HeartButton";
 import { ReportButton } from "./Report";
+import { MuteThreadButton } from "./MuteThreadButton";
+import { useNotifications } from "../context/notifications";
 
 export type CommentItemProps = {
   comment: Comment;
@@ -67,6 +69,9 @@ export function CommentItem({
   const authorId = `comment-${c.id}-author`;
   const isAuthor = !!viewerId && viewerId === c.author.id;
   const tools = !isReply && !legacy && c.canModerate;
+  // F018 § 2.2: top-level only, signed in, server sends `threadMuted`, notifications supported.
+  const notificationsSupported = useNotifications().supported;
+  const canMute = !!viewerId && !isReply && !legacy && typeof c.threadMuted === "boolean" && notificationsSupported;
   const className = `pf-comment${isReply ? " pf-comment--reply" : ""}${highlighted ? " pf-comment--highlight" : ""}`;
   return (
     <article id={`comment-${c.id}`} className={className} aria-labelledby={authorId} tabIndex={-1}>
@@ -116,6 +121,7 @@ export function CommentItem({
           {!legacy && (
             <HeartButton comment={c} interactive={!!viewerId && !isAuthor} onChange={onHeartChange ? (next) => onHeartChange(c, next) : undefined} />
           )}
+          {canMute && <MuteThreadButton commentId={c.id} muted={c.threadMuted === true} authorName={name} />}
           {c.canDelete && onDelete && (
             <button
               type="button"

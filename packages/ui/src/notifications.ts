@@ -2,7 +2,7 @@
 import type { Notification, NotificationKind, UserRef } from "./api/types";
 
 /** Kinds this client knows how to render. Others are ignored (API § F007). */
-export const NOTIFICATION_KINDS: readonly NotificationKind[] = ["comment", "reply", "heart", "follow", "gamePublished"];
+export const NOTIFICATION_KINDS: readonly NotificationKind[] = ["comment", "reply", "heart", "follow", "gamePublished", "pinned"];
 
 export function isKnownNotification(n: unknown): n is Notification {
   if (!n || typeof n !== "object") return false;
@@ -58,8 +58,33 @@ export function notificationParts(n: Notification): NotificationPart[] {
       return [...who, t(" followed you")];
     case "gamePublished":
       return [name(a), t(" published "), title];
+    case "pinned":
+      // F018 § 2.5: only the newest actor is named.
+      return [name(a), t(" pinned your comment on "), title];
     default:
       return [];
+  }
+}
+
+/** F018 § 2.3: the "Mute" action of an item on the /notifications page, or null when it has none. */
+export type MuteAction = { target: "game" | "thread"; id: string; label: string };
+
+export function muteActionFor(n: Notification): MuteAction | null {
+  if (!isKnownNotification(n)) return null;
+  const title = n.game?.title || "this game";
+  const threadId = typeof n.threadId === "string" && n.threadId ? n.threadId : null;
+  switch (n.kind) {
+    case "reply":
+    case "heart":
+    case "pinned":
+      if (!threadId) return null;
+      return { target: "thread", id: threadId, label: `Mute notifications for this thread on ${title}` };
+    case "comment":
+    case "gamePublished":
+      if (!n.game || typeof n.game.id !== "string" || !n.game.id) return null;
+      return { target: "game", id: n.game.id, label: `Mute notifications for ${title}` };
+    default:
+      return null;
   }
 }
 

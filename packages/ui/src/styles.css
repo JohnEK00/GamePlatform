@@ -5446,3 +5446,151 @@ a.pf-tab {
     transition: none;
   }
 }
+
+/* ---------- F018: notification controls (mutes) ---------- */
+.pf-mute-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pf-mute-btn svg {
+  flex-shrink: 0;
+}
+.pf-mute-btn[aria-pressed="true"] {
+  background: var(--pf-surface-3);
+  border-color: var(--pf-border-strong);
+  color: var(--pf-text-2);
+}
+.pf-mute-btn[aria-pressed="true"]:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--pf-surface-2);
+  color: var(--pf-text);
+}
+.pf-comment__mute[aria-pressed="true"] {
+  color: var(--pf-text-2);
+  text-decoration-style: dotted;
+}
+.pf-linkbtn[aria-busy="true"],
+.pf-btn[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+/* /notifications item action: outside the item's link (its own tab stop), in the card's bottom-right corner. */
+.pf-notif--mutable {
+  position: relative;
+}
+.pf-notif--page.pf-notif--mutable .pf-notif__link {
+  padding-bottom: 30px;
+}
+.pf-notif__mute {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  font-size: 0.76rem;
+  text-decoration: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.pf-notif__mute:hover {
+  background: var(--pf-surface-3);
+  text-decoration: underline;
+}
+.pf-notif__mute:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 1px;
+}
+.pf-notif__kind {
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+/* Settings → Notifications → Muted */
+.pf-muted-list {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--pf-border);
+}
+.pf-muted-list__title {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+.pf-muted-list__title:focus {
+  outline: none;
+}
+.pf-muted-list__empty,
+.pf-muted-list__count {
+  margin: 0 0 8px;
+}
+.pf-muted-list__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.pf-muted-list__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-sm);
+  background: var(--pf-surface);
+}
+.pf-muted-list__thumb {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--pf-surface-3);
+  display: inline-grid;
+  place-items: center;
+}
+.pf-muted-list__thumb img {
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  display: block;
+}
+.pf-muted-list__thumb-ph {
+  font-size: 0.75rem;
+}
+.pf-muted-list__text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+.pf-muted-list__game {
+  color: var(--pf-text);
+  font-weight: 600;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-muted-list__thread {
+  color: var(--pf-text-2);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-muted-list__game:hover,
+.pf-muted-list__thread:hover {
+  text-decoration: underline;
+}
+.pf-muted-list__unmute {
+  flex-shrink: 0;
+}
+@media (max-width: 520px) {
+  .pf-muted-list__row {
+    flex-wrap: wrap;
+  }
+  .pf-muted-list__unmute {
+    margin-left: 36px;
+  }
+}

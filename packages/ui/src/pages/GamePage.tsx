@@ -10,6 +10,7 @@ import { clearGameSave, discardPendingCloudSave, GamePlayer, hasGameSave } from 
 import { GameAchievements } from "../components/Achievements";
 import { FavoriteButton } from "../components/Favorite";
 import { AddToCollectionButton } from "../components/AddToCollectionDialog";
+import { MuteGameButton } from "../components/MuteGameButton";
 import { GameCollections } from "../components/GameCollections";
 import { FollowButton, useFollows } from "../components/Follow";
 import { RelatedGames } from "../components/RelatedGames";
@@ -423,6 +424,7 @@ export function GamePage() {
           <div className="pf-gamepage__actions">
             <FavoriteButton gameId={game.id} gameTitle={game.title} favorites={game.favorites ?? 0} isFavorite={!!game.isFavorite} variant="full" />
             <AddToCollectionButton gameId={game.id} gameTitle={game.title} />
+            <MuteGameButton gameId={game.id} gameTitle={game.title} muted={game.notificationsMuted} />
             {!game.isOwner && (
               <ReportButton targetType="game" targetId={game.id} targetLabel={game.title} className="pf-btn pf-btn--ghost pf-btn--sm">
                 ⚑ Report

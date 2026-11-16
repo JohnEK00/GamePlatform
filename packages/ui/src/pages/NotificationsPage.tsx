@@ -7,7 +7,8 @@ import { useToast } from "../context/toast";
 import { EmptyState, ErrorState, LoadError, Spinner } from "../components/common";
 import { NotificationItem } from "../components/NotificationItem";
 import { TabPanel, Tabs, type TabItem } from "../components/Tabs";
-import { mergeNotifications } from "../notifications";
+import { mergeNotifications, muteActionFor, type MuteAction } from "../notifications";
+import { muteToastText, useMuteToasts, useSetMute } from "../components/muteSupport";
 import { errorMessage, useDocumentTitle } from "../util";
 
 /** Items per page on /notifications. */
@@ -20,6 +21,12 @@ const TABS: TabItem<NotificationsFilter>[] = [
   { value: "unread", label: "Unread" },
 ];
 const TABS_ID = "pf-notif-tabs";
+
+/** F018: the in-flight key of an item's mute target. Servers without F018 omit `threadId`: no mute buttons. */
+function muteKey(n: Notification): string {
+  const a = muteActionFor(n);
+  return a ? `${a.target}:${a.id}` : "";
+}
 
 type ListState = {
   items: Notification[];
@@ -126,6 +133,60 @@ export function NotificationsPage() {
     }
   };
 
+  // ---------- F018 § 2.3: item mute ----------
+  const setMute = useSetMute();
+  const showMuteToast = useMuteToasts();
+  const [muting, setMuting] = useState<ReadonlySet<string>>(() => new Set());
+  const mutingRef = useRef(new Set<string>());
+
+  /** Muting marks matching items read on the server: reload the first page in place (no spinner, focus kept). */
+  const refetchFirstPage = useCallback(async () => {
+    const id = ++reqRef.current;
+    try {
+      const p = await api.listNotifications({ limit: NOTIFICATIONS_PER_PAGE, unread: filter === "unread" || undefined });
+      if (id !== reqRef.current) return;
+      setState((s) => ({ ...s, loading: false, error: null, items: mergeNotifications([], p?.items ?? []), nextCursor: p?.nextCursor ?? null }));
+      if (typeof p?.unread === "number") syncUnread(p.unread);
+      const a = document.activeElement;
+      if (!a || a === document.body) headingRef.current?.focus();
+    } catch {
+      /* the list stays as it was; the next visit refetches */
+    }
+  }, [api, filter, syncUnread]);
+
+  const onMute = async (item: Notification, action: MuteAction) => {
+    const key = `${action.target}:${action.id}`;
+    if (mutingRef.current.has(key)) return;
+    const setBusy = (on: boolean) => {
+      if (on) mutingRef.current.add(key);
+      else mutingRef.current.delete(key);
+      setMuting(new Set(mutingRef.current));
+    };
+    const title = item.game?.title || "this game";
+    const texts =
+      action.target === "game"
+        ? { muted: muteToastText.gameMuted(title), unmuted: muteToastText.gameUnmuted(title) }
+        : { muted: muteToastText.threadMuted, unmuted: muteToastText.threadUnmuted };
+    const undo = async () => {
+      try {
+        await setMute(action.target, action.id, false);
+        showMuteToast(false, texts, () => {});
+      } catch (e) {
+        toast.error("Couldn't unmute notifications", errorMessage(e));
+      }
+    };
+    setBusy(true);
+    try {
+      const r = await setMute(action.target, action.id, true);
+      showMuteToast(r.muted, texts, () => void undo());
+      await refetchFirstPage();
+    } catch (e) {
+      toast.error("Couldn't mute notifications", errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onActivate = (item: Notification) => {
     void markRead(item);
     setState((s) => ({ ...s, items: s.items.map((n) => (n.id === item.id ? { ...n, read: true } : n)) }));
@@ -173,7 +234,15 @@ export function NotificationsPage() {
           <>
             <ul className="pf-notif-list pf-notif-list--page" ref={listRef}>
               {state.items.map((n) => (
-                <NotificationItem key={n.id} item={n} variant="page" onActivate={onActivate} />
+                <NotificationItem
+                  key={n.id}
+                  item={n}
+                  variant="page"
+                  onActivate={onActivate}
+                  showMute={n.threadId !== undefined}
+                  onMute={onMute}
+                  muteBusy={muting.has(muteKey(n))}
+                />
               ))}
             </ul>
             {state.moreError != null && <LoadError message={`Couldn't load more: ${errorMessage(state.moreError)}`} onRetry={loadMore} />}

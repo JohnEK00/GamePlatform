@@ -66,6 +66,8 @@ import type {
   NotificationPage,
   NotificationSettings,
   UnreadCount,
+  MuteState,
+  NotificationMuteList,
 } from "./types";
 
 const STATUS_CODES: Record<number, ApiErrorCode> = {
@@ -632,6 +634,28 @@ export class ApiClient {
   /** Send only the changed fields; returns the settings after the change. */
   updateNotificationSettings(partial: Partial<NotificationSettings>): Promise<NotificationSettings> {
     return this.request("/api/notifications/settings", { method: "PUT", json: partial });
+  }
+
+  // ---------- F018: Notification mutes ----------
+  /** The caller's mutes (createdAt desc). 404 on servers without F018. */
+  listNotificationMutes(): Promise<NotificationMuteList> {
+    return this.request("/api/notifications/mutes");
+  }
+  /** Idempotent. Marks the caller's unread notifications about the game read; returns the new unread count. */
+  muteGame(gameId: string): Promise<MuteState> {
+    return this.request(`/api/notifications/mutes/games/${encodeURIComponent(gameId)}`, { method: "PUT" });
+  }
+  /** Idempotent; never 404s. */
+  unmuteGame(gameId: string): Promise<MuteState> {
+    return this.request(`/api/notifications/mutes/games/${encodeURIComponent(gameId)}`, { method: "DELETE" });
+  }
+  /** `commentId` must be a top-level comment (a reply → 422). Idempotent. */
+  muteThread(commentId: string): Promise<MuteState> {
+    return this.request(`/api/notifications/mutes/threads/${encodeURIComponent(commentId)}`, { method: "PUT" });
+  }
+  /** Idempotent; never 404s. */
+  unmuteThread(commentId: string): Promise<MuteState> {
+    return this.request(`/api/notifications/mutes/threads/${encodeURIComponent(commentId)}`, { method: "DELETE" });
   }
 
   // ---------- F008: Collections ----------

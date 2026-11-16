@@ -4,6 +4,8 @@ import {
   bellLabel,
   isKnownNotification,
   mergeNotifications,
+  muteActionFor,
+  NOTIFICATION_KINDS,
   normalizePollSecs,
   notificationParts,
   notificationPollDelay,
@@ -20,6 +22,56 @@ import { ava, mia, noah, notif, user } from "./notifFixtures";
 const kim = user("u9", "", "kim"); // no display name → username
 
 const text = (over: Partial<Notification>) => notificationText(notif({ id: "1", ...over }));
+
+describe("F018: pinned kind", () => {
+  it("is a known kind with the normative summary (only the newest actor is named)", () => {
+    expect(NOTIFICATION_KINDS).toContain("pinned");
+    const n = notif({ id: "1", kind: "pinned", actors: [mia, noah], actorCount: 2, eventCount: 2, threadId: "c1" });
+    expect(isKnownNotification(n)).toBe(true);
+    expect(notificationText(n)).toBe("Mia pinned your comment on Pixel Peaks");
+    expect(notificationParts(n)).toEqual([
+      { type: "name", text: "Mia" },
+      { type: "text", text: " pinned your comment on " },
+      { type: "title", text: "Pixel Peaks" },
+    ]);
+  });
+
+  it("OS notifications use the summary, never the excerpt", () => {
+    const n = notif({ id: "1", kind: "pinned", excerpt: "secret words" });
+    expect(osNotificationsFor([n])[0].body).toBe("Mia pinned your comment on Pixel Peaks");
+  });
+
+  it("mergeNotifications keeps pinned items", () => {
+    expect(mergeNotifications([], [notif({ id: "1", kind: "pinned" })])).toHaveLength(1);
+  });
+});
+
+describe("F018: muteActionFor", () => {
+  const game = { id: "g1", title: "Space Dodge", thumbnailUrl: null };
+  it.each(["reply", "heart", "pinned"] as const)("%s with a threadId → mute thread", (kind) => {
+    expect(muteActionFor(notif({ id: "1", kind, game, threadId: "t1" }))).toEqual({
+      target: "thread",
+      id: "t1",
+      label: "Mute notifications for this thread on Space Dodge",
+    });
+  });
+  it.each(["reply", "heart", "pinned"] as const)("%s without a threadId (older server) → null", (kind) => {
+    expect(muteActionFor(notif({ id: "1", kind, game }))).toBeNull();
+    expect(muteActionFor(notif({ id: "1", kind, game, threadId: null }))).toBeNull();
+  });
+  it.each(["comment", "gamePublished"] as const)("%s with a game → mute game", (kind) => {
+    expect(muteActionFor(notif({ id: "1", kind, game, threadId: null }))).toEqual({ target: "game", id: "g1", label: "Mute notifications for Space Dodge" });
+  });
+  it("comment / gamePublished without a game → null", () => {
+    expect(muteActionFor(notif({ id: "1", kind: "comment", game: null }))).toBeNull();
+    expect(muteActionFor(notif({ id: "1", kind: "gamePublished", game: null }))).toBeNull();
+  });
+  it("follow and unknown kinds → null", () => {
+    expect(muteActionFor(notif({ id: "1", kind: "follow", game: null, threadId: null }))).toBeNull();
+    expect(muteActionFor(notif({ id: "1", kind: "follow", threadId: "t1" }))).toBeNull();
+    expect(muteActionFor({ ...notif({ id: "1" }), kind: "mystery" } as unknown as Notification)).toBeNull();
+  });
+});
 
 describe("notificationText (spec § 2.5 table)", () => {
   it("comment", () => {

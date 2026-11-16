@@ -5,6 +5,7 @@ import { AuthProvider } from "./context/auth";
 import { ConfigProvider, type WebGameConfig } from "./context/config";
 import { ToastProvider } from "./context/toast";
 import { NotificationsProvider } from "./context/notifications";
+import type { TabDeps } from "./notificationsTabs";
 import { Layout, RequireAuth } from "./components/Layout";
 import { FavoritesProvider } from "./components/Favorite";
 import { FollowProvider } from "./components/Follow";
@@ -28,13 +29,26 @@ import { NotificationsPage } from "./pages/NotificationsPage";
 import { CollectionPage } from "./pages/CollectionPage";
 import { MyCollectionsRedirect, UserCollectionsPage } from "./pages/UserCollectionsPage";
 
-/** Config + ApiClient + Auth + Toast providers, without a router. */
-export function WebGameProviders({ config, client, children }: { config: WebGameConfig; client?: ApiClient; children: ReactNode }) {
+/**
+ * Config + ApiClient + Auth + Toast providers, without a router. `notificationTabs` (F018) overrides the tab
+ * coordination APIs of the notifications provider (tests); omit it in production.
+ */
+export function WebGameProviders({
+  config,
+  client,
+  notificationTabs,
+  children,
+}: {
+  config: WebGameConfig;
+  client?: ApiClient;
+  notificationTabs?: TabDeps;
+  children: ReactNode;
+}) {
   return (
     <ConfigProvider config={config} client={client}>
       <AuthProvider>
         <ToastProvider>
-          <NotificationsProvider>
+          <NotificationsProvider tabs={notificationTabs}>
             <FavoritesProvider>
               <FollowProvider>{children}</FollowProvider>
             </FavoritesProvider>
