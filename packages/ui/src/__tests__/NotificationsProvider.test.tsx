@@ -24,7 +24,12 @@ const advance = (ms: number) => act(async () => {
 
 function Probe() {
   const n = useNotifications();
-  return <output data-testid="probe">{`${n.supported}|${n.unread}|${n.latestAt}`}</output>;
+  return (
+    <>
+      <output data-testid="probe">{`${n.supported}|${n.unread}|${n.latestAt}`}</output>
+      <output data-testid="arrivals">{n.arrivals}</output>
+    </>
+  );
 }
 
 type CountResult = UnreadCount | Error;
@@ -49,7 +54,8 @@ function setup(opts: { counts?: CountResult[]; poll?: number; os?: OsNotificatio
   );
   const probe = () => utils.getByTestId("probe").textContent;
   const live = () => document.querySelector(".pf-notif-live")?.textContent ?? "";
-  return { client, count, list, probe, live, ...utils };
+  const arrivals = () => Number(utils.getByTestId("arrivals").textContent);
+  return { client, count, list, probe, live, arrivals, ...utils };
 }
 
 const c = (unread: number, latestAt: string | null = null, pollAfterSecs = 60): UnreadCount => ({ unread, latestAt, pollAfterSecs });
@@ -278,6 +284,52 @@ describe("NotificationsProvider live region", () => {
     expect(live()).toBe("3 new notifications");
     expect(document.querySelectorAll(".pf-notif-live")).toHaveLength(1);
   });
+
+  it("count 1 → 0 → 1 with the same latestAt (heart toggled off and on): no announcement, no arrival", async () => {
+    const t = "2026-11-15T11:00:00.000Z";
+    const { live, arrivals, probe } = setup({ counts: [c(1, t), c(0, null), c(1, t), c(1, t)] });
+    await flush();
+    await advance(60_000);
+    expect(probe()).toBe("true|0|null");
+    await advance(60_000);
+    expect(probe()).toBe(`true|1|${t}`);
+    expect(live()).toBe("");
+    expect(arrivals()).toBe(0);
+    await advance(60_000);
+    expect(live()).toBe("");
+    expect(arrivals()).toBe(0);
+  });
+
+  it("a later latestAt after the count dropped is announced once", async () => {
+    const { live, arrivals } = setup({
+      counts: [c(1, "2026-11-15T11:00:00.000Z"), c(0, null), c(1, "2026-11-15T11:00:00.000Z"), c(1, "2026-11-15T11:05:00.000Z"), c(2, "2026-11-15T11:06:00.000Z")],
+    });
+    await flush();
+    await advance(60_000);
+    await advance(60_000);
+    expect(live()).toBe("");
+    // Same count but a newer latestAt (an existing unread item was updated): not "new" either.
+    await advance(60_000);
+    expect(live()).toBe("");
+    expect(arrivals()).toBe(0);
+    await advance(60_000);
+    expect(live()).toBe("1 new notification");
+    expect(arrivals()).toBe(1);
+  });
+
+  it("an older latestAt after mark-all-read does not count as new", async () => {
+    const { live, arrivals } = setup({
+      counts: [c(2, "2026-11-15T11:10:00.000Z"), c(0, null), c(1, "2026-11-15T11:05:00.000Z"), c(2, "2026-11-15T11:20:00.000Z")],
+    });
+    await flush();
+    await advance(60_000);
+    await advance(60_000);
+    expect(live()).toBe("");
+    expect(arrivals()).toBe(0);
+    await advance(60_000);
+    expect(live()).toBe("1 new notification");
+    expect(arrivals()).toBe(1);
+  });
 });
 
 describe("NotificationsProvider OS notifications", () => {
@@ -349,6 +401,23 @@ describe("NotificationsProvider OS notifications", () => {
     expect(os.show).not.toHaveBeenCalled();
     expect(list).not.toHaveBeenCalled();
     expect(localStorage.getItem(key)).toBe(at(0));
+  });
+
+  it("count 1 → 0 → 1 with the same latestAt while unfocused: no OS notification", async () => {
+    localStorage.setItem(key, at(0));
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const os = { isEnabled: () => true, show: vi.fn(async () => {}) };
+    const { list } = setup({ os, counts: [c(1, at(4)), c(0, null), c(1, at(4)), c(2, at(7))], list: [notif({ id: "1", updatedAt: at(4) })] });
+    await flush();
+    expect(os.show).toHaveBeenCalledTimes(1);
+    await advance(60_000);
+    await advance(60_000);
+    expect(os.show).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledTimes(1);
+    list.mockResolvedValue({ items: [notif({ id: "2", updatedAt: at(7) }), notif({ id: "1", updatedAt: at(4) })], nextCursor: null, unread: 2 });
+    await advance(60_000);
+    expect(os.show).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem(key)).toBe(at(7));
   });
 
   it("turning it on resets the watermark to the current newest", async () => {

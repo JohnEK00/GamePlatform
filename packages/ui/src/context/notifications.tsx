@@ -27,6 +27,12 @@ export type NotificationsState = {
   latestAt: string | null;
   /** Increments whenever a poll sees newer notifications (an open list should refetch). */
   lastChange: number;
+  /**
+   * Increments when a poll sees genuinely new unread notifications: the count went up AND latestAt moved past the
+   * newest value seen so far (so a heart toggled off and on, 1 → 0 → 1 with the same latestAt, is not "new").
+   * Drives the live-region announcement and the bell animation.
+   */
+  arrivals: number;
   /** Fetch the count now (no-op while a request is in flight or after a 401/404). */
   refresh: () => Promise<void>;
   /** Optimistically mark one item read (`upTo` = its updatedAt); failures are ignored. */
@@ -46,6 +52,7 @@ const INERT: NotificationsState = {
   unread: 0,
   latestAt: null,
   lastChange: 0,
+  arrivals: 0,
   refresh: noop,
   markRead: noop,
   markAllRead: async () => 0,
@@ -60,8 +67,8 @@ export function useNotifications(): NotificationsState {
   return useContext(NotificationsContext) ?? INERT;
 }
 
-type ViewState = { supported: boolean; ready: boolean; unread: number; latestAt: string | null; lastChange: number };
-const INITIAL_VIEW: ViewState = { supported: true, ready: false, unread: 0, latestAt: null, lastChange: 0 };
+type ViewState = { supported: boolean; ready: boolean; unread: number; latestAt: string | null; lastChange: number; arrivals: number };
+const INITIAL_VIEW: ViewState = { supported: true, ready: false, unread: 0, latestAt: null, lastChange: 0, arrivals: 0 };
 
 /** Mutable poll-loop state, read when timers fire (never captured in closures). */
 type Loop = {
@@ -77,6 +84,8 @@ type Loop = {
   /** Last unread value from the server (null before the first response). */
   unread: number | null;
   latestAt: string | null;
+  /** Newest latestAt ever seen for this user/session (not reset when the count drops to 0). */
+  seenAt: string | null;
   osPrevEnabled: boolean | null;
   osBusy: boolean;
 };
@@ -93,6 +102,7 @@ function freshLoop(gen: number, userId: string | null): Loop {
     pollAfterSecs: DEFAULT_POLL_SECS,
     unread: null,
     latestAt: null,
+    seenAt: null,
     osPrevEnabled: null,
     osBusy: false,
   };
@@ -274,12 +284,17 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
           L.pollAfterSecs = normalizePollSecs(c?.pollAfterSecs);
           const prev = L.unread;
           const changed = prev !== null && newer(latestAt, L.latestAt);
-          if (prev !== null && unread > prev) {
+          // Only latestAt moving past the newest value seen so far means something new arrived; a count going
+          // back up with the same latestAt (heart/follow toggled off and on while unread) is not announced.
+          const advanced = newer(latestAt, L.seenAt);
+          const arrived = prev !== null && advanced && unread > prev;
+          if (arrived) {
             const d = unread - prev;
             announce(`${d} new notification${d === 1 ? "" : "s"}`);
           }
           L.unread = unread;
           L.latestAt = latestAt;
+          if (advanced) L.seenAt = latestAt;
           setView((s) => ({
             ...s,
             supported: true,
@@ -287,6 +302,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
             unread,
             latestAt,
             lastChange: changed ? s.lastChange + 1 : s.lastChange,
+            arrivals: arrived ? s.arrivals + 1 : s.arrivals,
           }));
           void osStep({ unread, latestAt, pollAfterSecs: L.pollAfterSecs });
         } catch (e) {
@@ -400,6 +416,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       unread: view.unread,
       latestAt: view.latestAt,
       lastChange: view.lastChange,
+      arrivals: view.arrivals,
       refresh: ctrl.poll,
       markRead,
       markAllRead,

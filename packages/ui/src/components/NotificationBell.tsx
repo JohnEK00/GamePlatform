@@ -152,7 +152,7 @@ function NotificationPanel({ onClose }: { onClose: (focusBell: boolean) => void 
 /** The header bell (signed in, server with F007): unread badge plus a non-modal disclosure panel (spec § 2.1–2.2). */
 export function NotificationBell() {
   const { user } = useAuth();
-  const { supported, ready, unread } = useNotifications();
+  const { supported, ready, unread, arrivals } = useNotifications();
   const [open, setOpen] = useState(false);
   const [pop, setPop] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -168,16 +168,16 @@ export function NotificationBell() {
     setOpen(false);
   }, [routeKey]);
 
-  // Brief pop when the count goes up (CSS skips it under prefers-reduced-motion).
-  const prevUnread = useRef(unread);
+  // Brief pop when genuinely new notifications arrive (CSS skips it under prefers-reduced-motion).
+  const prevArrivals = useRef(arrivals);
   useEffect(() => {
-    const up = unread > prevUnread.current;
-    prevUnread.current = unread;
+    const up = arrivals > 0 && arrivals !== prevArrivals.current; // resets to 0 on a user change
+    prevArrivals.current = arrivals;
     if (!up) return;
     setPop(true);
     const t = setTimeout(() => setPop(false), 500);
     return () => clearTimeout(t);
-  }, [unread]);
+  }, [arrivals]);
 
   // Outside click closes without moving focus.
   useEffect(() => {
