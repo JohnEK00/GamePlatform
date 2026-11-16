@@ -26,10 +26,10 @@ use crate::new_ticket;
 /// Bundle file extensions accepted by the backend (backend/src/bundle.rs `ALLOWED_EXTS`).
 pub const ALLOWED_EXTS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "svg", "json", "txt", "wav", "mp3", "ogg", "js", "css",
-    "woff2", "ttf",
+    "woff2", "ttf", "fnt",
 ];
 /// Extensions sent to the Studio as strings (everything else is an ArrayBuffer).
-pub const TEXT_EXTS: &[&str] = &["js", "json", "txt", "css", "svg", "md", "csv"];
+pub const TEXT_EXTS: &[&str] = &["js", "json", "txt", "css", "svg", "md", "csv", "fnt"];
 /// Unread projects kept in memory at most (oldest is dropped first).
 const MAX_PENDING_PROJECTS: usize = 2;
 /// Unread binary files are dropped after this long.
@@ -704,6 +704,23 @@ mod tests {
         assert_eq!(
             d.skipped,
             vec!["linked (symbolic link)", "secret.txt (symbolic link)"]
+        );
+    }
+
+    #[test]
+    fn reads_bmfont_files_as_text() {
+        let t = TempDir::new("fnt");
+        t.write("game.json", MANIFEST);
+        t.write("main.js", b"");
+        t.write("a.fnt", b"info face=\"a\" size=8\n");
+        let d = read_project_dir(&t.0, Limits::UPLOAD).unwrap();
+        assert_eq!(paths(&d), vec!["a.fnt", "main.js"]);
+        assert!(d.skipped.is_empty());
+        let index = into_index(d, "id".into(), &OpenProjects::default());
+        assert_eq!(index.files[0].path, "a.fnt");
+        assert_eq!(
+            index.files[0].text.as_deref(),
+            Some("info face=\"a\" size=8\n")
         );
     }
 
