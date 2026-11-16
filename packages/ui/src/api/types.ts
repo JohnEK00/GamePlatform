@@ -161,6 +161,25 @@ export type Comment = {
   creatorHeart: boolean;
   /** F006: the viewer may delete it (author, game owner or admin; false when anonymous). */
   canDelete: boolean;
+  /** F017: top-level only, this is the game's pinned comment (always false on replies). Older servers omit it (false). */
+  pinned: boolean;
+  /** F017: top-level only, the thread is locked against new replies (always false on replies). Older servers omit it (false). */
+  locked: boolean;
+  /** F017: top-level only, the viewer is the game's current owner or an admin (may pin/lock). Older servers omit it (false). */
+  canModerate: boolean;
+};
+
+/** F017: thread order of `GET /api/games/{id}/comments`. */
+export type CommentSort = "new" | "top";
+
+/** F017: `PUT` / `DELETE /api/comments/{id}/pin|lock`. */
+export type ThreadState = {
+  /** The comment acted on. */
+  id: string;
+  pinned: boolean;
+  locked: boolean;
+  /** `PUT …/pin` only: the comment that was pinned before and is now unpinned; else null. */
+  unpinnedId: string | null;
 };
 
 /** F006: a top-level comment with a preview of its replies. */
@@ -175,6 +194,11 @@ export type CommentThread = Comment & {
 export type CommentListPage = Page<CommentThread> & {
   /** Comments + replies on the game. Older servers omit it (treat as `total`). */
   totalAll: number;
+  /**
+   * F017: the game's pinned thread (never in `items` or `total`), on every page; null when none. Older servers omit
+   * it (treat as null).
+   */
+  pinned: CommentThread | null;
 };
 
 /** F006: `GET /api/comments/{id}`. `thread.id === comment.id` when the comment is top-level. */
@@ -278,6 +302,8 @@ export type PreviewTokenResponse = { token: string; expiresAt: string };
 export type RatingResponse = { ratingAvg: number; ratingCount: number; myRating: number | null };
 
 export type PageQuery = { page?: number; perPage?: number };
+/** F017: `GET /api/games/{id}/comments` (`sort` is sent only when given). */
+export type CommentListQuery = PageQuery & { sort?: CommentSort };
 
 export type HealthResponse = { status: "ok"; version: string };
 

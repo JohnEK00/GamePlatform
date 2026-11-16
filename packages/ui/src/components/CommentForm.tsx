@@ -34,6 +34,8 @@ export type CommentFormProps = {
   /** Focus the textarea on mount (reply forms). */
   autoFocus?: boolean;
   className?: string;
+  /** F017: a hint above the textarea (e.g. the locked-thread note for moderators); it also describes the textarea. */
+  notice?: string | null;
 };
 
 /**
@@ -58,6 +60,7 @@ export function CommentForm({
   onClearReplyingTo,
   autoFocus = false,
   className = "",
+  notice = null,
 }: CommentFormProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -100,6 +103,7 @@ export function CommentForm({
   };
 
   const hintId = `${inputId}-hint`;
+  const noticeId = `${inputId}-notice`;
   return (
     <form
       id={formId}
@@ -130,6 +134,11 @@ export function CommentForm({
             )}
           </p>
         )}
+        {notice && (
+          <p className="pf-comment-form__notice pf-small" id={noticeId}>
+            <span aria-hidden="true">🔒</span> {notice}
+          </p>
+        )}
         <label htmlFor={inputId} className="pf-sr-only">
           {label}
         </label>
@@ -143,7 +152,7 @@ export function CommentForm({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
-          aria-describedby={hintId}
+          aria-describedby={notice ? `${noticeId} ${hintId}` : hintId}
         />
         {error && <Alert>{error}</Alert>}
         <div className="pf-comment-form__actions">

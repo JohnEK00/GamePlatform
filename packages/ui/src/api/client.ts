@@ -5,6 +5,7 @@ import type {
   Comment,
   CommentContext,
   CommentListPage,
+  CommentListQuery,
   CreateGameInput,
   CreateReportRequest,
   CreatorStats,
@@ -32,6 +33,7 @@ import type {
   Page,
   RelatedGame,
   PageQuery,
+  ThreadState,
   PlayResponse,
   PreviewTokenResponse,
   RatingResponse,
@@ -406,7 +408,8 @@ export class ApiClient {
    * F006: top-level comments (newest first) with up to 3 replies each. `total` counts threads, `totalAll`
    * everything. Older servers omit the F006 fields; read the result through `normalizeCommentListPage`.
    */
-  listComments(id: string, query: PageQuery = {}): Promise<CommentListPage> {
+  listComments(id: string, query: CommentListQuery = {}): Promise<CommentListPage> {
+    // F017: `sort` only when given (buildQuery skips undefined).
     return this.request(`/api/games/${encodeURIComponent(id)}/comments`, { query });
   }
   /** F006: `parentId` (a top-level comment or a reply on the same game) posts a reply; omitted when not given. */
@@ -439,6 +442,22 @@ export class ApiClient {
   }
   deleteComment(commentId: string): Promise<void> {
     return this.request(`/api/comments/${encodeURIComponent(commentId)}`, { method: "DELETE" });
+  }
+  /** F017 (game owner or admin): pin a top-level comment; replaces the game's previous pin (`unpinnedId`). Idempotent. */
+  pinComment(commentId: string): Promise<ThreadState> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/pin`, { method: "PUT" });
+  }
+  /** F017 (game owner or admin): unpin a comment. Idempotent. */
+  unpinComment(commentId: string): Promise<ThreadState> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/pin`, { method: "DELETE" });
+  }
+  /** F017 (game owner or admin): lock a thread against new replies (except by the owner and admins). Idempotent. */
+  lockComment(commentId: string): Promise<ThreadState> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/lock`, { method: "PUT" });
+  }
+  /** F017 (game owner or admin): unlock a thread. Idempotent. */
+  unlockComment(commentId: string): Promise<ThreadState> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/lock`, { method: "DELETE" });
   }
   listScores(id: string, limit?: number, period?: LeaderboardPeriod): Promise<Score[]> {
     return this.request(`/api/games/${encodeURIComponent(id)}/scores`, { query: { limit, period } });

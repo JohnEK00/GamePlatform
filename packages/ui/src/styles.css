@@ -1643,10 +1643,10 @@ textarea.pf-input {
   display: flex;
   gap: 12px;
 }
-.pf-thread--pinned {
+.pf-thread--linked {
   border-top-color: var(--pf-accent-2);
 }
-.pf-thread__pinned {
+.pf-thread__linked {
   margin: 0 0 8px;
   color: #c4b5ff;
   font-weight: 700;
@@ -4862,4 +4862,103 @@ a.pf-tab {
 /* Programmatic focus target after "Mark all as read" / the last "Load more" (review 4, L6). */
 .pf-notifs .pf-pagehead h1:focus:not(:focus-visible) {
   outline: none;
+}
+
+/* ---------- F017: pinned and locked threads, comment sort ---------- */
+.pf-comments__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-bottom: 14px;
+}
+.pf-comments__head .pf-panel__title {
+  margin: 0 !important;
+}
+.pf-segmented {
+  padding: 3px;
+}
+.pf-segmented .pf-tab {
+  padding: 4px 12px;
+  font-size: 0.82rem;
+}
+/* Pressed: not colour only (weight + an underline bar). */
+.pf-segmented .pf-tab[aria-pressed="true"] {
+  font-weight: 700;
+  box-shadow: inset 0 -2px 0 var(--pf-accent);
+}
+.pf-segmented .pf-tab:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 2px;
+}
+.pf-comments[aria-busy="true"] {
+  opacity: 0.85;
+}
+.pf-comments--pinned {
+  margin: 4px 0 14px;
+  padding: 0 14px;
+  border: 1px solid rgba(139, 108, 255, 0.35);
+  border-radius: var(--pf-radius);
+  background: rgba(139, 108, 255, 0.06);
+}
+.pf-comments--pinned > .pf-thread {
+  border-top: none;
+}
+.pf-comments--pinned .pf-replies {
+  border-left-color: rgba(139, 108, 255, 0.35);
+}
+.pf-badge.pf-badge--pinned,
+.pf-badge.pf-badge--locked {
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  font-size: 0.64rem;
+}
+/* Both well above 4.5:1 on the panel surface. */
+.pf-badge.pf-badge--pinned {
+  background: rgba(139, 108, 255, 0.2);
+  color: #d4c8ff;
+  box-shadow: inset 0 0 0 1px rgba(139, 108, 255, 0.45);
+}
+.pf-badge.pf-badge--locked {
+  background: rgba(255, 209, 102, 0.14);
+  color: #ffe1a1;
+  box-shadow: inset 0 0 0 1px rgba(255, 209, 102, 0.35);
+}
+.pf-badge--pinned > span[aria-hidden="true"],
+.pf-badge--locked > span[aria-hidden="true"] {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+.pf-thread-note {
+  margin: 10px 0 0 44px;
+  padding: 6px 10px;
+  border-left: 2px solid rgba(255, 209, 102, 0.45);
+  border-radius: 0 var(--pf-radius-sm) var(--pf-radius-sm) 0;
+  background: var(--pf-surface-2);
+  color: var(--pf-text-2);
+}
+.pf-thread-note:focus {
+  outline: none;
+}
+.pf-thread-note:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 2px;
+}
+.pf-comment__tool[aria-busy="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+.pf-comment-form__notice {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--pf-radius-sm);
+  background: rgba(255, 209, 102, 0.1);
+  color: #ffe1a1;
+}
+@media (max-width: 560px) {
+  .pf-thread-note {
+    margin-left: 0;
+  }
 }

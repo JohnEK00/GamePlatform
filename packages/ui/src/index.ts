@@ -5,8 +5,17 @@ export type { WebGameAppProps } from "./WebGameApp";
 // API
 export { ApiClient, ApiError, isApiError, buildQuery, resolveApiUrl, parseRetryAfter, rateLimitMessage, KEEPALIVE_MAX_BODY_BYTES } from "./api/client";
 export type { ApiClientOptions } from "./api/client";
-export { normalizeComment, normalizeThread, normalizeCommentListPage, commentPermalink } from "./api/comments";
-export type { RawComment, RawCommentThread } from "./api/comments";
+export {
+  normalizeComment,
+  normalizeThread,
+  normalizeCommentListPage,
+  commentPermalink,
+  isF017CommentPage,
+  readCommentSort,
+  writeCommentSort,
+  COMMENT_SORT_STORAGE_KEY,
+} from "./api/comments";
+export type { RawComment, RawCommentThread, RawCommentListPage } from "./api/comments";
 export type * from "./api/types";
 
 // Contexts / hooks
@@ -199,6 +208,8 @@ export { CommentItem } from "./components/CommentItem";
 export type { CommentItemProps } from "./components/CommentItem";
 export { CommentForm, COMMENT_MAX_LENGTH } from "./components/CommentForm";
 export type { CommentFormProps } from "./components/CommentForm";
+export { CommentSortToggle } from "./components/CommentSortToggle";
+export type { CommentSortToggleProps } from "./components/CommentSortToggle";
 export { HeartButton } from "./components/HeartButton";
 export type { HeartButtonProps, HeartState } from "./components/HeartButton";
 // F007: notifications

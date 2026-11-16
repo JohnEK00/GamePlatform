@@ -76,6 +76,10 @@ describe("F006 normalisation (older servers)", () => {
       myHeart: false,
       creatorHeart: false,
       canDelete: false,
+      // F017 (API § F017 additions): missing pinned/locked/canModerate also default to false.
+      pinned: false,
+      locked: false,
+      canModerate: false,
     });
     expect(normalizeComment(v1, () => true).canDelete).toBe(true);
     expect(normalizeComment({ ...v1, canDelete: false }, () => true).canDelete).toBe(false);

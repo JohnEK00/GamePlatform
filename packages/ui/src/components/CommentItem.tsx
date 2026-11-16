@@ -26,6 +26,16 @@ export type CommentItemProps = {
   onDelete?: (comment: Comment) => void;
   deleting?: boolean;
   onHeartChange?: (comment: Comment, next: HeartState) => void;
+  /** F017: Pin / Unpin (top-level comments with `canModerate` only). */
+  onPin?: (comment: Comment) => void;
+  /** F017: Lock / Unlock (top-level comments with `canModerate` only). */
+  onLock?: (comment: Comment) => void;
+  /** F017: a pin request is in flight (the button ignores clicks but keeps focus). */
+  pinBusy?: boolean;
+  /** F017: a lock request is in flight. */
+  lockBusy?: boolean;
+  /** F017: the thread is locked and the viewer can't moderate it: no Reply button. */
+  repliesLocked?: boolean;
 };
 
 export function displayName(u: { displayName?: string; username: string }): string {
@@ -46,11 +56,17 @@ export function CommentItem({
   onDelete,
   deleting = false,
   onHeartChange,
+  onPin,
+  onLock,
+  pinBusy = false,
+  lockBusy = false,
+  repliesLocked = false,
 }: CommentItemProps) {
   const name = displayName(c.author);
   const profile = `/u/${encodeURIComponent(c.author.username)}`;
   const authorId = `comment-${c.id}-author`;
   const isAuthor = !!viewerId && viewerId === c.author.id;
+  const tools = !isReply && !legacy && c.canModerate;
   const className = `pf-comment${isReply ? " pf-comment--reply" : ""}${highlighted ? " pf-comment--highlight" : ""}`;
   return (
     <article id={`comment-${c.id}`} className={className} aria-labelledby={authorId} tabIndex={-1}>
@@ -63,6 +79,16 @@ export function CommentItem({
             {name}
           </Link>
           {c.isCreator && <span className="pf-badge pf-badge--creator">Creator</span>}
+          {!isReply && c.pinned && (
+            <span className="pf-badge pf-badge--pinned">
+              <span aria-hidden="true">📌</span> Pinned
+            </span>
+          )}
+          {!isReply && c.locked && (
+            <span className="pf-badge pf-badge--locked">
+              <span aria-hidden="true">🔒</span> Locked
+            </span>
+          )}
           <Link to={commentPermalink(gameId ?? c.gameId, c.id)} className="pf-comment__time pf-muted pf-small" title={`${formatDate(c.createdAt)} · link to this comment`}>
             <time dateTime={c.createdAt}>{timeAgo(c.createdAt)}</time>
           </Link>
@@ -74,7 +100,7 @@ export function CommentItem({
         </div>
         <p className="pf-comment__body">{c.body}</p>
         <div className="pf-comment__actions">
-          {viewerId && !legacy && onReply && (
+          {viewerId && !legacy && onReply && !repliesLocked && (
             <button
               type="button"
               id={`reply-btn-${c.id}`}
@@ -100,6 +126,34 @@ export function CommentItem({
               aria-haspopup={!isReply && "replyCount" in c && (c as { replyCount: number }).replyCount > 0 ? "dialog" : undefined}
             >
               {deleting ? "Deleting…" : "Delete"}
+            </button>
+          )}
+          {tools && onPin && (
+            <button
+              type="button"
+              id={`pin-btn-${c.id}`}
+              className="pf-linkbtn pf-comment__tool"
+              aria-label={`${c.pinned ? "Unpin" : "Pin"} comment by ${name}`}
+              aria-busy={pinBusy || undefined}
+              onClick={() => {
+                if (!pinBusy) onPin(c);
+              }}
+            >
+              {c.pinned ? "Unpin" : "Pin"}
+            </button>
+          )}
+          {tools && onLock && (
+            <button
+              type="button"
+              id={`lock-btn-${c.id}`}
+              className="pf-linkbtn pf-comment__tool"
+              aria-label={`${c.locked ? "Unlock" : "Lock"} replies to comment by ${name}`}
+              aria-busy={lockBusy || undefined}
+              onClick={() => {
+                if (!lockBusy) onLock(c);
+              }}
+            >
+              {c.locked ? "Unlock" : "Lock"}
             </button>
           )}
           {viewerId && !isAuthor && (
