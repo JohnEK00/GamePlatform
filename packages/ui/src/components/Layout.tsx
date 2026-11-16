@@ -4,6 +4,7 @@ import { useAuth } from "../context/auth";
 import { usePlatform } from "../context/config";
 import { Avatar, Spinner } from "./common";
 import { NotificationBell } from "./NotificationBell";
+import { useCollectionsSupported } from "./collectionsSupport";
 
 export function Logo() {
   return (
@@ -56,6 +57,7 @@ function UserMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const location = useLocation();
+  const collections = useCollectionsSupported();
   useEffect(() => setOpen(false), [location.pathname]);
   useEffect(() => {
     if (!open) return;
@@ -95,6 +97,11 @@ function UserMenu() {
           <Link role="menuitem" to="/favorites">
             Favorites
           </Link>
+          {collections && (
+            <Link role="menuitem" to="/collections">
+              Collections
+            </Link>
+          )}
           <Link role="menuitem" to="/studio">
             Studio
           </Link>

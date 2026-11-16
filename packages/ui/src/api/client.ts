@@ -2,6 +2,15 @@ import type {
   ApiErrorCode,
   AuthResponse,
   CloudSave,
+  Collection,
+  CollectionItemResponse,
+  CollectionRemoveResponse,
+  CollectionSummary,
+  CreateCollectionRequest,
+  GameCollectionsPage,
+  MyCollection,
+  PutCollectionGameRequest,
+  UpdateCollectionRequest,
   Comment,
   CommentContext,
   CommentListPage,
@@ -623,6 +632,54 @@ export class ApiClient {
   /** Send only the changed fields; returns the settings after the change. */
   updateNotificationSettings(partial: Partial<NotificationSettings>): Promise<NotificationSettings> {
     return this.request("/api/notifications/settings", { method: "PUT", json: partial });
+  }
+
+  // ---------- F008: Collections ----------
+  /** 201 `Collection`. With `gameId`, that game is the first item. */
+  createCollection(body: CreateCollectionRequest): Promise<Collection> {
+    return this.request("/api/collections", { method: "POST", json: body });
+  }
+  /** Private collections are 404 for everyone but the owner and admins. */
+  getCollection(id: string, signal?: AbortSignal): Promise<Collection> {
+    return this.request(`/api/collections/${encodeURIComponent(id)}`, { signal });
+  }
+  /** Owner only. Send only the changed fields. */
+  updateCollection(id: string, patch: UpdateCollectionRequest): Promise<Collection> {
+    return this.request(`/api/collections/${encodeURIComponent(id)}`, { method: "PATCH", json: patch });
+  }
+  /** Owner or admin. 204. */
+  deleteCollection(id: string): Promise<void> {
+    return this.request(`/api/collections/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  /** Owner only: add a game (appended) or, when already present, replace its note (`body.note` given). No body when omitted. */
+  putCollectionGame(id: string, gameId: string, body?: PutCollectionGameRequest): Promise<CollectionItemResponse> {
+    return this.request(`/api/collections/${encodeURIComponent(id)}/games/${encodeURIComponent(gameId)}`, {
+      method: "PUT",
+      json: body,
+    });
+  }
+  /** Owner only. Idempotent (`removed: false` when absent). */
+  deleteCollectionGame(id: string, gameId: string): Promise<CollectionRemoveResponse> {
+    return this.request(`/api/collections/${encodeURIComponent(id)}/games/${encodeURIComponent(gameId)}`, { method: "DELETE" });
+  }
+  /** Owner only: the full new order (every current item id, unavailable ones included); 409 when the set differs. */
+  reorderCollection(id: string, gameIds: string[]): Promise<Collection> {
+    return this.request(`/api/collections/${encodeURIComponent(id)}/order`, { method: "PUT", json: { gameIds } });
+  }
+  /** `updatedAt` desc; server default 24 per page (1–100). Others only see public, non-empty collections. */
+  listUserCollections(username: string, query: PageQuery = {}, signal?: AbortSignal): Promise<Page<CollectionSummary>> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/collections`, {
+      query: { page: query.page, perPage: query.perPage },
+      signal,
+    });
+  }
+  /** All of the caller's collections (max 50); `gameId` fills `containsGame`. */
+  listMyCollections(gameId?: string, signal?: AbortSignal): Promise<MyCollection[]> {
+    return this.request("/api/users/me/collections", { query: { gameId }, signal });
+  }
+  /** Public collections containing the game (`limit` 1–24 server-side, default 6). */
+  listGameCollections(gameId: string, limit?: number, signal?: AbortSignal): Promise<GameCollectionsPage> {
+    return this.request(`/api/games/${encodeURIComponent(gameId)}/collections`, { query: { limit }, signal });
   }
 }
 

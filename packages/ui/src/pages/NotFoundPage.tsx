@@ -10,7 +10,11 @@ export function NotFoundPage({ what = "page" }: { what?: string }) {
           404
         </div>
         <h1>Game over — {what} not found</h1>
-        <p className="pf-muted">The {what} you're looking for doesn't exist, was removed, or isn't published yet.</p>
+        <p className="pf-muted">
+          {what === "collection"
+            ? "The collection you're looking for doesn't exist, was deleted, or is private."
+            : `The ${what} you're looking for doesn't exist, was removed, or isn't published yet.`}
+        </p>
         <div className="pf-hero__cta">
           <Link to="/" className="pf-btn pf-btn--primary">
             Back to the arcade

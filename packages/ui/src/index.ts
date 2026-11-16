@@ -265,6 +265,43 @@ export {
 export { useModal } from "./components/useModal";
 export type { UseModalOptions } from "./components/useModal";
 
+// F008: collections
+export {
+  COLLECTION_TITLE_MAX,
+  COLLECTION_DESCRIPTION_MAX,
+  COLLECTION_DESCRIPTION_LINES_MAX,
+  COLLECTION_NOTE_MAX,
+  COLLECTIONS_PER_USER_MAX,
+  COLLECTION_GAMES_MAX,
+  validateCollectionTitle,
+  validateCollectionDescription,
+  validateCollectionNote,
+  normalizeCollectionDescription,
+  collectionMessage,
+  moveItem,
+  collectionPath,
+  collectionShareUrl,
+  gamesLabel,
+} from "./collections";
+export {
+  isCollectionsUnsupportedError,
+  markCollectionsUnsupported,
+  noteCollectionsError,
+  useCollectionsSupported,
+} from "./components/collectionsSupport";
+export { CollectionCard, CollectionCardSkeleton, CollectionCover, CollectionGrid, PrivateBadge } from "./components/CollectionCard";
+export type { CollectionCardProps, CollectionGridProps } from "./components/CollectionCard";
+export { CollectionFormDialog, VISIBILITY_OPTIONS } from "./components/CollectionFormDialog";
+export type { CollectionFormDialogProps } from "./components/CollectionFormDialog";
+export { AddToCollectionDialog, AddToCollectionButton } from "./components/AddToCollectionDialog";
+export type { AddToCollectionDialogProps, AddToCollectionButtonProps } from "./components/AddToCollectionDialog";
+export { GameCollections, GAME_COLLECTIONS_LIMIT } from "./components/GameCollections";
+export type { GameCollectionsProps } from "./components/GameCollections";
+export { CollectionItemRow, collectionItemTitle } from "./components/CollectionItemRow";
+export type { CollectionItemRowProps, MoveDirection } from "./components/CollectionItemRow";
+export { ProfileCollections, NewCollectionButton, PROFILE_COLLECTIONS_LIMIT } from "./components/ProfileCollections";
+export type { ProfileCollectionsProps } from "./components/ProfileCollections";
+
 // Pages
 export { HomePage } from "./pages/HomePage";
 export { GamePage } from "./pages/GamePage";
@@ -284,6 +321,9 @@ export { FeedPage, FEED_TAB_KEY } from "./pages/FeedPage";
 export type { FeedTab } from "./pages/FeedPage";
 export { FollowListPage } from "./pages/FollowListPage";
 export { NotificationsPage, NOTIFICATIONS_PER_PAGE } from "./pages/NotificationsPage";
+export { CollectionPage, LINK_COPIED_MS, COLLECTION_UNDO_MS, COLLECTION_CONFLICT_MESSAGE } from "./pages/CollectionPage";
+export { UserCollectionsPage, MyCollectionsRedirect, USER_COLLECTIONS_PER_PAGE } from "./pages/UserCollectionsPage";
+export { reportActions } from "./pages/AdminPage";
 export type { NotificationsFilter } from "./pages/NotificationsPage";
 export type { FollowListMode } from "./pages/FollowListPage";
 

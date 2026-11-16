@@ -370,8 +370,8 @@ export type GameStats = {
 // ---- v2: moderation ----
 
 export type ReportReason = "spam" | "offensive" | "broken" | "copyright" | "other";
-/** F005: "screenshot" added. */
-export type ReportTargetType = "game" | "comment" | "screenshot";
+/** F005: "screenshot" added; F008: "collection" added. Render unknown types with Dismiss only. */
+export type ReportTargetType = "game" | "comment" | "screenshot" | "collection";
 export type ReportStatus = "open" | "resolved";
 export type ReportAction = "dismiss" | "unpublish" | "delete";
 
@@ -379,9 +379,13 @@ export type Report = {
   id: string;
   targetType: ReportTargetType;
   targetId: string;
-  /** Game title, the first 140 chars of the comment, or (F005) the screenshot caption / "Screenshot by {name}". */
+  /**
+   * Game title, the first 140 chars of the comment, (F005) the screenshot caption / "Screenshot by {name}", or (F008)
+   * the first 140 chars of the collection title at report time.
+   */
   targetPreview: string;
-  targetGameId: string;
+  /** F008: null for "collection" reports; a game id for every other type. */
+  targetGameId: string | null;
   reason: ReportReason;
   details: string;
   reporter: UserRef;
@@ -613,3 +617,89 @@ export type NotificationListQuery = {
   /** true = unread only. */
   unread?: boolean;
 };
+
+// ---- F008: collections ----
+
+export type CollectionVisibility = "public" | "private";
+
+export type CollectionSummary = {
+  /** UUID v4 */
+  id: string;
+  /** 1–60 chars, single line. Plain text. */
+  title: string;
+  /** 0–500 chars, may contain "
+" (at most 8 lines); "" = none. Plain text. */
+  description: string;
+  visibility: CollectionVisibility;
+  owner: UserRef;
+  /** Items whose game is visible to the viewer. */
+  gameCount: number;
+  /** 0–4 thumbnail URLs (server-relative) of the first visible games with a thumbnail, in collection order. */
+  coverUrls: string[];
+  /** RFC3339 UTC */
+  createdAt: string;
+  /** RFC3339 UTC; bumped by every successful change. */
+  updatedAt: string;
+  /** "/c/{id}" (in-app route) */
+  path: string;
+};
+
+export type CollectionItem = {
+  gameId: string;
+  /** null: the game is not visible to the viewer (only ever returned to the collection's owner). */
+  game: GameSummary | null;
+  /** 0–140 chars, single line; "" = none. Plain text. */
+  note: string;
+  /** RFC3339 UTC */
+  addedAt: string;
+};
+
+export type Collection = CollectionSummary & {
+  /** Collection order; all items (max 100), not paged. */
+  items: CollectionItem[];
+  /** The viewer owns the collection (false when anonymous). */
+  isOwner: boolean;
+  /** The viewer is the owner or an admin (false when anonymous). */
+  canDelete: boolean;
+};
+
+export type MyCollection = CollectionSummary & {
+  /** The `gameId` query game is in this collection; false without `gameId`. */
+  containsGame: boolean;
+  /** All items including unavailable ones (what the 100 cap counts). */
+  itemCount: number;
+};
+
+export type GameCollectionsPage = {
+  items: CollectionSummary[];
+  /** Public collections containing the game. */
+  total: number;
+};
+
+export type CollectionItemResponse = {
+  /** true: newly inserted; false: already present (note updated if given). */
+  added: boolean;
+  item: CollectionItem;
+  /** After the change, as the owner sees it. */
+  gameCount: number;
+  /** The collection's updatedAt after the change. */
+  updatedAt: string;
+};
+
+export type CollectionRemoveResponse = { removed: boolean; gameCount: number; updatedAt: string };
+
+export type CreateCollectionRequest = {
+  title: string;
+  description?: string;
+  /** default "public" */
+  visibility?: CollectionVisibility;
+  /** Becomes the first item (empty note). */
+  gameId?: string;
+};
+
+export type UpdateCollectionRequest = { title?: string; description?: string; visibility?: CollectionVisibility };
+
+/** An absent `note` keeps the stored note. */
+export type PutCollectionGameRequest = { note?: string };
+
+export type ReorderCollectionRequest = { gameIds: string[] };

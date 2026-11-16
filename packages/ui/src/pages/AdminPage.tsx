@@ -30,16 +30,37 @@ const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => s
   delete: {
     label: "Delete",
     title: (r) =>
-      r.targetType === "game" ? `Delete “${r.targetPreview}”?` : r.targetType === "screenshot" ? "Delete this screenshot?" : "Delete this comment?",
+      r.targetType === "game"
+        ? `Delete “${r.targetPreview}”?`
+        : r.targetType === "screenshot"
+          ? "Delete this screenshot?"
+          : r.targetType === "collection"
+            ? "Delete this collection?"
+            : "Delete this comment?",
     body: (r) =>
       r.targetType === "game"
         ? "The game, its files, ratings, comments and scores are removed permanently."
         : r.targetType === "screenshot"
           ? "The screenshot and its files are removed permanently."
-          : "The comment is removed permanently, together with any replies to it.",
+          : r.targetType === "collection"
+            ? "The games stay on the site; only this list is removed."
+            : "The comment is removed permanently, together with any replies to it.",
     danger: true,
   },
 };
+
+const KNOWN_TARGET_TYPES: ReadonlySet<string> = new Set(["game", "comment", "screenshot", "collection"]);
+
+/** Moderation actions per target type; unknown (newer) types get Dismiss only. */
+export function reportActions(targetType: string): ReportAction[] {
+  if (targetType === "game") return ["dismiss", "unpublish", "delete"];
+  if (KNOWN_TARGET_TYPES.has(targetType)) return ["dismiss", "delete"];
+  return ["dismiss"];
+}
+
+function gameLink(gameId: string | null | undefined): string | null {
+  return gameId ? `/games/${encodeURIComponent(gameId)}` : null;
+}
 
 function reasonLabel(r: Report["reason"]): string {
   return REPORT_REASONS.find((x) => x.value === r)?.label ?? r;
@@ -51,8 +72,9 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
   const [confirm, setConfirm] = useState<ReportAction | null>(null);
   const [busy, setBusy] = useState(false);
   const resolveUrl = useResolveUrl();
-  // Unpublish only makes sense for games; comments and (F005) screenshots get Dismiss / Delete.
-  const actions: ReportAction[] = report.targetType === "game" ? ["dismiss", "unpublish", "delete"] : ["dismiss", "delete"];
+  // Unpublish only makes sense for games; comments, (F005) screenshots and (F008) collections get Dismiss / Delete.
+  const actions = reportActions(report.targetType);
+  const gamePath = gameLink(report.targetGameId);
 
   const run = async (action: ReportAction) => {
     setBusy(true);
@@ -83,9 +105,20 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
       </div>
       <div className="pf-report-row__target">
         {report.targetType === "game" ? (
-          <Link to={`/games/${report.targetGameId}`} className="pf-report-row__title">
-            {report.targetPreview}
-          </Link>
+          gamePath ? (
+            <Link to={gamePath} className="pf-report-row__title">
+              {report.targetPreview}
+            </Link>
+          ) : (
+            <strong className="pf-report-row__title">{report.targetPreview}</strong>
+          )
+        ) : report.targetType === "collection" ? (
+          <>
+            <strong className="pf-report-row__title pf-report-row__title--text">{report.targetPreview}</strong>{" "}
+            <Link to={`/c/${encodeURIComponent(report.targetId)}`} className="pf-small">
+              View collection →
+            </Link>
+          </>
         ) : report.targetType === "screenshot" ? (
           <div className="pf-report-row__shot">
             {report.targetImageUrl ? (
@@ -97,19 +130,25 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
             )}
             <div>
               <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>
-              <Link to={`/games/${report.targetGameId}`} className="pf-small">
-                View the game →
-              </Link>
+              {gamePath && (
+                <Link to={gamePath} className="pf-small">
+                  View the game →
+                </Link>
+              )}
             </div>
           </div>
-        ) : (
+        ) : report.targetType === "comment" ? (
           <>
             <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>
             {/* F006: the permalink opens the game page with the comment (or reply) highlighted and focused. */}
-            <Link to={commentPermalink(report.targetGameId, report.targetId)} className="pf-small">
-              View in context →
-            </Link>
+            {report.targetGameId && (
+              <Link to={commentPermalink(report.targetGameId, report.targetId)} className="pf-small">
+                View in context →
+              </Link>
+            )}
           </>
+        ) : (
+          <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>
         )}
       </div>
       {report.details && <p className="pf-report-row__details">“{report.details}”</p>}
@@ -178,7 +217,7 @@ export function AdminPage() {
       <header className="pf-pagehead pf-pagehead--row">
         <div>
           <h1>Moderation</h1>
-          <p className="pf-muted">Review reported games, comments and screenshots.</p>
+          <p className="pf-muted">Review reported games, comments, screenshots and collections.</p>
         </div>
       </header>
       <Tabs

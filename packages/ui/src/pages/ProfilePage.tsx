@@ -7,6 +7,7 @@ import { Avatar, EmptyState, ErrorState, Pagination, Skeleton } from "../compone
 import { FollowButton, useFollows } from "../components/Follow";
 import { GameGrid } from "../components/GameCard";
 import { RecentAchievements } from "../components/Achievements";
+import { ProfileCollections } from "../components/ProfileCollections";
 import { formatCount, formatDate, useAsync, useDocumentTitle } from "../util";
 import { NotFoundPage } from "./NotFoundPage";
 
@@ -145,6 +146,8 @@ export function ProfilePage() {
           }}
         />
       )}
+
+      {data && <ProfileCollections key={data.user.username} username={data.user.username} isMe={isMe} />}
     </div>
   );
 }

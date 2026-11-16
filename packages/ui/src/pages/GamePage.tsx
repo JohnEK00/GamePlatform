@@ -9,6 +9,8 @@ import { ConfirmDialog, ErrorState, ProgressBar, Skeleton, Spinner, TagChip, Use
 import { clearGameSave, discardPendingCloudSave, GamePlayer, hasGameSave } from "../components/GamePlayer";
 import { GameAchievements } from "../components/Achievements";
 import { FavoriteButton } from "../components/Favorite";
+import { AddToCollectionButton } from "../components/AddToCollectionDialog";
+import { GameCollections } from "../components/GameCollections";
 import { FollowButton, useFollows } from "../components/Follow";
 import { RelatedGames } from "../components/RelatedGames";
 import { ScreenshotGallery } from "../components/ScreenshotGallery";
@@ -420,6 +422,7 @@ export function GamePage() {
           </div>
           <div className="pf-gamepage__actions">
             <FavoriteButton gameId={game.id} gameTitle={game.title} favorites={game.favorites ?? 0} isFavorite={!!game.isFavorite} variant="full" />
+            <AddToCollectionButton gameId={game.id} gameTitle={game.title} />
             {!game.isOwner && (
               <ReportButton targetType="game" targetId={game.id} targetLabel={game.title} className="pf-btn pf-btn--ghost pf-btn--sm">
                 ⚑ Report
@@ -443,6 +446,7 @@ export function GamePage() {
         <VersionHistory game={game} onUpdated={(g) => setData(g)} />
         {(!game.achievements || game.achievements.length > 0) && <GameAchievements gameId={game.id} refreshKey={achKey} />}
         <ScreenshotGallery game={game} onGameUpdated={(g) => setData(g)} />
+        <GameCollections gameId={game.id} />
         <Comments gameId={game.id} isGameOwner={game.isOwner} focusCommentId={focusCommentId} />
       </div>
       <aside className="pf-gamepage__side">

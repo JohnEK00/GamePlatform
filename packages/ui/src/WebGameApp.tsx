@@ -25,6 +25,8 @@ import { StudioPage } from "./pages/StudioPage";
 import { FeedPage } from "./pages/FeedPage";
 import { FollowListPage } from "./pages/FollowListPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
+import { CollectionPage } from "./pages/CollectionPage";
+import { MyCollectionsRedirect, UserCollectionsPage } from "./pages/UserCollectionsPage";
 
 /** Config + ApiClient + Auth + Toast providers, without a router. */
 export function WebGameProviders({ config, client, children }: { config: WebGameConfig; client?: ApiClient; children: ReactNode }) {
@@ -115,7 +117,17 @@ export function WebGameRoutes({ extraRoutes }: { extraRoutes?: ReactNode }) {
             </RequireAuth>
           }
         />
+        <Route
+          path="collections"
+          element={
+            <RequireAuth>
+              <MyCollectionsRedirect />
+            </RequireAuth>
+          }
+        />
+        <Route path="c/:id" element={<CollectionPage />} />
         <Route path="u/:username" element={<ProfilePage />} />
+        <Route path="u/:username/collections" element={<UserCollectionsPage />} />
         <Route path="u/:username/followers" element={<FollowListPage mode="followers" />} />
         <Route path="u/:username/following" element={<FollowListPage mode="following" />} />
         <Route
