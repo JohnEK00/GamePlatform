@@ -200,46 +200,122 @@ pub async fn ensure_fresh(state: &AppState) {
     }
 }
 
-/// F007: minimum interval between notification prunes in [`spawn_maintenance`].
+/// F007: minimum interval between notification prunes in [`Housekeeping`].
 pub const PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(3600);
+/// Review 5 L9: the housekeeping loop's tick (independent of `TRENDING_TTL_SECS`).
+pub const HOUSEKEEPING_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+/// N1: minimum interval between periodic `PRAGMA optimize` runs.
+pub const OPTIMIZE_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
 
-/// Background maintenance (N1, N3): every `TRENDING_TTL_SECS` refresh the trending snapshot
-/// (retrying after `min(TTL, FAILURE_BACKOFF)` when it fails) and run `PRAGMA optimize`.
-/// The first run is one TTL after the call (startup already refreshed in `AppState::new`).
-/// Returns `None` (no task) when the TTL is 0. Call once from `serve`.
-pub fn spawn_maintenance(state: &AppState) -> Option<tokio::task::JoinHandle<()>> {
-    let ttl = state.config.trending_ttl;
-    if ttl.is_zero() {
-        return None;
+/// The background tasks started by [`spawn_maintenance`].
+pub struct Maintenance {
+    /// Trending refresh; `None` when `TRENDING_TTL_SECS = 0`.
+    pub trending: Option<tokio::task::JoinHandle<()>>,
+    /// [`Housekeeping`]; always running.
+    pub housekeeping: tokio::task::JoinHandle<()>,
+}
+
+impl Maintenance {
+    pub fn abort(&self) {
+        if let Some(t) = &self.trending {
+            t.abort();
+        }
+        self.housekeeping.abort();
     }
-    let db = state.db.clone();
-    let cache = state.trending.clone();
+}
+
+/// Background maintenance. Call once from `serve`.
+/// - N3 trending: every `TRENDING_TTL_SECS` refresh the snapshot (retrying after
+///   `min(TTL, FAILURE_BACKOFF)` when it fails); the first run is one TTL after the call
+///   (startup already refreshed in `AppState::new`). Not started when the TTL is 0.
+/// - Review 5 L9 housekeeping, every [`HOUSEKEEPING_EVERY`] whatever the TTL: see
+///   [`Housekeeping::tick`].
+pub fn spawn_maintenance(state: &AppState) -> Maintenance {
+    let ttl = state.config.trending_ttl;
+    let trending = (!ttl.is_zero()).then(|| {
+        let db = state.db.clone();
+        let cache = state.trending.clone();
+        tokio::spawn(async move {
+            let mut wait = ttl;
+            loop {
+                tokio::time::sleep(wait).await;
+                wait = if cache.refresh_now(&db).await {
+                    ttl
+                } else {
+                    ttl.min(FAILURE_BACKOFF)
+                };
+            }
+        })
+    });
     let state = state.clone();
-    Some(tokio::spawn(async move {
-        let mut wait = ttl;
-        // F007: notification pruning runs at most once per PRUNE_EVERY.
-        let mut last_prune: Option<std::time::Instant> = None;
+    let housekeeping = tokio::spawn(async move {
+        let mut hk = Housekeeping::new(Instant::now());
         loop {
-            tokio::time::sleep(wait).await;
-            wait = if cache.refresh_now(&db).await {
-                ttl
-            } else {
-                ttl.min(FAILURE_BACKOFF)
-            };
-            crate::db::optimize(&db, false).await;
-            // L4: retry `score_bests` rebuilds that failed earlier (a no-op when none).
-            let _ = crate::bests::spawn_rebuild(&state).await;
-            // F007 L2: pick up queued fan-outs (a no-op when none).
-            state.fan_out.kick(&db);
-            if last_prune.is_none_or(|t| t.elapsed() >= PRUNE_EVERY) {
-                last_prune = Some(std::time::Instant::now());
-                match crate::notifications::prune(&db, Utc::now()).await {
-                    Ok(n) => tracing::debug!(deleted = n, "pruned notifications"),
-                    Err(e) => tracing::warn!(error = %e, "notification pruning failed"),
-                }
+            tokio::time::sleep(HOUSEKEEPING_EVERY).await;
+            hk.tick(&state, Instant::now()).await;
+        }
+    });
+    Maintenance {
+        trending,
+        housekeeping,
+    }
+}
+
+/// Periodic jobs that don't depend on trending (review 5 L9). Times are passed in so tests
+/// can drive the schedule without sleeping.
+#[derive(Debug, Clone)]
+pub struct Housekeeping {
+    last_optimize: Instant,
+    last_unpark: Instant,
+    last_prune: Option<Instant>,
+}
+
+impl Housekeeping {
+    /// Startup already ran `PRAGMA optimize` and `resume_fan_outs`, so those are first due one
+    /// interval after `now`; the first prune runs on the first tick.
+    pub fn new(now: Instant) -> Self {
+        Self {
+            last_optimize: now,
+            last_unpark: now,
+            last_prune: None,
+        }
+    }
+
+    /// One housekeeping pass:
+    /// - `PRAGMA optimize` at most once per [`OPTIMIZE_EVERY`];
+    /// - L4: retry `score_bests` rebuilds that failed earlier (a no-op when none);
+    /// - F007 L2/L9: un-park fan-outs that ran out of attempts, at most once per
+    ///   [`crate::notifications::FAN_OUT_UNPARK_EVERY`], then kick the worker (a no-op when
+    ///   nothing is queued);
+    /// - F007: prune notifications at most once per [`PRUNE_EVERY`].
+    pub async fn tick(&mut self, state: &AppState, now: Instant) {
+        let db = &state.db;
+        if now.saturating_duration_since(self.last_optimize) >= OPTIMIZE_EVERY {
+            self.last_optimize = now;
+            crate::db::optimize(db, false).await;
+        }
+        let _ = crate::bests::spawn_rebuild(state).await;
+        if now.saturating_duration_since(self.last_unpark)
+            >= crate::notifications::FAN_OUT_UNPARK_EVERY
+        {
+            self.last_unpark = now;
+            let n = crate::notifications::unpark_fan_outs(db).await;
+            if n > 0 {
+                tracing::info!(count = n, "retrying parked notification fan-outs");
             }
         }
-    }))
+        state.fan_out.kick(db);
+        if self
+            .last_prune
+            .is_none_or(|t| now.saturating_duration_since(t) >= PRUNE_EVERY)
+        {
+            self.last_prune = Some(now);
+            match crate::notifications::prune(db, Utc::now()).await {
+                Ok(n) => tracing::debug!(deleted = n, "pruned notifications"),
+                Err(e) => tracing::warn!(error = %e, "notification pruning failed"),
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -623,7 +623,7 @@ In-app notifications (spec: `docs/features/F007-in-app-notifications.md`).
       ORDER BY n.updated_at DESC LIMIT 100)
   ```
 - **Mark read**: `UPDATE notifications SET read_at = ?now WHERE recipient_id = ?1 AND read_at IS NULL AND updated_at <= ?upTo [AND id IN (…)]`. `upTo` is normalised in Rust to RFC3339 millis `Z` before the string comparison (all stored times use that format).
-- **Pruning** (`notifications::prune(pool, now)`, called from `trending::spawn_maintenance` at most once per hour; each statement is repeated while it deletes 1000 rows):
+- **Pruning** (`notifications::prune(pool, now)`, called at most once per hour from the housekeeping task in `trending::spawn_maintenance`, which runs every 60 s even when `TRENDING_TTL_SECS=0` (review 5, L9); each statement is repeated while it deletes 1000 rows):
   ```sql
   DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE read_at IS NOT NULL AND read_at < ?30_days_ago LIMIT 1000);
   DELETE FROM notifications WHERE id IN (SELECT id FROM notifications WHERE updated_at < ?90_days_ago LIMIT 1000);

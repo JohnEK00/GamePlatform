@@ -754,6 +754,7 @@ pub async fn upload_bundle(
     // version that is no longer current) gets 409 and never touches the live files.
     let conflict = || AppError::Conflict("The game was updated concurrently; please retry".into());
     let _claim = state.bundle_locks.try_claim(&id).ok_or_else(conflict)?;
+    state.bundle_locks.after_claim().await;
     let current: Option<i64> = sqlx::query_scalar("SELECT version FROM games WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.db)

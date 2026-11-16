@@ -190,8 +190,14 @@ pub fn public_router(state: &AppState) -> Router<AppState> {
     Router::new()
         .route("/play/studio", get(play::studio_page))
         .route("/play/{id}", get(play::play_page))
-        .route("/runtime/{*path}", get(files::runtime_file))
-        .route("/games/{id}/files/{*path}", get(files::game_file))
+        .route(
+            "/runtime/{*path}",
+            get(files::runtime_file).layer(files::compression()),
+        )
+        .route(
+            "/games/{id}/files/{*path}",
+            get(files::game_file).layer(files::compression()),
+        )
         .nest_service(
             "/media/thumbnails",
             ServeDir::new(state.storage.thumbnails_dir()),
@@ -271,6 +277,71 @@ async fn not_found_fallback() -> AppError {
     AppError::NotFound("Not found".into())
 }
 
+/// Review 5 M1: `Cache-Control` of the content-hashed build output under `WEB_DIST/assets/`.
+pub const SPA_ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+
+/// The web app (`WEB_DIST`), review 5 M1:
+/// - `/assets/*` (Vite's content-hashed files) are served with [`SPA_ASSET_CACHE_CONTROL`];
+///   a missing asset is a plain 404 (never `index.html`, which would then be cached as JS).
+/// - Everything else falls back to `index.html` (client-side routes) with `no-cache`, so a
+///   deploy is picked up on the next load.
+/// - `*.map` is never served (404), even if a build left source maps in `WEB_DIST`.
+/// - Text responses are gzipped ([`files::compression`]); `ServeDir` validates with
+///   `Last-Modified`, which is the same for both encodings.
+fn spa_router(dir: &std::path::Path) -> Router {
+    let index = dir.join("index.html");
+    Router::new()
+        .nest_service("/assets", ServeDir::new(dir.join("assets")))
+        .fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)))
+        .layer(axum::middleware::from_fn(spa_headers))
+        .layer(files::compression())
+}
+
+/// Percent-decode a URL path for the `.map` check (invalid escapes are kept as they are).
+fn percent_decode(path: &str) -> String {
+    let b = path.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Some(v) = std::str::from_utf8(&b[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+async fn spa_headers(req: Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = percent_decode(req.uri().path()).to_ascii_lowercase();
+    if path.trim_end_matches('/').ends_with(".map") {
+        return not_found_fallback().await.into_response();
+    }
+    let hashed = path.starts_with("/assets/");
+    let mut res = next.run(req).await;
+    let ok = res.status().is_success() || res.status() == axum::http::StatusCode::NOT_MODIFIED;
+    let cache = match (hashed, ok) {
+        (true, true) => SPA_ASSET_CACHE_CONTROL,
+        (true, false) => "no-store",
+        (false, _) => "no-cache",
+    };
+    let h = res.headers_mut();
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    // Also on 304s and small files, which the compression layer doesn't mark.
+    if !h.contains_key(header::VARY) {
+        h.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    }
+    res
+}
+
 pub fn router(state: AppState) -> Router {
     let mut app = Router::new()
         .nest(
@@ -280,10 +351,7 @@ pub fn router(state: AppState) -> Router {
         .merge(public_router(&state).layer(public_cors()));
 
     app = match &state.config.web_dist {
-        Some(dir) => {
-            let index = dir.join("index.html");
-            app.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)))
-        }
+        Some(dir) => app.fallback_service(spa_router(dir)),
         None => app.fallback(not_found_fallback),
     };
 

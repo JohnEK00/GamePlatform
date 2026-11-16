@@ -141,15 +141,20 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     let kind = n.kind.as_str();
     let now = stamp(n.now);
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
+    // `{col}` is a fixed column name from `Kind::setting_column`.
+    let col = n.kind.setting_column();
     if n.dedupe_actor {
         // L1: the actor re-joins a group they were retracted from: restore the event and keep
-        // `updated_at`, so the item neither moves nor counts as new activity.
-        let restored = sqlx::query(
+        // `updated_at`, so the item neither moves nor counts as new activity. Review 5 L5: not
+        // when the recipient has muted the kind since (the insert below is muted too).
+        let restored = sqlx::query(&format!(
             "UPDATE notification_events SET retracted_at = NULL \
              WHERE actor_id = ?4 AND retracted_at IS NOT NULL AND notification_id IN \
              (SELECT id FROM notifications WHERE recipient_id = ?1 AND kind = ?2 \
-              AND group_key = ?3)",
-        )
+              AND group_key = ?3) \
+             AND NOT EXISTS (SELECT 1 FROM notification_settings s WHERE s.user_id = ?1 \
+               AND s.{col} = 0)"
+        ))
         .bind(&n.recipient_id)
         .bind(kind)
         .bind(&n.group_key)
@@ -161,8 +166,6 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
             return tx.commit().await;
         }
     }
-    // `{col}` is a fixed column name from `Kind::setting_column`.
-    let col = n.kind.setting_column();
     let id: Option<i64> = sqlx::query_scalar(&format!(
         "INSERT INTO notifications (recipient_id, kind, group_key, game_id, comment_id, \
          created_at, updated_at) \
@@ -250,7 +253,7 @@ pub async fn retract_pool(
 // ---------------------------------------------------------------------------
 
 /// A chunk is retried this many times in a row before the fan-out is parked until the next
-/// startup ([`resume_fan_outs`]).
+/// startup ([`resume_fan_outs`]) or the next un-park ([`FAN_OUT_UNPARK_EVERY`]).
 pub const FAN_OUT_MAX_ATTEMPTS: i64 = 5;
 const FAN_OUT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 
@@ -325,6 +328,26 @@ pub async fn resume_fan_outs(db: &SqlitePool, fan_out: &FanOut) {
         tracing::warn!(error = %e, "failed to reset notification fan-out attempts");
     }
     fan_out.kick(db);
+}
+
+/// Review 5 L9: a parked fan-out is retried at most this often (by the housekeeping loop,
+/// [`crate::trending::Housekeeping`]), so a long-running server doesn't strand it until the
+/// next restart.
+pub const FAN_OUT_UNPARK_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Give parked fan-outs (out of attempts) a fresh set of attempts. Returns the rows un-parked.
+pub async fn unpark_fan_outs(db: &SqlitePool) -> u64 {
+    match sqlx::query("UPDATE notification_fanouts SET attempts = 0 WHERE attempts >= ?")
+        .bind(FAN_OUT_MAX_ATTEMPTS)
+        .execute(db)
+        .await
+    {
+        Ok(r) => r.rows_affected(),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to un-park notification fan-outs");
+            0
+        }
+    }
 }
 
 /// Process queued fan-outs chunk by chunk until none is left (or every remaining one is
@@ -453,6 +476,10 @@ async fn fan_out_chunk(db: &SqlitePool, game_id: &str, now: DateTime<Utc>) -> sq
 // Retention (L3: lock-friendly)
 // ---------------------------------------------------------------------------
 
+/// A notification `n` with at least one live (not retracted) event, i.e. one that is listed.
+const LIVE: &str = "EXISTS (SELECT 1 FROM notification_events e \
+     WHERE e.notification_id = n.id AND e.retracted_at IS NULL)";
+
 /// Ids per short delete statement.
 pub const PRUNE_BATCH: usize = 500;
 
@@ -517,18 +544,21 @@ pub async fn prune(pool: &SqlitePool, now: DateTime<Utc>) -> sqlx::Result<u64> {
     }
 
     // Per-recipient cap: only recipients above it, each read via
-    // idx_notifications_recipient_updated.
-    let over: Vec<String> = sqlx::query_scalar(
-        "SELECT recipient_id FROM notifications GROUP BY recipient_id HAVING COUNT(*) > ?",
-    )
+    // idx_notifications_recipient_updated. Review 5 L5: only visible rows (with a live event)
+    // count and are ranked; tombstone-only rows (fully retracted toggles) are invisible, so
+    // they never push real notifications out. They age out under the 90-day rule.
+    let over: Vec<String> = sqlx::query_scalar(&format!(
+        "SELECT recipient_id FROM notifications n WHERE {LIVE} \
+         GROUP BY recipient_id HAVING COUNT(*) > ?"
+    ))
     .bind(PER_RECIPIENT_CAP)
     .fetch_all(pool)
     .await?;
     for recipient in over {
-        let excess: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT id, updated_at FROM notifications WHERE recipient_id = ? \
-             ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET ?",
-        )
+        let excess: Vec<(i64, String)> = sqlx::query_as(&format!(
+            "SELECT id, updated_at FROM notifications n WHERE recipient_id = ? AND {LIVE} \
+             ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET ?"
+        ))
         .bind(&recipient)
         .bind(PER_RECIPIENT_CAP)
         .fetch_all(pool)

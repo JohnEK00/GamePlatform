@@ -83,7 +83,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     let _bests = webgame_server::bests::spawn_rebuild(&state);
     // F007 L2: resume `gamePublished` fan-outs interrupted by a restart.
     webgame_server::notifications::resume_fan_outs(&state.db, &state.fan_out).await;
-    // N1/N3: periodic trending refresh + PRAGMA optimize, off the request path.
+    // N1/N3 + review 5 L9: trending refresh (TTL > 0) and housekeeping (PRAGMA optimize,
+    // fan-out retries, notification pruning; whatever the TTL), off the request path.
     let maintenance = webgame_server::trending::spawn_maintenance(&state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("listening on http://{addr}");
@@ -93,9 +94,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
-    if let Some(task) = maintenance {
-        task.abort();
-    }
+    maintenance.abort();
     tracing::info!("server stopped");
     Ok(())
 }

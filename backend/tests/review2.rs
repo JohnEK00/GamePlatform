@@ -699,9 +699,12 @@ async fn n3_failed_refresh_backs_off() {
 
 #[tokio::test]
 async fn n3_background_task_refreshes_off_the_request_path() {
-    // TTL 0: no task.
+    // TTL 0: no trending task (review 5 L9: housekeeping still runs).
     let t0 = setup_with(|c| c.trending_ttl = Duration::ZERO).await;
-    assert!(trending::spawn_maintenance(&t0.state).is_none());
+    let m0 = trending::spawn_maintenance(&t0.state);
+    assert!(m0.trending.is_none());
+    assert!(!m0.housekeeping.is_finished());
+    m0.abort();
 
     let t = setup_with(|c| c.trending_ttl = Duration::from_secs(1)).await;
     assert_eq!(t.state.trending.refresh_count(), 1, "startup refresh");
@@ -722,7 +725,8 @@ async fn n3_background_task_refreshes_off_the_request_path() {
     t.get("/api/games?sort=trending", None).await;
     assert_eq!(t.state.trending.refresh_count(), 1);
 
-    let task = trending::spawn_maintenance(&t.state).expect("task");
+    let task = trending::spawn_maintenance(&t.state);
+    assert!(task.trending.is_some());
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     while t.state.trending.refresh_count() < 2 {
         assert!(

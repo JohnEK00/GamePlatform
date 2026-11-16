@@ -12,6 +12,8 @@ use crate::error::{AppError, AppResult};
 use crate::extract::ApiPath;
 use crate::routes::games::fetch_game_row;
 use tokio_util::io::ReaderStream;
+use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{And, Predicate, SizeAbove};
 
 /// MIME type for a file path; JavaScript is always `text/javascript`.
 pub fn mime_for(path: &str) -> String {
@@ -46,6 +48,58 @@ pub fn mime_for(path: &str) -> String {
         }
     };
     m.to_string()
+}
+
+/// Review 5 M1: content types worth gzipping (text, JSON, JS, SVG, XML, wasm). Media that is
+/// already compressed (png/jpeg/webp/gif, mp3/ogg, woff2, zip) is never recompressed.
+pub fn compressible(content_type: &str) -> bool {
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    essence.starts_with("text/")
+        || matches!(
+            essence.as_str(),
+            "application/json"
+                | "application/javascript"
+                | "application/xml"
+                | "application/manifest+json"
+                | "application/wasm"
+                | "image/svg+xml"
+        )
+}
+
+/// Smallest response body that is compressed (smaller ones gain nothing).
+pub const COMPRESS_MIN_BYTES: u16 = 256;
+
+/// Compress successful responses with a [`compressible`] `Content-Type` and a body of at least
+/// [`COMPRESS_MIN_BYTES`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TextOnly;
+
+impl Predicate for TextOnly {
+    fn should_compress<B>(&self, response: &axum::http::Response<B>) -> bool
+    where
+        B: axum::body::HttpBody,
+    {
+        response.status() == StatusCode::OK
+            && response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(compressible)
+    }
+}
+
+/// Review 5 M1: gzip for text responses (SPA, `/runtime/*`, game files), negotiated with
+/// `Accept-Encoding`. It adds `Vary: Accept-Encoding` and drops `Content-Length` when it
+/// compresses. Not used on `/api` (responses there can mix secrets with reflected input).
+pub fn compression() -> CompressionLayer<And<TextOnly, SizeAbove>> {
+    CompressionLayer::new()
+        .gzip(true)
+        .compress_when(TextOnly.and(SizeAbove::new(COMPRESS_MIN_BYTES)))
 }
 
 /// Join a URL path onto `base`, rejecting traversal and odd components.
@@ -97,22 +151,36 @@ async fn serve_file(path: &Path, rel: &str, tag: &str, headers: &HeaderMap) -> A
         _ => return Err(AppError::not_found("File")),
     };
     let etag = etag_for(tag, &meta);
-    let etag_value =
-        HeaderValue::from_str(&etag).map_err(|e| AppError::Internal(format!("etag: {e}")))?;
-    let common = [
-        (header::ETAG, etag_value),
-        // Always revalidate; the ETag makes that a cheap 304.
-        (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
-        (
-            header::X_CONTENT_TYPE_OPTIONS,
-            HeaderValue::from_static("nosniff"),
-        ),
-        // If a file (e.g. an SVG) is opened top-level, keep it in an opaque origin.
-        (
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static("sandbox"),
-        ),
-    ];
+    let mime = mime_for(rel);
+    // Review 5 M1: a compressible file may be sent gzipped by [`compression`], so its
+    // validator is weak (the gzip bytes differ from the file) and caches key it on
+    // `Accept-Encoding`. Both apply to 200 and 304 alike. Media keeps a strong ETag.
+    let compress = compressible(&mime);
+    let etag_header = if compress {
+        format!("W/{etag}")
+    } else {
+        etag.clone()
+    };
+    let mut common = HeaderMap::new();
+    common.insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag_header)
+            .map_err(|e| AppError::Internal(format!("etag: {e}")))?,
+    );
+    if compress {
+        common.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    }
+    // Always revalidate; the ETag makes that a cheap 304.
+    common.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    common.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    // If a file (e.g. an SVG) is opened top-level, keep it in an opaque origin.
+    common.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("sandbox"),
+    );
     if none_match(headers, &etag) {
         return Ok((StatusCode::NOT_MODIFIED, common).into_response());
     }
@@ -123,7 +191,7 @@ async fn serve_file(path: &Path, rel: &str, tag: &str, headers: &HeaderMap) -> A
         }
         Err(e) => return Err(e.into()),
     };
-    let ct = HeaderValue::from_str(&mime_for(rel))
+    let ct = HeaderValue::from_str(&mime)
         .unwrap_or(HeaderValue::from_static("application/octet-stream"));
     // Streamed: large assets are never buffered whole in memory.
     let body = Body::from_stream(ReaderStream::new(file));

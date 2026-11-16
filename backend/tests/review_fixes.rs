@@ -231,8 +231,12 @@ async fn r6_game_files_etag_and_304() {
 
     let r = t.get(&url, None).await;
     assert_eq!(r.status, StatusCode::OK);
+    // Review 5 M1: JS may be sent gzipped, so its validator is weak and keyed on
+    // `Accept-Encoding` (media keeps strong ETags; see tests/review5.rs).
     let etag = r.header("etag");
-    assert!(etag.starts_with("\"v1-") && etag.ends_with('"'), "{etag}");
+    assert!(etag.starts_with("W/\"v1-") && etag.ends_with('"'), "{etag}");
+    let strong = etag.trim_start_matches("W/").to_string();
+    assert!(r.header("vary").contains("accept-encoding"));
     assert_eq!(r.header("cache-control"), "no-cache");
     assert_eq!(r.header("content-type"), "text/javascript; charset=utf-8");
     assert_eq!(r.header("x-content-type-options"), "nosniff");
@@ -261,12 +265,17 @@ async fn r6_game_files_etag_and_304() {
     assert_eq!(r.header("content-security-policy"), "sandbox");
     assert_eq!(r.header("x-content-type-options"), "nosniff");
     assert_eq!(r.header("access-control-allow-origin"), "*");
+    assert!(r.header("vary").contains("accept-encoding"));
+    // The strong form of the same tag also matches (weak comparison).
+    let r = cond(strong.clone()).await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED);
+    assert_eq!(r.header("etag"), etag);
     assert_eq!(
-        cond(format!("W/{etag}")).await.status,
+        cond(format!("\"other\", {etag}")).await.status,
         StatusCode::NOT_MODIFIED
     );
     assert_eq!(
-        cond(format!("\"other\", {etag}")).await.status,
+        cond(format!("\"other\", {strong}")).await.status,
         StatusCode::NOT_MODIFIED
     );
     assert_eq!(cond("\"other\"".into()).await.status, StatusCode::OK);
@@ -276,13 +285,13 @@ async fn r6_game_files_etag_and_304() {
     assert_eq!(r.status, StatusCode::OK);
     let r = cond(etag.clone()).await;
     assert_eq!(r.status, StatusCode::OK);
-    assert!(r.header("etag").starts_with("\"v2-"));
+    assert!(r.header("etag").starts_with("W/\"v2-"));
 
     // Runtime files get validators too.
     let r = t.get("/runtime/engine.js", None).await;
     assert_eq!(r.status, StatusCode::OK);
     let rt = r.header("etag");
-    assert!(rt.starts_with("\"rt-"), "{rt}");
+    assert!(rt.starts_with("W/\"rt-"), "{rt}");
     let r = t
         .send(
             Method::GET,

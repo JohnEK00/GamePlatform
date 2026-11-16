@@ -972,3 +972,16 @@ type ThreadState = {
 ### Rate limits
 - `PUT`/`DELETE …/pin` and `PUT`/`DELETE …/lock` share **`Limit::ThreadTools`: 60 per 10 min, per user**. Over the limit → 429 `rate_limited` with `Retry-After`.
 - They don't use `Limit::Comment` or `Limit::Heart`. `GET …/comments` with any `sort` stays an unlimited public read.
+
+
+## Review-fix additions (REVIEW-2026-11-16-5)
+- **Compression (M1):** when the client sends `Accept-Encoding: gzip`, responses from `/runtime/*`, `/games/{id}/files/*` and the web app may be gzipped (`Content-Encoding: gzip`, no `Content-Length`).
+  - Only text types are compressed (`text/*`, JSON, JS, XML, SVG, wasm), and only at 256 bytes or more. Images, audio, fonts and zips never are.
+  - `/api/*` and `/play/*` are not compressed.
+- **ETags (M1):** game and runtime files of those text types now carry a weak ETag (`W/"v{n}-…"`, `W/"rt-…"`) and `Vary: Accept-Encoding`. Media keeps a strong ETag. `If-None-Match` accepts either form.
+- **Web app caching (M1, when `WEB_DIST` is set):**
+  - `/assets/*` is served with `Cache-Control: public, max-age=31536000, immutable`. A missing asset is a 404, not `index.html`.
+  - Every other path (`index.html` and client routes) is served with `no-cache`.
+  - Any `*.map` path returns 404 with the JSON `not_found` error.
+- **Notifications (L5):** notifications whose events are all retracted don't count toward the 200-per-recipient cap. Re-toggling a heart or follow while that kind is muted restores nothing.
+- **Fan-out retries (L9):** a parked `gamePublished` fan-out is retried every 10 minutes while the server runs, not only after a restart. Pruning and fan-out retries run even when `TRENDING_TTL_SECS=0`, in a housekeeping task that ticks every 60 s.

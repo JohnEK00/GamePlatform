@@ -420,18 +420,22 @@ async fn r1_race_writes_one_version_row() {
 
     let za = bundle_with("export default { a: 1 };", 4 << 20);
     let zb = bundle_with("export default { b: 2 };", 4 << 20);
+    // Review 5: deterministic overlap. A takes the per-game claim and parks at the test gate;
+    // B is sent only then (so it read v1 and finds the claim held), and A finishes after B.
+    let gate = t.state.bundle_locks.install_gate();
     let (ra, rb) = tokio::join!(
         replace_with(&t, &tok, &id, &za, Some("from a"), Some("1")),
-        replace_with(&t, &tok, &id, &zb, Some("from b"), None)
+        async {
+            gate.entered().await;
+            let rb = replace_with(&t, &tok, &id, &zb, Some("from b"), None).await;
+            gate.release();
+            rb
+        }
     );
-    let mut statuses = [ra.status.as_u16(), rb.status.as_u16()];
-    statuses.sort();
-    assert_eq!(statuses, [200, 409], "{} / {}", ra.text(), rb.text());
-    let winner = if ra.status == StatusCode::OK {
-        &ra
-    } else {
-        &rb
-    };
+    assert_eq!(ra.status, StatusCode::OK, "{}", ra.text());
+    assert_eq!(rb.status, StatusCode::CONFLICT, "{}", rb.text());
+    assert_eq!(rb.error_code(), "conflict");
+    let winner = &ra;
     let rows = version_rows(&t, &id).await;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[1].0, 2);
