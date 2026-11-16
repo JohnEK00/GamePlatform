@@ -43,9 +43,12 @@
   <div id="toasts"></div>
   <iframe id="player" sandbox="allow-scripts" allow="autoplay; fullscreen; gamepad" title="game"></iframe>
   <script type="module">
+    import { screenshotHost } from '/playground-screenshots.js';
+    import { controlsHost } from '/playground-controls.js';
     // Dev playground host: loads player.html (which mirrors the backend player page) in a sandboxed
     // iframe and plays the parent role: storage handshake (webgame:hello -> webgame:load), persisting
-    // webgame:save to localStorage under webgame.save.{gameId}, fullscreen, pause/resume/mute.
+    // webgame:save to localStorage under webgame.save.{gameId}, fullscreen, pause/resume/mute, and the
+    // F005 screenshot messages (playground-screenshots.js) and F009 remapping (playground-controls.js).
     const params = new URLSearchParams(location.search);
     const select = document.getElementById('game');
     const log = document.getElementById('log');
@@ -70,6 +73,26 @@
       setTimeout(() => el.remove(), 4200);
     }
     const toGame = (msg) => frame.contentWindow?.postMessage(msg, '*');
+    // F005: 📷 button + in-memory tray; images are re-encoded in this page before display.
+    const onScreenshot = screenshotHost({
+      toGame, bar: document.getElementById('bar'), log, slug: () => name,
+      note(text, err) {
+        log.textContent = text;
+        const el = document.createElement('div');
+        el.className = 'toast';
+        el.textContent = text;
+        if (err) el.style.borderColor = '#ff6b6b';
+        toasts.append(el);
+        setTimeout(() => el.classList.add('out'), 3600);
+        setTimeout(() => el.remove(), 4200);
+      },
+    });
+
+    // F009: ⌨ panel; overrides persist under webgame.controls.{gameId} and are sent after each load.
+    const controls = controlsHost({
+      frame, toGame, bar: document.getElementById('bar'), log,
+      storageKey: `webgame.controls.${name}`, actions: () => meta?.actions, hint: () => (typeof meta?.controls === 'string' ? meta.controls : ''),
+    });
 
     let muted = false;
     document.getElementById('mute').onclick = () => {
@@ -87,12 +110,14 @@
       const d = e.data;
       if (!d || typeof d.type !== 'string' || !d.type.startsWith('webgame:')) return;
       console.info('[host] received', d);
+      if (onScreenshot(d)) return;
       switch (d.type) {
         case 'webgame:hello': {
           let data = null;
           try { data = JSON.parse(localStorage.getItem(saveKey) || 'null'); } catch { data = null; }
           toGame({ type: 'webgame:load', data });
           log.textContent = data ? 'hello -> load (saved data)' : 'hello -> load (null)';
+          controls.afterLoad();
           return;
         }
         case 'webgame:save': {
@@ -107,7 +132,25 @@
           else frame.requestFullscreen?.().catch(() => {});
           log.textContent = 'fullscreen';
           return;
-        case 'webgame:score': log.textContent = `score submitted: ${d.score}`; return;
+        case 'webgame:score':
+          log.textContent = `score submitted: ${d.score}`;
+          if (typeof d.requestId === 'string') { // F001: dev harness echoes a fake result
+            const display = String(d.score);
+            toGame({ type: 'webgame:score-result', requestId: d.requestId, result: { score: d.score, display, rank: 1, personalBest: true, ranks: { day: 1, week: 1, all: 1 } } });
+          }
+          return;
+        case 'webgame:leaderboard-get': { // F001: sample board, like the Studio preview
+          const lb = meta?.leaderboard || {};
+          const asc = lb.order === 'asc';
+          const n = Math.max(1, Math.min(25, Math.round(Number(d.limit)) || 10));
+          const entries = Array.from({ length: Math.min(5, n) }, (_, i) => {
+            const score = asc ? 30000 + i * 4500 : 5000 - i * 750;
+            return { rank: i + 1, name: `Player ${i + 1}`, score, display: lb.format === 'time' ? `${Math.floor(score / 60000)}:${String(Math.floor(score / 1000) % 60).padStart(2, '0')}.${String(score % 1000).padStart(3, '0')}` : score.toLocaleString(), isMe: false };
+          });
+          toGame({ type: 'webgame:leaderboard', requestId: d.requestId, leaderboard: { period: d.period, order: asc ? 'asc' : 'desc', format: lb.format === 'time' ? 'time' : 'number', label: lb.label || '', totalPlayers: entries.length, entries, me: null, sample: true } });
+          log.textContent = `leaderboard-get ${d.period}/${d.limit} (sample data)`;
+          return;
+        }
         case 'webgame:achievement': {
           const a = (meta?.achievements || []).find((x) => x.id === d.id);
           toast(a ? a.name : d.id, a ? a.description || '' : 'not declared in game.json!', a?.icon ? `/examples/${encodeURIComponent(name)}/${a.icon}` : null);

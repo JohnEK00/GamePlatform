@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "../api/client";
@@ -111,12 +111,34 @@ describe("StudioPage", () => {
     window.location.hash = "";
   });
 
+  it("lists the Menu & HUD template and accepts a .fnt asset as text (F012)", async () => {
+    window.location.hash = "#/studio";
+    const client = new ApiClient({ baseUrl: "" });
+    render(<WebGameApp config={{ apiBaseUrl: "", routerMode: "hash" }} client={client} />);
+    await screen.findByRole("heading", { name: "Studio" });
+    const picker = screen.getByRole("combobox", { name: "New from template" }) as HTMLSelectElement;
+    const option = Array.from(picker.options).find((o) => o.value === "menu-hud");
+    expect(option?.textContent).toBe("Menu & HUD");
+
+    const input = document.querySelector<HTMLInputElement>(".pf-studio__files input[type=file]")!;
+    expect(input.accept.split(",")).toContain(".fnt");
+    const fnt = 'info face="T" size=8\ncommon lineHeight=10 base=7\n';
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [new File([fnt], "font.fnt", { type: "" })] } });
+    });
+    const editor = (await screen.findByRole("textbox", { name: "Edit assets/font.fnt" })) as HTMLTextAreaElement;
+    expect(editor.value).toBe(fnt);
+    expect(screen.queryByText(/isn't an allowed file type/)).toBeNull();
+    window.location.hash = "";
+  });
+
   it("uses platform.openLocalProject when provided", async () => {
     window.location.hash = "#/studio";
     const client = new ApiClient({ baseUrl: "" });
     const openLocalProject = vi.fn(async () => ({ manifest: { name: "Local", entry: "game.js", width: 100, height: 100 }, files: { "game.js": "// local" } }));
     render(<WebGameApp config={{ apiBaseUrl: "", routerMode: "hash", platform: { openLocalProject } }} client={client} />);
-    await act(async () => screen.getByRole("button", { name: /Open folder/ }).click());
+    await act(async () => screen.getByRole("button", { name: /Open/ }).click());
+    await act(async () => screen.getByRole("menuitem", { name: "Local folder…" }).click());
     expect(openLocalProject).toHaveBeenCalled();
     expect((screen.getByRole("textbox", { name: "Edit game.js" }) as HTMLTextAreaElement).value).toBe("// local");
     window.location.hash = "";
@@ -164,7 +186,10 @@ describe("StudioPage", () => {
     const client = new ApiClient({ baseUrl: "" });
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     render(<WebGameApp config={{ apiBaseUrl: "", routerMode: "hash", platform: saveFile ? { saveFile } : undefined }} client={client} />);
-    await act(async () => (await screen.findByRole("button", { name: /Export .zip/ })).click());
+    const exportBtn = await screen.findByRole("button", { name: /Export .zip/ });
+    await act(async () => exportBtn.click());
+    // The zip is built asynchronously (DEFLATE via CompressionStream).
+    await waitFor(() => expect(saveFile ?? clickSpy).toHaveBeenCalled());
     window.location.hash = "";
     return clickSpy;
   }

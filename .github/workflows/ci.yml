@@ -44,6 +44,21 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
 
+  docker:
+    name: Docker image (build only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: false
+          tags: webgame-app:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   desktop:
     name: Desktop (Windows build)
     runs-on: windows-latest
@@ -54,6 +69,8 @@ jobs:
           node-version: 24
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
@@ -65,3 +82,14 @@ jobs:
       - name: cargo build
         working-directory: apps/desktop/src-tauri
         run: cargo build --locked
+      # Review 3 L9: the desktop crate's unit tests (project registry, save dir, menu).
+      - name: cargo test
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+      # Review 4 L10: keep the desktop crate formatted and lint-clean.
+      - name: cargo fmt
+        working-directory: apps/desktop/src-tauri
+        run: cargo fmt --check
+      - name: cargo clippy
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings

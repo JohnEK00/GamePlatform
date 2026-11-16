@@ -1,14 +1,18 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { commentPermalink } from "../api/comments";
+import { useResolveUrl } from "../context/config";
 import type { Report, ReportAction, ReportStatus } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
 import { ConfirmDialog, EmptyState, ErrorState, Pagination, Skeleton, UserLink } from "../components/common";
 import { REPORT_REASONS } from "../components/Report";
+import { TabPanel, Tabs } from "../components/Tabs";
 import { errorMessage, formatDate, timeAgo, useAsync, useDocumentTitle } from "../util";
 
 const PER_PAGE = 25;
+const STATUS_TABS_ID = "pf-admin-status";
 
 const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => string; body: (r: Report) => string; danger: boolean }> = {
   dismiss: {
@@ -25,11 +29,14 @@ const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => s
   },
   delete: {
     label: "Delete",
-    title: (r) => (r.targetType === "game" ? `Delete “${r.targetPreview}”?` : "Delete this comment?"),
+    title: (r) =>
+      r.targetType === "game" ? `Delete “${r.targetPreview}”?` : r.targetType === "screenshot" ? "Delete this screenshot?" : "Delete this comment?",
     body: (r) =>
       r.targetType === "game"
         ? "The game, its files, ratings, comments and scores are removed permanently."
-        : "The comment is removed permanently.",
+        : r.targetType === "screenshot"
+          ? "The screenshot and its files are removed permanently."
+          : "The comment is removed permanently, together with any replies to it.",
     danger: true,
   },
 };
@@ -43,6 +50,8 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
   const toast = useToast();
   const [confirm, setConfirm] = useState<ReportAction | null>(null);
   const [busy, setBusy] = useState(false);
+  const resolveUrl = useResolveUrl();
+  // Unpublish only makes sense for games; comments and (F005) screenshots get Dismiss / Delete.
   const actions: ReportAction[] = report.targetType === "game" ? ["dismiss", "unpublish", "delete"] : ["dismiss", "delete"];
 
   const run = async (action: ReportAction) => {
@@ -77,11 +86,28 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
           <Link to={`/games/${report.targetGameId}`} className="pf-report-row__title">
             {report.targetPreview}
           </Link>
+        ) : report.targetType === "screenshot" ? (
+          <div className="pf-report-row__shot">
+            {report.targetImageUrl ? (
+              <a href={resolveUrl(report.targetImageFullUrl ?? report.targetImageUrl) ?? undefined} target="_blank" rel="noopener" className="pf-report-row__thumb" title="Open full size">
+                <img src={resolveUrl(report.targetImageUrl) ?? undefined} alt={`Reported screenshot: ${report.targetPreview}`} width={120} />
+              </a>
+            ) : (
+              <span className="pf-report-row__thumb pf-report-row__thumb--gone pf-muted pf-small">(deleted)</span>
+            )}
+            <div>
+              <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>
+              <Link to={`/games/${report.targetGameId}`} className="pf-small">
+                View the game →
+              </Link>
+            </div>
+          </div>
         ) : (
           <>
             <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>
-            <Link to={`/games/${report.targetGameId}`} className="pf-small">
-              View the game →
+            {/* F006: the permalink opens the game page with the comment (or reply) highlighted and focused. */}
+            <Link to={commentPermalink(report.targetGameId, report.targetId)} className="pf-small">
+              View in context →
             </Link>
           </>
         )}
@@ -152,18 +178,26 @@ export function AdminPage() {
       <header className="pf-pagehead pf-pagehead--row">
         <div>
           <h1>Moderation</h1>
-          <p className="pf-muted">Review reported games and comments.</p>
+          <p className="pf-muted">Review reported games, comments and screenshots.</p>
         </div>
       </header>
-      <div className="pf-tabs" role="tablist" aria-label="Report status">
-        {(["open", "resolved"] as const).map((s) => (
-          <button key={s} type="button" role="tab" aria-selected={status === s} className={`pf-tab${status === s ? " is-active" : ""}`} onClick={() => setStatus(s)}>
-            {s === "open" ? "Open" : "Resolved"}
-            {status === s && data ? <span className="pf-tab__count">{data.total}</span> : null}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        id={STATUS_TABS_ID}
+        label="Report status"
+        value={status}
+        onChange={setStatus}
+        items={(["open", "resolved"] as const).map((s) => ({
+          value: s,
+          label: (
+            <>
+              {s === "open" ? "Open" : "Resolved"}
+              {status === s && data ? <span className="pf-tab__count">{data.total}</span> : null}
+            </>
+          ),
+        }))}
+      />
 
+      <TabPanel id={STATUS_TABS_ID} value={status}>
       {error ? (
         <ErrorState error={error} onRetry={reload} />
       ) : loading && !data ? (
@@ -213,6 +247,7 @@ export function AdminPage() {
           }}
         />
       )}
+      </TabPanel>
     </div>
   );
 }

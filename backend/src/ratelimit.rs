@@ -22,7 +22,7 @@ pub enum Limit {
     Auth,
     /// game create + bundle replace: 20/hour
     Upload,
-    /// comments: 30 per 10 min
+    /// comments and F006 replies (shared): 30 per 10 min, per user
     Comment,
     /// reports: 10/hour
     Report,
@@ -30,6 +30,34 @@ pub enum Limit {
     Score,
     /// save PUT: 60/min
     Save,
+    /// leaderboard reads (`GET …/leaderboard`): 120/min, per user or per IP when anonymous
+    Leaderboard,
+    /// play recording (`POST …/play`): 30/min, per user or per IP when anonymous
+    Play,
+    /// follow + unfollow (`PUT`/`DELETE …/follow`, shared): 60 per 10 min, per user
+    Follow,
+    /// feed reads (`GET /api/feed` + `/api/feed/suggestions`, shared): 60/min, per user
+    Feed,
+    /// F004 release-notes edits (`PATCH …/versions/{version}`): 30 per 10 min, per user
+    VersionNotes,
+    /// F013 bundle downloads (`GET …/bundle`): 30/hour, per user
+    BundleDownload,
+    /// v1 score list reads (`GET …/scores`; own bucket, separate from `Leaderboard`): 120/min,
+    /// per user or per IP when anonymous
+    ScoreList,
+    /// image uploads (`PUT …/thumbnail` + `PUT /api/users/me/avatar`, shared): 20/hour, per user
+    Image,
+    /// F005 screenshot posts (`POST …/screenshots`; own bucket, separate from `Image`): 10/hour,
+    /// per user
+    Screenshot,
+    /// F006 comment hearts (`PUT`/`DELETE …/heart`, shared): 120 per 10 min, per user
+    Heart,
+    /// F007 notification endpoints (list, unread count, mark read, settings GET/PUT, shared):
+    /// 120/min, per user
+    Notifications,
+    /// F017 creator thread tools (`PUT`/`DELETE …/pin` + `…/lock`, shared): 60 per 10 min,
+    /// per user
+    ThreadTools,
 }
 
 impl Limit {
@@ -42,6 +70,18 @@ impl Limit {
             Limit::Report => (10, Duration::from_secs(3600)),
             Limit::Score => (60, Duration::from_secs(60)),
             Limit::Save => (60, Duration::from_secs(60)),
+            Limit::Leaderboard => (120, Duration::from_secs(60)),
+            Limit::Play => (30, Duration::from_secs(60)),
+            Limit::Follow => (60, Duration::from_secs(600)),
+            Limit::Feed => (60, Duration::from_secs(60)),
+            Limit::VersionNotes => (30, Duration::from_secs(600)),
+            Limit::BundleDownload => (30, Duration::from_secs(3600)),
+            Limit::ScoreList => (120, Duration::from_secs(60)),
+            Limit::Image => (20, Duration::from_secs(3600)),
+            Limit::Screenshot => (10, Duration::from_secs(3600)),
+            Limit::Heart => (120, Duration::from_secs(600)),
+            Limit::Notifications => (120, Duration::from_secs(60)),
+            Limit::ThreadTools => (60, Duration::from_secs(600)),
         }
     }
 }
@@ -53,16 +93,91 @@ struct Bucket {
 
 const PRUNE_THRESHOLD: usize = 10_000;
 
+/// Monotonic time source of the rate limiter (M2): [`Clock::real`] in production, a
+/// [`ManualClock`] in tests so bucket refills are deterministic.
+#[derive(Clone)]
+pub struct Clock(Arc<dyn Fn() -> Instant + Send + Sync>);
+
+impl Clock {
+    /// `Instant::now()`.
+    pub fn real() -> Self {
+        Self(Arc::new(Instant::now))
+    }
+
+    pub fn from_fn(f: impl Fn() -> Instant + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    pub fn now(&self) -> Instant {
+        (self.0)()
+    }
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self::real()
+    }
+}
+
+impl std::fmt::Debug for Clock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Clock")
+    }
+}
+
+/// A clock that only moves when [`ManualClock::advance`] is called (tests).
+#[derive(Clone, Debug)]
+pub struct ManualClock {
+    base: Instant,
+    offset: Arc<Mutex<Duration>>,
+}
+
+impl Default for ManualClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ManualClock {
+    pub fn new() -> Self {
+        Self {
+            base: Instant::now(),
+            offset: Arc::new(Mutex::new(Duration::ZERO)),
+        }
+    }
+
+    pub fn now(&self) -> Instant {
+        self.base + *self.offset.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn advance(&self, by: Duration) {
+        *self.offset.lock().unwrap_or_else(|p| p.into_inner()) += by;
+    }
+
+    /// A [`Clock`] reading this manual clock.
+    pub fn clock(&self) -> Clock {
+        let me = self.clone();
+        Clock::from_fn(move || me.now())
+    }
+}
+
 #[derive(Clone)]
 pub struct RateLimiter {
     enabled: bool,
+    clock: Clock,
     buckets: Arc<Mutex<HashMap<(Limit, String), Bucket>>>,
 }
 
 impl RateLimiter {
+    /// A limiter on the real clock.
     pub fn new(enabled: bool) -> Self {
+        Self::with_clock(enabled, Clock::real())
+    }
+
+    pub fn with_clock(enabled: bool, clock: Clock) -> Self {
         Self {
             enabled,
+            clock,
             buckets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -76,7 +191,20 @@ impl RateLimiter {
         if !self.enabled {
             return Ok(());
         }
-        self.check_at(limit, key, Instant::now())
+        self.check_at(limit, key, self.clock.now())
+    }
+
+    /// Return a token taken by [`RateLimiter::check`] (the request was not served for a
+    /// reason that is not the client's fault, e.g. 503 busy). Never exceeds the capacity.
+    pub fn refund(&self, limit: Limit, key: &str) {
+        if !self.enabled {
+            return;
+        }
+        let cap = f64::from(limit.quota().0);
+        let mut map = self.buckets.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(b) = map.get_mut(&(limit, key.to_string())) {
+            b.tokens = (b.tokens + 1.0).min(cap);
+        }
     }
 
     fn check_at(&self, limit: Limit, key: &str, now: Instant) -> Result<(), AppError> {
@@ -99,13 +227,57 @@ impl RateLimiter {
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
         bucket.tokens = (bucket.tokens + elapsed * rate).min(cap);
         bucket.last = now;
-        if bucket.tokens >= 1.0 {
-            bucket.tokens -= 1.0;
+        // A refill split over several calls can land a hair under a whole token (f64
+        // rounding), so compare with a tolerance far below one request.
+        if bucket.tokens >= 1.0 - 1e-9 {
+            bucket.tokens = (bucket.tokens - 1.0).max(0.0);
             Ok(())
         } else {
             let wait = ((1.0 - bucket.tokens) / rate).ceil().max(1.0) as u64;
             Err(AppError::RateLimited { retry_after: wait })
         }
+    }
+}
+
+/// Window within which repeated plays of one game by one viewer count once.
+pub const PLAY_DEDUPE_WINDOW: Duration = Duration::from_secs(600);
+
+/// In-memory "counted recently" set keyed by `(game id, viewer key)`.
+#[derive(Clone, Default)]
+pub struct PlayDedupe {
+    seen: Arc<Mutex<HashMap<(String, String), Instant>>>,
+}
+
+impl PlayDedupe {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `true` if this play should be counted (none counted for the pair within the window);
+    /// records it as counted.
+    pub fn should_count(&self, game_id: &str, viewer: &str) -> bool {
+        self.should_count_at(game_id, viewer, Instant::now())
+    }
+
+    fn should_count_at(&self, game_id: &str, viewer: &str, now: Instant) -> bool {
+        let mut map = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+        if map.len() >= PRUNE_THRESHOLD {
+            map.retain(|_, t| now.saturating_duration_since(*t) < PLAY_DEDUPE_WINDOW);
+        }
+        let key = (game_id.to_string(), viewer.to_string());
+        match map.get(&key) {
+            Some(t) if now.saturating_duration_since(*t) < PLAY_DEDUPE_WINDOW => false,
+            _ => {
+                map.insert(key, now);
+                true
+            }
+        }
+    }
+
+    /// Forget a counted play (used when the DB write fails).
+    pub fn forget(&self, game_id: &str, viewer: &str) {
+        let mut map = self.seen.lock().unwrap_or_else(|p| p.into_inner());
+        map.remove(&(game_id.to_string(), viewer.to_string()));
     }
 }
 
@@ -240,6 +412,43 @@ mod tests {
             client_ip(&parts(&[("x-forwarded-for", "1.1.1.1, ")]), 1),
             "192.0.2.1"
         );
+    }
+
+    #[test]
+    fn play_dedupe_window() {
+        let d = PlayDedupe::new();
+        let t0 = Instant::now();
+        assert!(d.should_count_at("g", "ip:1", t0));
+        assert!(!d.should_count_at("g", "ip:1", t0 + Duration::from_secs(599)));
+        assert!(d.should_count_at("g", "ip:2", t0));
+        assert!(d.should_count_at("h", "ip:1", t0));
+        assert!(d.should_count_at("g", "ip:1", t0 + Duration::from_secs(600)));
+    }
+
+    #[test]
+    fn manual_clock_drives_refill_and_refund() {
+        let clock = ManualClock::new();
+        let rl = RateLimiter::with_clock(true, clock.clock());
+        for _ in 0..10 {
+            rl.check(Limit::Auth, "a").unwrap();
+        }
+        assert!(rl.check(Limit::Auth, "a").is_err());
+        clock.advance(Duration::from_millis(5999));
+        assert!(rl.check(Limit::Auth, "a").is_err());
+        clock.advance(Duration::from_millis(1));
+        rl.check(Limit::Auth, "a").unwrap();
+        assert!(rl.check(Limit::Auth, "a").is_err());
+        // A refund gives the token back, but never above the capacity.
+        rl.refund(Limit::Auth, "a");
+        rl.check(Limit::Auth, "a").unwrap();
+        rl.check(Limit::Auth, "b").unwrap();
+        for _ in 0..5 {
+            rl.refund(Limit::Auth, "b");
+        }
+        for _ in 0..10 {
+            rl.check(Limit::Auth, "b").unwrap();
+        }
+        assert!(rl.check(Limit::Auth, "b").is_err());
     }
 
     #[test]

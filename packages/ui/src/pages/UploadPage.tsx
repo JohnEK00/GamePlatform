@@ -6,7 +6,8 @@ import { useToast } from "../context/toast";
 import { Alert, ProgressBar, Spinner } from "../components/common";
 import { FileDrop } from "../components/FileDrop";
 import { GameFields, type GameFieldValues } from "../components/GameFields";
-import { errorMessage, looksLikeZip, parseTags, useDocumentTitle, validateTags } from "../util";
+import { ReleaseNotesField } from "../components/ReleaseNotesField";
+import { errorMessage, isNotesError, looksLikeZip, parseTags, useDocumentTitle, validateTags } from "../util";
 
 export const BUNDLE_ACCEPT = ".zip,application/zip,application/x-zip-compressed";
 export const IMAGE_ACCEPT = ".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp";
@@ -24,10 +25,15 @@ export function UploadPage() {
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof GameFieldValues, string>>>({});
+  // F004: optional release notes for version 1, collapsed by default.
+  const [showNotes, setShowNotes] = useState(false);
+  const [notes, setNotes] = useState("");
+  const [notesError, setNotesError] = useState<string | null>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
+    setNotesError(null);
     const tags = parseTags(values.tags);
     const errs: typeof fieldErrors = {};
     if (!values.title.trim()) errs.title = "Title is required.";
@@ -43,13 +49,18 @@ export function UploadPage() {
     setProgress(0);
     try {
       const game = await api.createGame(
-        { title: values.title.trim(), description: values.description, tags, published: values.published, bundle, thumbnail: thumb },
+        { title: values.title.trim(), description: values.description, tags, published: values.published, bundle, thumbnail: thumb, notes },
         (p) => setProgress(p.fraction),
       );
       toast.success("Game uploaded!", `${game.title} is ${game.published ? "live" : "saved as a draft"}.`);
       navigate(`/games/${game.id}`);
     } catch (err) {
       setProgress(null);
+      if (isNotesError(err)) {
+        setShowNotes(true);
+        setNotesError(errorMessage(err));
+        return;
+      }
       setError(isApiError(err) && err.code === "validation" ? `Your bundle was rejected: ${err.message}` : errorMessage(err));
     }
   };
@@ -87,6 +98,13 @@ export function UploadPage() {
             icon="🖼"
           />
         </div>
+        {showNotes ? (
+          <ReleaseNotesField label="Release notes (optional)" value={notes} onChange={setNotes} disabled={busy} error={notesError} autoFocus={!notesError} />
+        ) : (
+          <button type="button" className="pf-linkbtn pf-upload__addnotes" onClick={() => setShowNotes(true)} disabled={busy}>
+            + Add release notes
+          </button>
+        )}
         {error && <Alert>{error}</Alert>}
         {busy && <ProgressBar value={progress ?? 0} label={progress! >= 1 ? "Processing" : "Uploading"} />}
         <div className="pf-form__actions">

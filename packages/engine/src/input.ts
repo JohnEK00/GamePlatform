@@ -1,9 +1,12 @@
 /** Keyboard / mouse / touch / gamepad input with per-step pressed/released edges. */
+import { ActionMap, applyOverrides, gamepadLabel, keyLabel as defaultKeyLabel, type ControlAction } from './actions';
 
 interface BtnState {
   down: boolean;
   pressed: boolean;
   released: boolean;
+  /** The release this step was synthetic (blur, pause, pointercancel), not made by the player. */
+  cancelled: boolean;
 }
 
 /**
@@ -17,7 +20,7 @@ export class InputState {
   private get(code: string): BtnState {
     let b = this.buttons.get(code);
     if (!b) {
-      b = { down: false, pressed: false, released: false };
+      b = { down: false, pressed: false, released: false, cancelled: false };
       this.buttons.set(code, b);
     }
     return b;
@@ -30,16 +33,21 @@ export class InputState {
       b.pressed = true;
     }
   }
-  release(code: string): void {
+  /**
+   * Release a held button. `cancel` marks the release as synthetic (window blur, pause,
+   * `pointercancel`): `wasReleased` still reports it, and `wasCancelled` tells it apart.
+   */
+  release(code: string, cancel = false): void {
     const b = this.get(code);
     if (b.down) {
       b.down = false;
       b.released = true;
+      b.cancelled = cancel;
     }
   }
-  /** Release everything (e.g. on window blur). */
+  /** Release everything as a cancellation (window blur, pause / resume). */
   releaseAll(): void {
-    for (const k of this.buttons.keys()) this.release(k);
+    for (const k of this.buttons.keys()) this.release(k, true);
   }
   isDown(code: string): boolean {
     return this.buttons.get(code)?.down ?? false;
@@ -49,6 +57,11 @@ export class InputState {
   }
   wasReleased(code: string): boolean {
     return this.buttons.get(code)?.released ?? false;
+  }
+  /** The button's release this step was a cancellation (see `release`). */
+  wasCancelled(code: string): boolean {
+    const b = this.buttons.get(code);
+    return !!b && b.released && b.cancelled;
   }
   /** Any button pressed this step (optionally filtered by prefix). */
   anyPressed(filter?: (code: string) => boolean): boolean {
@@ -60,6 +73,7 @@ export class InputState {
     for (const b of this.buttons.values()) {
       b.pressed = false;
       b.released = false;
+      b.cancelled = false;
     }
   }
 }
@@ -111,7 +125,8 @@ export const GamepadButtons = {
   A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, Back: 8, Start: 9, LS: 10, RS: 11,
   Up: 12, Down: 13, Left: 14, Right: 15, Home: 16,
 } as const;
-export type GamepadButtonName = keyof typeof GamepadButtons;
+/** Every standard button name including `Home` (actions use the narrower `GamepadButtonName`). */
+export type GamepadButtonKey = keyof typeof GamepadButtons;
 
 export class GamepadState {
   connected = false;
@@ -138,17 +153,17 @@ export class GamepadState {
     this.cur = gp.buttons.map((b) => b.pressed);
     this.values = gp.buttons.map((b) => b.value);
   }
-  private idx(b: number | GamepadButtonName): number {
+  private idx(b: number | GamepadButtonKey): number {
     return typeof b === 'number' ? b : GamepadButtons[b];
   }
-  isDown(b: number | GamepadButtonName): boolean {
+  isDown(b: number | GamepadButtonKey): boolean {
     return this.cur[this.idx(b)] ?? false;
   }
-  wasPressed(b: number | GamepadButtonName): boolean {
+  wasPressed(b: number | GamepadButtonKey): boolean {
     const i = this.idx(b);
     return (this.cur[i] ?? false) && !(this.prev[i] ?? false);
   }
-  wasReleased(b: number | GamepadButtonName): boolean {
+  wasReleased(b: number | GamepadButtonKey): boolean {
     const i = this.idx(b);
     return !(this.cur[i] ?? false) && (this.prev[i] ?? false);
   }
@@ -186,6 +201,11 @@ export interface MouseState {
   down: boolean;
   pressed: boolean;
   released: boolean;
+  /**
+   * `released` this step came from a cancellation (window blur, pause / resume, `pointercancel`)
+   * rather than the player letting go: treat it as "the press was abandoned", never as a click.
+   */
+  cancelled: boolean;
   rightDown: boolean;
   rightPressed: boolean;
   /** Wheel delta accumulated this step (+ = down). */
@@ -199,7 +219,7 @@ const PREVENT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Spa
 /** DOM-attached input. Keys use KeyboardEvent.code ("ArrowLeft", "KeyA", "Space"); mouse buttons are "Mouse0/1/2". */
 export class Input {
   readonly state = new InputState();
-  readonly mouse: MouseState = { x: 0, y: 0, down: false, pressed: false, released: false, rightDown: false, rightPressed: false, wheel: 0, inside: false };
+  readonly mouse: MouseState = { x: 0, y: 0, down: false, pressed: false, released: false, cancelled: false, rightDown: false, rightPressed: false, wheel: 0, inside: false };
   /** Active touches (game coordinates). */
   touches: TouchPoint[] = [];
   private readonly touchMap = new Map<number, TouchPoint>();
@@ -209,6 +229,13 @@ export class Input {
   /** Last KeyboardEvent.key typed this step (for text entry). */
   typed = '';
   private typedAcc = '';
+  private defaults: readonly ControlAction[] = Object.freeze([]);
+  private effective: readonly ControlAction[] = Object.freeze([]);
+  private overrides: unknown = {};
+  /** Map used by the action queries; swapped for `next` at the next beginStep. */
+  private map = new ActionMap([]);
+  private next: ActionMap | null = null;
+  private readonly warned = new Set<string>();
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -229,7 +256,7 @@ export class Input {
     if (c.tabIndex < 0) c.tabIndex = 0;
 
     on(window, 'keydown', (e) => {
-      if (PREVENT.has(e.code) && !e.ctrlKey && !e.metaKey) e.preventDefault();
+      if ((PREVENT.has(e.code) || (this.next ?? this.map).boundKeys.has(e.code)) && !e.ctrlKey && !e.metaKey) e.preventDefault();
       if (!e.repeat) this.state.press(e.code);
       if (e.key.length === 1) this.typedAcc += e.key;
     });
@@ -278,7 +305,7 @@ export class Input {
         this.mouse.y = p.y;
       }
     });
-    const up = (e: PointerEvent): void => {
+    const up = (e: PointerEvent, cancel: boolean): void => {
       const p = pos(e);
       const t = this.touchMap.get(e.pointerId);
       if (t) {
@@ -287,11 +314,14 @@ export class Input {
         t.released = true;
       }
       if (e.isPrimary || e.pointerType === 'mouse') {
-        this.state.release(`Mouse${e.pointerType === 'mouse' ? e.button : 0}`);
+        const code = `Mouse${e.pointerType === 'mouse' ? e.button : 0}`;
+        // pointercancel reports button -1 for mice: cancel every held mouse button then.
+        if (cancel && e.pointerType === 'mouse' && e.button < 0) for (const b of [0, 1, 2]) this.state.release(`Mouse${b}`, true);
+        else this.state.release(code, cancel);
       }
     };
-    on(window, 'pointerup', up);
-    on(window, 'pointercancel', up);
+    on(window, 'pointerup', (e: PointerEvent) => up(e, false));
+    on(window, 'pointercancel', (e: PointerEvent) => up(e, true));
     on(c, 'pointerenter', () => void (this.mouse.inside = true));
     on(c, 'pointerleave', () => void (this.mouse.inside = false));
     on(c, 'contextmenu', (e: MouseEvent) => e.preventDefault());
@@ -312,6 +342,7 @@ export class Input {
     m.down = s.isDown('Mouse0');
     m.pressed = s.wasPressed('Mouse0');
     m.released = s.wasReleased('Mouse0');
+    m.cancelled = s.wasCancelled('Mouse0');
     m.rightDown = s.isDown('Mouse2');
     m.rightPressed = s.wasPressed('Mouse2');
     m.wheel = this.wheelAcc;
@@ -321,6 +352,76 @@ export class Input {
     this.touches = Array.from(this.touchMap.values());
     const list = this.readGamepads();
     for (let i = 0; i < this.pads.length; i++) this.pads[i]!.poll(list[i] ?? null);
+    this.updateActions();
+  }
+
+  /** Engine-internal (also used by tests): apply a pending rebuild, then compute action edges. */
+  updateActions(): void {
+    if (this.next) {
+      this.map = this.next;
+      this.next = null;
+    }
+    this.map.update(this.state, this.pads.find((p) => p.connected) ?? null);
+  }
+
+  // --- F009 actions ----------------------------------------------------------
+
+  /** Engine-internal: the declared actions (boot option `actions`, already parsed). Clears overrides. */
+  setActions(defaults: readonly ControlAction[]): void {
+    this.defaults = Object.freeze([...defaults]);
+    this.overrides = {};
+    this.rebuild();
+  }
+  /** Engine-internal: player key overrides (`webgame:controls`); replaces the previous overrides. */
+  setOverrides(overrides: unknown): void {
+    this.overrides = overrides;
+    this.rebuild();
+  }
+  private rebuild(): void {
+    this.effective = Object.freeze(applyOverrides(this.defaults, this.overrides));
+    // Takes effect at the next step; per-id `down` carries over so a held action does not re-fire.
+    this.next = new ActionMap(this.effective, this.next ?? this.map);
+  }
+
+  /** Effective bindings (defaults + player overrides), manifest order, frozen. */
+  get actions(): readonly ControlAction[] {
+    return this.effective;
+  }
+  /** The declared actions (after lenient parsing), frozen. */
+  get defaultActions(): readonly ControlAction[] {
+    return this.defaults;
+  }
+  private known(id: string): boolean {
+    if (this.effective.some((a) => a.id === id)) return true;
+    if (!this.warned.has(id)) {
+      this.warned.add(id);
+      console.warn(`[pixelforge] input: unknown action "${id}" (declare it in game.json "actions")`);
+    }
+    return false;
+  }
+  /** Any key / gamepad button of the action is held. */
+  actionDown(id: string): boolean {
+    return this.known(id) && this.map.down(id);
+  }
+  /** The action went from up to down this step (a second bound key while held does not count). */
+  actionPressed(id: string): boolean {
+    return this.known(id) && this.map.pressed(id);
+  }
+  /** The action went from down to up this step. */
+  actionReleased(id: string): boolean {
+    return this.known(id) && this.map.released(id);
+  }
+  /** Label of the action's first effective key, else its first gamepad button, else "". */
+  actionLabel(id: string): string {
+    if (!this.known(id)) return '';
+    const a = this.effective.find((x) => x.id === id)!;
+    if (a.keys[0]) return defaultKeyLabel(a.keys[0]);
+    if (a.gamepad[0]) return gamepadLabel(a.gamepad[0]);
+    return '';
+  }
+  /** Default (US layout) label of a code; an unknown code returns the code. */
+  keyLabel(code: string): string {
+    return defaultKeyLabel(code);
   }
 
   /** Set once getGamepads() has thrown, so a blocked Gamepad API is not retried every step. */
@@ -372,10 +473,17 @@ export class Input {
   gamepad(i = 0): GamepadState {
     return this.pads[i] ?? new GamepadState();
   }
-  /** -1..1 from arrows / WASD / first connected gamepad (left stick + d-pad). */
+  /**
+   * -1..1 from arrows / WASD / first connected gamepad (left stick + d-pad). When both `left`/`right`
+   * (or `up`/`down`) actions are declared, those actions plus the left stick are used instead.
+   */
   axis(name: 'horizontal' | 'vertical'): number {
     const s = this.state;
     const pad = this.pads.find((p) => p.connected);
+    // F009: with both movement actions declared, follow the (remappable) actions + left stick.
+    const [negId, posId] = name === 'horizontal' ? ['left', 'right'] : ['up', 'down'];
+    if (this.effective.some((a) => a.id === negId) && this.effective.some((a) => a.id === posId))
+      return combineAxis(this.map.down(negId), this.map.down(posId), (name === 'horizontal' ? pad?.leftX : pad?.leftY) ?? 0);
     if (name === 'horizontal') {
       const neg = s.isDown('ArrowLeft') || s.isDown('KeyA') || !!pad?.isDown('Left');
       const pos = s.isDown('ArrowRight') || s.isDown('KeyD') || !!pad?.isDown('Right');

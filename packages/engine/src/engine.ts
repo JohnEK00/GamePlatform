@@ -1,7 +1,9 @@
 /** The Engine instance handed to games, and boot(). */
+import { parseActions, type ControlAction } from './actions';
 import { Assets } from './assets';
 import { AudioManager, Sound } from './audio';
 import { Camera } from './camera';
+import { FrameCapture, normalizeMaxSize, type ScreenshotOptions } from './capture';
 import { activity, debugLines, FrameMeter, type DebugStats } from './debug';
 import { BundleFiles, deriveStorageKey, type FileMap } from './files';
 import { computeLetterbox, GamepadButtons, Input } from './input';
@@ -11,13 +13,15 @@ import {
 } from './math';
 import { showErrorOverlay } from './overlay';
 import { ParticleEmitter } from './particles';
+import { NineSlice } from './nineslice';
 import { Body, Physics } from './physics';
-import { Platform, Storage, defaultPoster, storageHandshake } from './platform';
+import { Platform, Storage, defaultPoster, isRequestId, storageHandshake } from './platform';
 import { Renderer } from './renderer';
 import { SceneManager, type Scene, type SceneLike } from './scenes';
 import { Animation, SpriteSheet, Texture } from './texture';
 import { Tilemap } from './tilemap';
 import { Easing, Timers, Tween, TweenManager } from './tween';
+import { Ui } from './ui';
 
 export const VERSION = '1.0.0';
 
@@ -60,6 +64,29 @@ export interface BootOptions {
   files?: FileMap;
   /** Start with the debug overlay visible (default false; F3 toggles it). */
   debug?: boolean;
+  /**
+   * F009: the game.json `actions` list. Parsed leniently (invalid entries are dropped with a
+   * `[pixelforge] actions:` warning); read them with `input.actionDown/actionPressed/...`.
+   */
+  actions?: unknown;
+}
+
+/** Lenient parse of the `actions` boot option; each dropped entry/key is a `[pixelforge] actions:` warning. */
+export function bootActions(raw: unknown): ControlAction[] {
+  const { actions, warnings } = parseActions(raw);
+  for (const m of warnings) console.warn('[pixelforge] actions:', m);
+  return actions;
+}
+
+/** Most action ids a `webgame:controls` overrides object may carry. */
+export const MAX_OVERRIDE_KEYS = 32;
+
+/** `webgame:controls` payload check: a plain object with at most 32 own keys. */
+export function isOverridesObject(v: unknown): v is Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v) as unknown;
+  if (proto !== null && Object.getPrototypeOf(proto) !== null) return false; // not a plain object (any realm)
+  return Reflect.ownKeys(v).length <= MAX_OVERRIDE_KEYS;
 }
 
 type PauseReason = 'host' | 'hidden' | 'user';
@@ -96,6 +123,8 @@ export class Engine {
   readonly Sound = Sound;
   readonly Camera = Camera;
   readonly GamepadButtons = GamepadButtons;
+  /** F012: `new engine.NineSlice(texture, insets)`. */
+  readonly NineSlice = NineSlice;
   readonly math = { ...MathUtil, circlesOverlap, circleRectOverlap };
   readonly version = VERSION;
 
@@ -112,6 +141,8 @@ export class Engine {
   readonly storage: Storage;
   readonly platform: Platform;
   readonly tweens = new TweenManager();
+  /** F012: immediate-mode widgets (panel, label, button); call them from update. */
+  readonly ui: Ui;
   /** Shared seedable RNG. */
   readonly random = new Random();
   /** The game object the bundle exported (instantiated if it was a class). */
@@ -144,6 +175,7 @@ export class Engine {
   private readonly cleanup: (() => void)[] = [];
   private lastSize = '';
   private readonly meter = new FrameMeter();
+  private readonly capturer: FrameCapture;
 
   constructor(canvas: HTMLCanvasElement, opts: BootOptions) {
     if (!canvas || typeof (canvas as HTMLCanvasElement).getContext !== 'function') throw new Error('boot(): a <canvas> element is required');
@@ -164,8 +196,14 @@ export class Engine {
     this.assets = new Assets(this.baseUrl, this.renderer, this.audio, this.files);
     this.debug = !!opts.debug;
     this.input = new Input(canvas, w, h);
+    this.input.setActions(bootActions(opts.actions));
     this.scenes = new SceneManager<Engine>(this);
+    this.ui = new Ui({ input: this.input, renderer: this.renderer, warn: (m) => console.warn(m) });
     this.storage = new Storage(deriveStorageKey(this.baseUrl, opts.files, opts.storageKey),this.platform);
+    this.capturer = new FrameCapture(w, h);
+    this.platform.setCapture(() =>
+      this.state === 'running' ? this.capturer.capture('share') : Promise.resolve({ error: 'unavailable' as const }),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -195,6 +233,16 @@ export class Engine {
   every(seconds: number, fn: () => void): { cancel(): void } {
     return this.timers.every(seconds, fn);
   }
+  /**
+   * Capture the next rendered frame as a PNG for the game's own use (nothing is posted). Resolves
+   * null when not running, busy, after 2000 ms without a frame, on failure, or over 8 MiB.
+   * `maxSize` (longest side) is rounded and clamped to 64–4096, default 1920.
+   */
+  captureFrame(opts: ScreenshotOptions = {}): Promise<Blob | null> {
+    if (this.state !== 'running') return Promise.resolve(null);
+    return this.capturer.request('game', { maxSize: normalizeMaxSize(opts?.maxSize) });
+  }
+
   /** Convenience: push/replace scenes. */
   setScene(scene: SceneLike<Engine>): Promise<Scene<Engine>> {
     return this.scenes.size ? this.scenes.replace(scene) : this.scenes.push(scene);
@@ -236,26 +284,7 @@ export class Engine {
     this.cleanup.push(() => this.input.detach());
     this.cleanup.push(this.audio.attachUnlock(window));
 
-    on(window, 'message', ((e: MessageEvent) => {
-      if (e.source !== window.parent) return;
-      const d = e.data as { type?: unknown; muted?: unknown; data?: unknown } | null;
-      if (!d || typeof d !== 'object' || typeof d.type !== 'string') return;
-      switch (d.type) {
-        case 'webgame:pause':
-          this.setPaused('host', true);
-          break;
-        case 'webgame:resume':
-          this.setPaused('host', false);
-          break;
-        case 'webgame:mute':
-          this.audio.muted = d.muted === undefined ? true : !!d.muted;
-          break;
-        case 'webgame:load':
-          this.storage.hydrate(d.data); // later loads merge; non-objects are ignored
-          break;
-      }
-    }) as EventListener);
-
+    on(window, 'message', ((e: MessageEvent) => this.onMessage(e)) as EventListener);
     on(window, 'pagehide', () => this.storage.flush());
     on(window, 'keydown', ((e: KeyboardEvent) => {
       if (e.code !== 'F3' || e.repeat) return;
@@ -296,6 +325,48 @@ export class Engine {
     }
   }
 
+  /** Host → game messages (only from window.parent). */
+  private onMessage(e: MessageEvent): void {
+    if (e.source !== window.parent) return;
+    const d = e.data as { type?: unknown; muted?: unknown; data?: unknown; requestId?: unknown; overrides?: unknown } | null;
+    if (!d || typeof d !== 'object' || typeof d.type !== 'string') return;
+    switch (d.type) {
+      case 'webgame:pause':
+        this.setPaused('host', true);
+        break;
+      case 'webgame:resume':
+        this.setPaused('host', false);
+        break;
+      case 'webgame:mute':
+        this.audio.muted = d.muted === undefined ? true : !!d.muted;
+        break;
+      case 'webgame:load':
+        this.storage.hydrate(d.data); // later loads merge; non-objects are ignored
+        break;
+      case 'webgame:leaderboard':
+      case 'webgame:score-result':
+      case 'webgame:screenshot-result':
+        this.platform.handleReply(d);
+        break;
+      case 'webgame:screenshot-request':
+        this.onScreenshotRequest(d.requestId);
+        break;
+      case 'webgame:controls': // F009: replaces all previous overrides; applied at the next step
+        if (isOverridesObject(d.overrides)) this.input.setOverrides(d.overrides);
+        break;
+    }
+  }
+
+  /** Parent asked for a screenshot (`source: "player"`): capture the next frame and reply. */
+  private onScreenshotRequest(requestId: unknown): void {
+    if (!isRequestId(requestId)) return;
+    if (this.state !== 'running') {
+      this.platform.screenshotReply(requestId, { error: 'unavailable' });
+      return;
+    }
+    void this.capturer.capture('player').then((r) => this.platform.screenshotReply(requestId, r));
+  }
+
   private reportGlobal(err: unknown): void {
     if (err && typeof err === 'object') {
       if (reported.has(err)) return;
@@ -312,7 +383,9 @@ export class Engine {
     else this.pauseReasons.delete(reason);
     if (was !== this.paused) {
       this.audio.setSuspended(this.paused);
+      // Synthetic, cancelling releases: a press held across a pause never activates a ui.button.
       this.input.state.releaseAll();
+      (this.ui as Ui | undefined)?.cancelPointer();
       this.stepper.reset();
       this.last = -1;
     }
@@ -389,6 +462,7 @@ export class Engine {
   private readonly step = (dt: number): void => {
     if (this.state !== 'running' || this.paused) return;
     this.input.beginStep();
+    this.ui.beginStep();
     this.game?.update?.(this, dt);
     this.scenes.update(dt);
     this.tweens.update(dt);
@@ -396,15 +470,27 @@ export class Engine {
     this.renderer.camera.update(dt);
     this.time += dt;
     this.frame++;
+    this.ui.endStep();
     this.input.endStep();
   };
 
   private render(alpha: number, t0 = performance.now()): void {
     const r = this.renderer;
     r.beginFrame();
-    this.game?.render?.(this, alpha);
-    this.scenes.render(alpha);
+    const ui = this.ui as Ui | undefined; // absent in engine-less test doubles
+    ui?.frameStart();
+    ui?.setPhase('render');
+    try {
+      this.game?.render?.(this, alpha);
+      this.scenes.render(alpha);
+    } finally {
+      ui?.setPhase('other');
+    }
+    // F012 UI layer: the last step's widget list, screen space, before the capture point.
+    ui?.drawLayer();
     r.flush();
+    // Capture point (F005): the game's frame is complete; overlays below are not captured.
+    if (this.state === 'running' && this.capturer.queued) this.capturer.grab(this.canvas, r.defaultSmooth, r.gl);
     const s = this.debugStats;
     const act = activity.collect();
     s.fps = this.meter.fps;
@@ -468,6 +554,7 @@ export class Engine {
     if (this.state === 'error' || this.state === 'destroyed') return;
     this.state = 'error';
     cancelAnimationFrame(this.raf);
+    this.capturer?.cancel('failed');
     if (err && typeof err === 'object') reported.add(err);
     const { message, stack } = errText(err);
     console.error('[pixelforge]', err);
@@ -485,6 +572,8 @@ export class Engine {
   destroy(): void {
     this.state = 'destroyed';
     this.storage.flush();
+    this.capturer.close();
+    this.platform.cancelPending();
     cancelAnimationFrame(this.raf);
     for (const f of this.cleanup.splice(0)) f();
     this.audio.stopAll();

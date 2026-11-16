@@ -17,7 +17,7 @@
     const base = new URL(`/examples/${encodeURIComponent(name)}/`, location.href).href;
     const meta = await fetch(base + 'game.json').then((r) => r.json());
     const mod = await import(/* @vite-ignore */ base + meta.entry + '?v=' + Date.now());
-    window.engine = await boot(document.getElementById('game'), mod.default, { width: meta.width, height: meta.height, baseUrl: base });
+    window.engine = await boot(document.getElementById('game'), mod.default, { width: meta.width, height: meta.height, baseUrl: base, actions: meta.actions ?? [] });
   </script>
 </body>
 </html>

@@ -2,19 +2,25 @@
 name = "webgame-server"
 version = "0.1.0"
 edition = "2024"
+# Edition 2024 + let-chains need 1.88; the locked uuid 1.29 needs 1.89.
+rust-version = "1.89"
 
 [dependencies]
 anyhow = "1.0.104"
 argon2 = { version = "0.5", features = ["std"] }
 axum = { version = "0.8", features = ["multipart", "macros"] }
 chrono = { version = "0.4.45", features = ["serde"] }
+# F005 screenshot re-encode: only the codecs we accept (decode png/jpeg/webp, encode png/jpeg).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 jsonwebtoken = { version = "9", default-features = false }
 mime_guess = "2.0.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "chrono"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "fs", "limit"] }
 tracing = "0.1.44"
@@ -27,3 +33,11 @@ http-body-util = "0.1.5"
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Keep debug builds small on disk: line tables keep readable backtraces,
+# dependencies carry no debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

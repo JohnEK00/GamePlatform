@@ -1,15 +1,102 @@
 /** Bridge to the hosting page (parent window) + per-game storage. */
+import type { CaptureResult, ScreenshotError, ShareScreenshotOptions } from './capture';
+
+/** Leaderboard window: UTC day, ISO week (Monday 00:00 UTC) or all time. */
+export type LeaderboardPeriod = 'day' | 'week' | 'all';
+
+/** Sanitised leaderboard the parent sends into the game (docs/GAME_FORMAT.md § F001). */
+export interface LeaderboardView {
+  period: LeaderboardPeriod;
+  order: 'desc' | 'asc';
+  format: 'number' | 'time';
+  label: string;
+  totalPlayers: number;
+  entries: { rank: number; name: string; score: number; display: string; isMe: boolean }[];
+  me: { rank: number; score: number; display: string } | null;
+  sample?: true;
+}
+
+/** Result of `submitScore` once the parent has saved it. */
+export interface ScoreResultView {
+  score: number;
+  display: string;
+  rank: number;
+  personalBest: boolean;
+  ranks: { day: number; week: number; all: number };
+}
 
 export type PlatformMessage =
   | { type: 'webgame:ready' }
-  | { type: 'webgame:score'; score: number }
+  | { type: 'webgame:score'; score: number; requestId?: string }
+  | { type: 'webgame:leaderboard-get'; requestId: string; period: LeaderboardPeriod; limit: number }
   | { type: 'webgame:error'; message: string }
   | { type: 'webgame:save'; data: Record<string, unknown> }
   | { type: 'webgame:hello' }
   | { type: 'webgame:fullscreen' }
-  | { type: 'webgame:achievement'; id: string };
+  | { type: 'webgame:achievement'; id: string }
+  | {
+      type: 'webgame:screenshot'; requestId: string; source: 'player' | 'game';
+      image: Blob; width: number; height: number; caption?: string;
+    }
+  | { type: 'webgame:screenshot'; requestId: string; source: 'player'; error: ScreenshotError };
+
+/** Parent → game replies correlated by `requestId`. */
+export type PlatformReply =
+  | { type: 'webgame:leaderboard'; requestId: string; leaderboard: LeaderboardView | null; error?: string }
+  | { type: 'webgame:score-result'; requestId: string; result: ScoreResultView | null; error?: string }
+  | { type: 'webgame:screenshot-result'; requestId: string; accepted: boolean; error?: 'rate_limited' | 'invalid' | 'unavailable' };
 
 export type Poster = (msg: PlatformMessage) => void;
+
+/** Reply timeouts and the pending-request cap (docs/GAME_FORMAT.md § F001). */
+export const LEADERBOARD_TIMEOUT_MS = 5000;
+export const SCORE_RESULT_TIMEOUT_MS = 8000;
+export const MAX_PENDING_LEADERBOARD = 4;
+/** `shareScreenshot`: minimum time between shares and reply timeout (docs/GAME_FORMAT.md § F005). */
+export const SHARE_INTERVAL_MS = 3000;
+export const SHARE_RESULT_TIMEOUT_MS = 5000;
+export const MAX_CAPTION_CODE_POINTS = 140;
+
+// C0/C1 controls, plus bidi marks, embeddings, overrides and isolates.
+const CAPTION_STRIP_RE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+/** Caption rule: coerce to string, drop control and bidi characters, trim, cut to 140 code points. */
+export function sanitizeCaption(v: unknown): string {
+  if (v === undefined || v === null) return '';
+  let s: string;
+  try {
+    s = String(v);
+  } catch {
+    return '';
+  }
+  return Array.from(s.replace(CAPTION_STRIP_RE, '').trim()).slice(0, MAX_CAPTION_CODE_POINTS).join('').trim();
+}
+
+/** A valid `requestId` (1–64 chars). */
+export function isRequestId(v: unknown): v is string {
+  return typeof v === 'string' && v.length >= 1 && v.length <= 64;
+}
+const PERIODS: readonly string[] = ['day', 'week', 'all'];
+
+/** True when running inside a frame with a distinct parent window (same check as `storageHandshake`). */
+export function defaultHasParent(): boolean {
+  try {
+    return typeof window !== 'undefined' && !!window.parent && window.parent !== window;
+  } catch {
+    return false;
+  }
+}
+
+type PendingKind = 'lb' | 'sc' | 'ss';
+const REPLY_TYPE: Record<PendingKind, string> = {
+  lb: 'webgame:leaderboard', sc: 'webgame:score-result', ss: 'webgame:screenshot-result',
+};
+
+interface Pending {
+  kind: PendingKind;
+  resolve(v: unknown): void;
+  timer: ReturnType<typeof setTimeout>;
+}
 
 /** Post a message to `window.parent` (no-op outside a browser). */
 export function defaultPoster(): Poster {
@@ -31,15 +118,140 @@ export class Platform {
   private readonly unlocked = new Set<string>();
   /** Last score submitted. */
   lastScore: number | null = null;
+  private seq = 0;
+  private readonly pending = new Map<string, Pending>();
+  private capturer: (() => Promise<CaptureResult>) | null = null;
+  private lastShare = -Infinity;
+  private closed = false;
 
-  constructor(private readonly post: Poster = defaultPoster()) {}
+  constructor(
+    private readonly post: Poster = defaultPoster(),
+    /** Whether a parent window exists to answer requests (mockable in tests). */
+    private readonly hasParent: () => boolean = defaultHasParent,
+  ) {}
 
-  /** Report a score to the platform (e.g. on game over). Non-finite values are ignored. */
-  submitScore(score: number): void {
+  /**
+   * Report a score to the platform (e.g. on game over). Posts synchronously; the promise resolves
+   * with the parent's `webgame:score-result` (ranks, personal best), or null on error / timeout /
+   * no parent. Non-finite values are ignored (not posted, resolves null).
+   */
+  submitScore(score: number): Promise<ScoreResultView | null> {
     const n = Number(score);
-    if (!Number.isFinite(n)) return;
+    if (!Number.isFinite(n)) return Promise.resolve(null);
     this.lastScore = n;
-    this.post({ type: 'webgame:score', score: n });
+    const requestId = `sc-${++this.seq}`;
+    const p = this.request<ScoreResultView>('sc', requestId, SCORE_RESULT_TIMEOUT_MS);
+    this.post({ type: 'webgame:score', score: n, requestId });
+    return p;
+  }
+
+  /**
+   * Read the game's leaderboard through the parent. `period` defaults to "all", `limit` to 10
+   * (clamped 1–25). Resolves null on timeout (5s), error, invalid period, no parent, or when
+   * 4 requests are already pending.
+   */
+  getLeaderboard(opts: { period?: LeaderboardPeriod; limit?: number } = {}): Promise<LeaderboardView | null> {
+    const period = opts?.period ?? 'all';
+    if (!PERIODS.includes(period)) {
+      console.warn(`[pixelforge] getLeaderboard: invalid period ${JSON.stringify(period)} (expected day|week|all)`);
+      return Promise.resolve(null);
+    }
+    const raw = Math.round(Number(opts?.limit ?? 10));
+    const limit = Number.isFinite(raw) ? Math.min(25, Math.max(1, raw)) : 10;
+    if (!this.hasParent()) return Promise.resolve(null);
+    let n = 0;
+    for (const p of this.pending.values()) if (p.kind === 'lb') n++;
+    if (n >= MAX_PENDING_LEADERBOARD) {
+      console.warn(`[pixelforge] getLeaderboard: too many pending requests (max ${MAX_PENDING_LEADERBOARD})`);
+      return Promise.resolve(null);
+    }
+    const requestId = `lb-${++this.seq}`;
+    const p = this.request<LeaderboardView>('lb', requestId, LEADERBOARD_TIMEOUT_MS);
+    this.post({ type: 'webgame:leaderboard-get', requestId, period, limit });
+    return p;
+  }
+
+  /**
+   * Capture the next rendered frame and offer it to the player's screenshot tray (the parent never
+   * uploads it by itself). Resolves true when the parent accepted it; false without a parent,
+   * within 3000 ms of the previous share (warned), when the capture fails, on `accepted: false` /
+   * an error, or after 5000 ms without a reply. The caption is sanitised (`sanitizeCaption`).
+   */
+  async shareScreenshot(opts: ShareScreenshotOptions = {}): Promise<boolean> {
+    const caption = sanitizeCaption(opts?.caption);
+    if (this.closed || !this.hasParent() || !this.capturer) return false;
+    const now = Date.now();
+    if (now - this.lastShare < SHARE_INTERVAL_MS) {
+      console.warn(`[pixelforge] shareScreenshot: called within ${SHARE_INTERVAL_MS} ms of the previous share`);
+      return false;
+    }
+    this.lastShare = now;
+    const r = await this.capturer();
+    if (!('blob' in r) || this.closed) return false;
+    const requestId = `ss-${++this.seq}`;
+    const p = this.request<boolean>('ss', requestId, SHARE_RESULT_TIMEOUT_MS);
+    this.post({
+      type: 'webgame:screenshot', requestId, source: 'game', image: r.blob, width: r.width, height: r.height,
+      ...(caption ? { caption } : {}),
+    });
+    return (await p) === true;
+  }
+
+  /** Engine-internal: how `shareScreenshot` captures a frame (wired by the engine). */
+  setCapture(fn: (() => Promise<CaptureResult>) | null): void {
+    this.capturer = fn;
+  }
+
+  /** Engine-internal: answer a parent `webgame:screenshot-request` (`source: "player"`). */
+  screenshotReply(requestId: string, r: CaptureResult): void {
+    if ('blob' in r) this.post({ type: 'webgame:screenshot', requestId, source: 'player', image: r.blob, width: r.width, height: r.height });
+    else this.post({ type: 'webgame:screenshot', requestId, source: 'player', error: r.error });
+  }
+
+  private request<T>(kind: PendingKind, id: string, ms: number): Promise<T | null> {
+    if (!this.hasParent()) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.settle(id, null), ms);
+      this.pending.set(id, { kind, resolve: resolve as (v: unknown) => void, timer });
+    });
+  }
+
+  private settle(id: string, v: unknown): void {
+    const p = this.pending.get(id);
+    if (!p) return;
+    this.pending.delete(id);
+    clearTimeout(p.timer);
+    p.resolve(v);
+  }
+
+  /** Number of requests awaiting a reply. */
+  get pendingCount(): number {
+    return this.pending.size;
+  }
+
+  /**
+   * Engine-internal: resolve the pending request matching a `webgame:leaderboard` /
+   * `webgame:score-result` / `webgame:screenshot-result` reply. Unknown ids and mismatched types
+   * are ignored.
+   */
+  handleReply(data: unknown): void {
+    const d = data as Partial<Record<'type' | 'requestId' | 'error' | 'leaderboard' | 'result' | 'accepted', unknown>> | null;
+    if (!d || typeof d !== 'object' || typeof d.requestId !== 'string') return;
+    const p = this.pending.get(d.requestId);
+    if (!p) return;
+    if (d.type !== REPLY_TYPE[p.kind]) return;
+    if (p.kind === 'ss') {
+      this.settle(d.requestId, d.accepted === true && !d.error);
+      return;
+    }
+    const v = p.kind === 'lb' ? d.leaderboard : d.result;
+    this.settle(d.requestId, d.error || !v || typeof v !== 'object' ? null : v);
+  }
+
+  /** Engine-internal: resolve every pending request with null / false (on destroy); later shares fail. */
+  cancelPending(): void {
+    this.closed = true;
+    for (const id of [...this.pending.keys()]) this.settle(id, null);
   }
 
   /**

@@ -1,18 +1,50 @@
 import { Link } from "react-router-dom";
 import type { GameSummary } from "../api/types";
-import { formatCount } from "../util";
+import { formatCount, isRecentlyUpdated, timeAgo } from "../util";
 import { FavoriteButton } from "./Favorite";
 import { Avatar, Skeleton, StarsDisplay, Thumbnail } from "./common";
 
-export function GameCard({ game, showStatus }: { game: GameSummary; showStatus?: boolean }) {
+/** F003: optional emphasis for discovery shelves. */
+export type GameCardHighlight = "trending" | "related";
+
+export type GameCardProps = {
+  game: GameSummary;
+  showStatus?: boolean;
+  /** "trending": weekly plays replace the all-time count; "related": shows shared tags. */
+  highlight?: GameCardHighlight;
+  /** With highlight="related": the tags shared with the source game (up to 2 are shown). */
+  sharedTags?: string[];
+};
+
+export function GameCard({ game, showStatus, highlight, sharedTags }: GameCardProps) {
+  // Older servers don't send playsWeek: treat it as 0.
+  const playsWeek = typeof game.playsWeek === "number" && game.playsWeek > 0 ? game.playsWeek : 0;
+  const showTrending = highlight === "trending" && playsWeek > 0;
+  const shown = highlight === "related" && sharedTags ? sharedTags.slice(0, 2) : [];
+  // F004: "Draft" wins over "Updated"; older servers omit lastUpdatedAt (no badge).
+  const showDraft = !!showStatus && !game.published;
+  const showUpdated = !showDraft && isRecentlyUpdated(game);
+  const updatedTitle = showUpdated ? `Updated ${timeAgo(game.lastUpdatedAt as string)}` : "";
+  // N7: the link's aria-label replaces its content, so the badge must be part of the label (and the
+  // visual badge is hidden from AT to avoid a double announcement).
+  const linkLabel = `Play ${game.title}${showDraft ? ", draft" : showUpdated ? `, ${updatedTitle.charAt(0).toLowerCase()}${updatedTitle.slice(1)}` : ""}`;
   return (
     <article className="pf-card">
-      <Link to={`/games/${game.id}`} className="pf-card__link" aria-label={`Play ${game.title}`}>
+      <Link to={`/games/${game.id}`} className="pf-card__link" aria-label={linkLabel}>
         <Thumbnail src={game.thumbnailUrl} seed={game.id} alt="" />
         <span className="pf-card__play" aria-hidden="true">
           ▶
         </span>
-        {showStatus && !game.published && <span className="pf-badge pf-badge--draft pf-card__badge">Draft</span>}
+        {showDraft && (
+          <span className="pf-badge pf-badge--draft pf-card__badge" aria-hidden="true">
+            Draft
+          </span>
+        )}
+        {showUpdated && (
+          <span className="pf-badge pf-badge--updated pf-card__badge" title={updatedTitle} aria-hidden="true">
+            Updated
+          </span>
+        )}
       </Link>
       <div className="pf-card__body">
         <h3 className="pf-card__title">
@@ -22,8 +54,23 @@ export function GameCard({ game, showStatus }: { game: GameSummary; showStatus?:
           <Avatar user={game.owner} size={18} />
           <span>{game.owner.displayName || game.owner.username}</span>
         </Link>
+        {shown.length > 0 && (
+          <p className="pf-card__shared" title={`Shares ${shown.map((t) => `#${t}`).join(", ")}`}>
+            {shown.map((t) => `#${t}`).join(" ")}
+          </p>
+        )}
         <div className="pf-card__meta">
-          <span title={`${game.plays} plays`}>▶ {formatCount(game.plays)}</span>
+          {showTrending ? (
+            <span className="pf-card__trending" title={`${playsWeek} plays in the last 7 days`}>
+              <span aria-hidden="true">🔥</span> {formatCount(playsWeek)}
+              <span className="pf-sr-only"> plays</span> this week
+            </span>
+          ) : (
+            <span title={`${game.plays} plays`}>
+              <span aria-hidden="true">▶</span> {formatCount(game.plays)}
+              <span className="pf-sr-only"> plays</span>
+            </span>
+          )}
           {game.ratingCount > 0 ? <StarsDisplay value={game.ratingAvg} count={game.ratingCount} /> : <span className="pf-muted">Not rated</span>}
           <FavoriteButton gameId={game.id} gameTitle={game.title} favorites={game.favorites ?? 0} />
         </div>
@@ -45,12 +92,28 @@ export function GameCardSkeleton() {
   );
 }
 
-export function GameGrid({ games, loading, skeletons = 8, showStatus }: { games?: GameSummary[]; loading?: boolean; skeletons?: number; showStatus?: boolean }) {
+export function GameGrid({
+  games,
+  loading,
+  skeletons = 8,
+  showStatus,
+  highlight,
+  sharedTagsById,
+}: {
+  games?: GameSummary[];
+  loading?: boolean;
+  skeletons?: number;
+  showStatus?: boolean;
+  highlight?: GameCardHighlight;
+  sharedTagsById?: Record<string, string[]>;
+}) {
   return (
     <div className="pf-grid" aria-busy={loading || undefined}>
       {loading
         ? Array.from({ length: skeletons }, (_, i) => <GameCardSkeleton key={i} />)
-        : games?.map((g) => <GameCard key={g.id} game={g} showStatus={showStatus} />)}
+        : games?.map((g) => (
+            <GameCard key={g.id} game={g} showStatus={showStatus} highlight={highlight} sharedTags={sharedTagsById?.[g.id]} />
+          ))}
     </div>
   );
 }

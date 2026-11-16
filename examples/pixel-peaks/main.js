@@ -1,5 +1,8 @@
 // Pixel Peaks — a small platformer showing off Pixelforge's Tilemap, Physics, scenes,
 // sprite sheets, particles, tweens and camera. Levels live in assets/levels.json.
+// F012: the HUD uses the built-in `pixel` font, titles use a BMFont (assets/fonts/peaks.fnt, made by
+// packages/engine/scripts/gen-bitmap-font.mjs), the title menu is engine.ui buttons and message
+// boxes are a 9-slice panel (assets/ui/panel.png).
 
 const W = 480;
 const H = 270;
@@ -160,13 +163,12 @@ function unlock(engine, id) {
   if (typeof engine.platform.unlockAchievement === 'function') engine.platform.unlockAchievement(id);
 }
 
+// F009: keys are game.json actions (remappable by players); read actions, never raw key codes.
 function jumpPressed(input) {
-  const pad = input.gamepad(0);
-  return input.wasPressed('Space') || input.wasPressed('ArrowUp') || input.wasPressed('KeyW') || input.wasPressed('KeyZ') || pad.wasPressed('A');
+  return input.actionPressed('jump');
 }
 function jumpHeld(input) {
-  const pad = input.gamepad(0);
-  return input.isDown('Space') || input.isDown('ArrowUp') || input.isDown('KeyW') || input.isDown('KeyZ') || pad.isDown('A');
+  return input.actionDown('jump');
 }
 
 function drawSky(engine, level, cam) {
@@ -205,17 +207,31 @@ function drawSky(engine, level, cam) {
 class TitleScene {
   enter(engine) {
     this.t = 0;
+    this.focused = false;
     run.best = engine.storage.get('best', 0) || 0;
     this.cam = { x: 0 };
   }
   update(engine, dt) {
     this.t += dt;
     this.cam.x += dt * 30;
-    if (engine.input.wasPressed('KeyM')) engine.audio.muted = !engine.audio.muted;
-    if (this.t > 0.3 && engine.input.anyPressed()) {
+    if (engine.input.actionPressed('mute')) engine.audio.muted = !engine.audio.muted;
+    // F012 menu: widgets are called from update. Mouse/touch click them; arrows (or the D-pad) move
+    // the focus ring and Enter/Space (or gamepad A) activate, since this game declares no `confirm`.
+    const ui = engine.ui;
+    // PLAY starts focused, so Enter/Space/gamepad A start the game straight away. Set it in the step
+    // that declares the buttons (focus is dropped at the end of a step whose buttons don't include it).
+    if (!this.focused) {
+      this.focused = true;
+      ui.focus = 'play';
+    }
+    if (ui.button('play', 'PLAY', W / 2 - 64, 168, 128, 22)) {
       Object.assign(run, { score: 0, lives: 3, coins: 0, level: 0 });
       engine.audio.tone({ freq: 392, freqEnd: 784, duration: 0.2, type: 'square', volume: 0.2 });
       engine.scenes.replace(new PlayScene());
+    }
+    if (ui.button('sound', `SOUND: ${engine.audio.muted ? 'OFF' : 'ON'}`, W / 2 - 64, 196, 128, 22)) {
+      engine.audio.muted = !engine.audio.muted;
+      if (!engine.audio.muted) engine.audio.tone({ freq: 660, duration: 0.08, type: 'square', volume: 0.15 });
     }
   }
   render(engine) {
@@ -223,14 +239,15 @@ class TitleScene {
     drawSky(engine, levels[0], this.cam);
     r.ui(() => {
       const bob = Math.sin(this.t * 2) * 3;
-      r.drawText('PIXEL PEAKS', W / 2, 70 + bob, { size: 44, align: 'center', baseline: 'middle', color: '#fee761', shadow: '#1a1c2c', shadowOffset: 3, letterSpacing: 2 });
+      // BMFont title (assets/fonts/peaks.fnt) at 3× its native 12 px: outlined, kerned, crisp.
+      r.drawText('PIXEL PEAKS', W / 2, 66 + bob, { font: 'peaks', size: 36, align: 'center', baseline: 'middle', color: '#fee761' });
       r.drawSprite(art.sheet, W / 2 - 16, 120, { frame: [F.run1, F.run2][Math.floor(this.t * 8) % 2], w: 32, h: 32 });
       for (let i = 0; i < 31; i++) r.drawSprite(art.sheet, i * 16 - ((this.cam.x * 2) % 16), 152, { frame: F.grass });
       for (let i = 0; i < 31; i++) for (let j = 1; j < 8; j++) r.drawSprite(art.sheet, i * 16 - ((this.cam.x * 2) % 16), 152 + j * 16, { frame: F.dirt });
-      if (Math.floor(this.t * 2) % 2 === 0)
-        r.drawText('PRESS ANY KEY OR TAP', W / 2, 200, { size: 16, align: 'center', baseline: 'middle', color: '#ffffff', shadow: '#1a1c2c' });
-      r.drawText('Arrows/WASD move · Space jump · stomp slimes · reach the flag', W / 2, 232, { size: 10, align: 'center', baseline: 'middle', color: '#e8e8ff' });
-      if (run.best > 0) r.drawText(`BEST ${run.best}`, W / 2, 255, { size: 11, align: 'center', baseline: 'middle', color: '#fee761' });
+      // The menu buttons are drawn by the engine's UI layer after this render.
+      const L = (id) => engine.input.actionLabel(id) || '—';
+      r.drawText(`${L('left')}${L('right')} move · ${L('jump')} jump · stomp slimes · reach the flag`, W / 2, 232, { size: 10, align: 'center', baseline: 'middle', color: '#e8e8ff' });
+      if (run.best > 0) r.drawText(`BEST ${run.best}`, W / 2, 252, { font: 'pixel', size: 8, align: 'center', baseline: 'middle', color: '#fee761' });
     });
   }
 }
@@ -263,10 +280,16 @@ class MessageScene {
     const a = this.fade.a;
     r.ui(() => {
       r.drawRect(0, 0, W, H, '#1a1c2c', { alpha: 0.6 * a });
-      r.drawText(this.title, W / 2, H / 2 - 22 - (1 - a) * 20, { size: 32, align: 'center', baseline: 'middle', color: '#fee761', shadow: '#000', shadowOffset: 2, alpha: a });
-      r.drawText(this.subtitle, W / 2, H / 2 + 14, { size: 13, align: 'center', baseline: 'middle', color: '#ffffff', alpha: a, lineHeight: 1.5 });
+      // F012: a 9-slice box (assets/ui/panel.png, theme.panel at nineSliceScale 2). ui.panel may be
+      // used from render as a styled drawing helper, so the text below lands on top of it.
+      const pw = 300;
+      const ph = 124;
+      const py = H / 2 - ph / 2 + (1 - a) * 12;
+      engine.ui.panel(W / 2 - pw / 2, py, pw, ph, { alpha: a });
+      r.drawText(this.title, W / 2, py + 30, { font: 'peaks', size: 24, align: 'center', baseline: 'middle', color: '#fee761', alpha: a });
+      r.drawText(this.subtitle, W / 2, py + 70, { font: 'pixel', size: 16, align: 'center', baseline: 'middle', color: '#ffffff', alpha: a });
       if (this.t > this.minTime && Math.floor(this.t * 2) % 2 === 0)
-        r.drawText('press any key', W / 2, H / 2 + 60, { size: 11, align: 'center', baseline: 'middle', color: '#c0cbdc', alpha: a });
+        r.drawText('press any key', W / 2, py + ph - 18, { font: 'pixel', size: 8, align: 'center', baseline: 'middle', color: '#c0cbdc', alpha: a });
     });
   }
 }
@@ -280,7 +303,7 @@ function finishRun(engine, won) {
   engine.platform.submitScore(run.score);
   if (won) unlock(engine, 'summit');
   const title = won ? 'YOU WIN!' : 'GAME OVER';
-  const sub = `Score ${run.score}   ·   Coins ${run.coins}${isBest ? '\nNEW BEST!' : ''}`;
+  const sub = `SCORE ${run.score}  COINS ${run.coins}${isBest ? '\nNEW BEST!' : ''}`;
   engine.scenes.push(new MessageScene(title, sub, (e) => {
     e.scenes.clear();
     e.scenes.push(new TitleScene());
@@ -355,7 +378,7 @@ class PlayScene {
     let h = input.axis('horizontal');
     let jp = jumpPressed(input);
     let jh = jumpHeld(input);
-    let down = input.isDown('ArrowDown') || input.isDown('KeyS') || input.gamepad(0).isDown('Down');
+    let down = input.actionDown('down');
     if (input.touches.length) this.touchMode = true;
     if (this.touchMode) {
       let jumpTouch = false;
@@ -376,7 +399,11 @@ class PlayScene {
 
   update(engine, dt) {
     const input = engine.input;
-    if (input.wasPressed('KeyM')) engine.audio.muted = !engine.audio.muted;
+    if (input.actionPressed('mute')) engine.audio.muted = !engine.audio.muted;
+    // F005 photo mode: the "photo" action (P / gamepad Back) hides the HUD and offers the frame to
+    // the player's screenshot tray. shareScreenshot is new in F005, so feature-detect it.
+    if (input.actionPressed('photo') && !this.photo && typeof engine.platform.shareScreenshot === 'function')
+      this.photo = true;
     this.time += dt;
     this.anim += dt;
     this.dust.update(dt);
@@ -572,7 +599,7 @@ class PlayScene {
         finishRun(engine, true);
         return;
       }
-      engine.scenes.push(new MessageScene('LEVEL CLEAR!', `Time bonus +${bonus}`, (e) => {
+      engine.scenes.push(new MessageScene('LEVEL CLEAR!', `TIME BONUS +${bonus}`, (e) => {
         run.level++;
         e.scenes.clear();
         e.scenes.push(new PlayScene());
@@ -627,9 +654,16 @@ class PlayScene {
     this.dust.draw(r);
     this.sparkle.draw(r);
     this.gore.draw(r);
-    for (const pop of this.pops || []) r.drawText(`+${pop.n}`, pop.x, pop.y, { size: 9, align: 'center', color: '#fee761', alpha: pop.a, shadow: '#1a1c2c' });
+    for (const pop of this.pops || []) r.drawText(`+${pop.n}`, pop.x, pop.y, { font: 'pixel', size: 8, align: 'center', color: '#fee761', alpha: pop.a, shadow: '#1a1c2c' });
 
-    this.renderHud(engine);
+    if (!this.photo) {
+      this.renderHud(engine);
+    } else {
+      // This frame has no HUD. A capture requested now is taken at this frame's capture point
+      // (right after render), so the HUD can come back on the next frame.
+      this.photo = false;
+      engine.platform.shareScreenshot();
+    }
   }
 
   renderHud(engine) {
@@ -638,12 +672,14 @@ class PlayScene {
       r.drawRect(0, 0, W, 20, '#1a1c2c', { alpha: 0.45 });
       for (let i = 0; i < 3; i++) r.drawSprite(art.sheet, 4 + i * 14, 2, { frame: i < run.lives ? F.heart : F.heartEmpty });
       r.drawSprite(art.sheet, 54, 2, { frame: F.coin[0] });
-      r.drawText(`${run.coins}`, 70, 5, { size: 11, color: '#ffffff' });
-      r.drawText(`SCORE ${run.score}`, W / 2, 5, { size: 11, align: 'center', color: '#ffffff' });
-      r.drawText(`${this.time.toFixed(1)}s`, W - 6, 5, { size: 11, align: 'right', color: '#c0cbdc' });
+      // F012: the built-in `pixel` font at its native 8 px is crisp at 480×270 and needs no asset.
+      const hud = { font: 'pixel', size: 8, color: '#ffffff', shadow: '#1a1c2c' };
+      r.drawText(`${run.coins}`, 70, 6, hud);
+      r.drawText(`SCORE ${run.score}`, W / 2, 6, { ...hud, align: 'center' });
+      r.drawText(`${this.time.toFixed(1)}s`, W - 6, 6, { ...hud, align: 'right', color: '#c0cbdc' });
       if (this.banner.a > 0)
-        r.drawText(this.def.name, W / 2, 60, { size: 22, align: 'center', baseline: 'middle', color: '#ffffff', alpha: this.banner.a, shadow: '#1a1c2c', shadowOffset: 2 });
-      if (engine.audio.muted) r.drawText('MUTED', W - 6, 24, { size: 9, align: 'right', color: '#ffffff' });
+        r.drawText(this.def.name.toUpperCase(), W / 2, 60, { font: 'peaks', size: 24, align: 'center', baseline: 'middle', color: '#ffffff', alpha: this.banner.a });
+      if (engine.audio.muted) r.drawText('MUTED', W - 6, 24, { ...hud, align: 'right' });
       if (this.touchMode) {
         const btn = (x, y, w, label, active) => {
           r.drawRect(x, y, w, w, '#ffffff', { alpha: active ? 0.35 : 0.18 });
@@ -673,6 +709,14 @@ export default {
       drawSprites(ctx, frameXY);
     });
     art = { sheet: engine.assets.spriteSheet(tex, 16, 16) };
+    // F012: a BMFont for titles and banners (text .fnt + PNG page, with kerning) and a 9-slice frame.
+    await engine.assets.loadBitmapFont('peaks', 'assets/fonts/peaks.fnt');
+    const theme = engine.ui.theme;
+    theme.panel = await engine.assets.loadNineSlice('assets/ui/panel.png', 4);
+    theme.nineSliceScale = 2; // 4-px pixel-art borders drawn at 8 game units
+    theme.font = 'pixel';
+    theme.textSize = 16; // 2× the pixel font's native size
+    Object.assign(theme, { buttonColor: '#29366f', buttonHoverColor: '#3b5dc9', buttonDownColor: '#1a1c2c', buttonBorder: '#c0cbdc', focusColor: '#fee761' });
     engine.renderer.background = '#1a1c2c';
     await engine.scenes.push(new TitleScene());
   },

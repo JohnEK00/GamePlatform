@@ -1,0 +1,429 @@
+//! F002 activity feed: GET /api/feed and GET /api/feed/suggestions (fan-out on read).
+
+use std::collections::HashMap;
+
+use axum::Json;
+use axum::extract::State;
+use serde::{Deserialize, Serialize};
+use sqlx::Row;
+
+use crate::AppState;
+use crate::activity::{KIND_ACHIEVEMENT, KIND_GAME_UPDATED, KIND_PERSONAL_BEST, KINDS};
+use crate::auth::AuthUser;
+use crate::error::{AppError, AppResult};
+use crate::extract::ApiQuery;
+use crate::models::{
+    AchievementDef, GAME_SELECT, GameRow, GameSummary, LeaderboardConfig, UserRef,
+    achievement_icon_url, game_row_from_row, user_ref_from_row,
+};
+use crate::ratelimit::Limit;
+use crate::routes::games::limit_user;
+
+pub const FEED_LIMIT_DEFAULT: i64 = 20;
+pub const FEED_LIMIT_MAX: i64 = 50;
+pub const SUGGESTIONS_MAX: i64 = 6;
+/// F004: at most this many notes per `gameUpdated` item.
+pub const FEED_CHANGES_MAX: usize = 3;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedScore {
+    pub value: i64,
+    pub first: bool,
+    pub leaderboard: LeaderboardConfig,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedAchievement {
+    #[serde(flatten)]
+    pub def: AchievementDef,
+    pub count: i64,
+}
+
+/// F004 `FeedUpdate.changes[]`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedChange {
+    pub version: i64,
+    pub notes: String,
+}
+
+/// F004 `FeedUpdate`: the versions covered by a (possibly coalesced) `gameUpdated` item.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedUpdate {
+    pub from_version: i64,
+    pub changes: Vec<FeedChange>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedItem {
+    pub id: String,
+    pub kind: String,
+    pub actor: UserRef,
+    pub game: GameSummary,
+    pub reason: &'static str,
+    pub created_at: String,
+    pub version: Option<i64>,
+    pub score: Option<FeedScore>,
+    pub achievement: Option<FeedAchievement>,
+    /// F004: non-null for `gameUpdated` only.
+    pub update: Option<FeedUpdate>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedPage {
+    pub items: Vec<FeedItem>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct FeedQuery {
+    pub cursor: Option<String>,
+    pub limit: Option<String>,
+    pub kinds: Option<String>,
+}
+
+fn nonempty(v: Option<&str>) -> Option<&str> {
+    v.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// `cursor`: absent/blank → none; otherwise a decimal positive i64, else 400.
+pub fn parse_cursor(v: Option<&str>) -> AppResult<Option<i64>> {
+    let Some(s) = nonempty(v) else {
+        return Ok(None);
+    };
+    let bad = || AppError::BadRequest("cursor must be a positive integer".into());
+    if !s.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    match s.parse::<i64>() {
+        Ok(n) if n > 0 => Ok(Some(n)),
+        _ => Err(bad()),
+    }
+}
+
+/// `limit`: default 20, clamped to 1-50; non-integer → 400.
+pub fn parse_feed_limit(v: Option<&str>) -> AppResult<i64> {
+    Ok(match nonempty(v) {
+        None => FEED_LIMIT_DEFAULT,
+        Some(s) => s
+            .parse::<i64>()
+            .map_err(|_| AppError::BadRequest("limit must be an integer".into()))?,
+    }
+    .clamp(1, FEED_LIMIT_MAX))
+}
+
+/// `kinds`: comma list of feed kinds (blank entries ignored); empty → all; unknown → 400.
+pub fn parse_kinds(v: Option<&str>) -> AppResult<Vec<&'static str>> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for part in v.unwrap_or("").split(',').map(str::trim) {
+        if part.is_empty() {
+            continue;
+        }
+        let kind = KINDS
+            .iter()
+            .find(|k| **k == part)
+            .ok_or_else(|| AppError::BadRequest(format!("Unknown feed kind '{part}'")))?;
+        if !out.contains(kind) {
+            out.push(kind);
+        }
+    }
+    if out.is_empty() {
+        out.extend(KINDS);
+    }
+    Ok(out)
+}
+
+fn json_list<T: Serialize>(v: &[T]) -> AppResult<String> {
+    serde_json::to_string(v).map_err(|e| AppError::Internal(format!("json: {e}")))
+}
+
+/// Feed page query (N1). Two index-driven branches, each yielding at most `limit + 1` ids
+/// (`?3`) newest first with every filter applied inside the branch:
+///   (a) followed creators: `follows` PK → `idx_activity_actor_id (actor_id, id DESC)`;
+///   (b) favorited games' publish/update events: `idx_favorites_user_game` →
+///       `idx_activity_game_kind (game_id, kind, id DESC)`.
+/// `CROSS JOIN` fixes the join order and `INDEXED BY` the indices, so the plan never depends
+/// on planner statistics. The union is de-duplicated by id and the outer query only joins the
+/// at most `2 · (limit + 1)` picked rows. The work grows with the activity of the creators the
+/// viewer follows and the games they favorited (before the cursor), never with total platform
+/// activity. `tests/review2.rs` asserts the plan.
+/// Binds: ?1 viewer id, ?2 cursor (exclusive, nullable), ?3 limit + 1, ?4 kinds JSON list.
+pub const FEED_SQL: &str = "\
+    WITH picked(id) AS ( \
+      SELECT id FROM ( \
+        SELECT e.id FROM follows f \
+        CROSS JOIN activity_events e INDEXED BY idx_activity_actor_id \
+        CROSS JOIN games g \
+        WHERE f.follower_id = ?1 AND e.actor_id = f.followee_id \
+          AND e.id < COALESCE(?2, 9223372036854775807) \
+          AND e.actor_id <> ?1 \
+          AND e.kind IN (SELECT value FROM json_each(?4)) \
+          AND g.id = e.game_id AND g.published = 1 \
+          AND (e.kind <> 'achievementUnlocked' OR EXISTS ( \
+                SELECT 1 FROM achievements a \
+                WHERE a.game_id = e.game_id AND a.ach_id = e.ach_id)) \
+        ORDER BY e.id DESC LIMIT ?3) \
+      UNION \
+      SELECT id FROM ( \
+        SELECT e.id FROM favorites fv INDEXED BY idx_favorites_user_game \
+        CROSS JOIN activity_events e INDEXED BY idx_activity_game_kind \
+        CROSS JOIN games g \
+        WHERE fv.user_id = ?1 AND e.game_id = fv.game_id \
+          AND e.kind IN ('gamePublished', 'gameUpdated') \
+          AND e.id < COALESCE(?2, 9223372036854775807) \
+          AND e.actor_id <> ?1 \
+          AND e.kind IN (SELECT value FROM json_each(?4)) \
+          AND g.id = e.game_id AND g.published = 1 \
+        ORDER BY e.id DESC LIMIT ?3) \
+    ) \
+    SELECT e.id, e.kind, e.game_id, e.version, e.score, e.first_score, e.ach_id, \
+      e.ach_count, e.created_at, COALESCE(e.from_version, e.version) AS from_version, \
+      EXISTS (SELECT 1 FROM follows f \
+              WHERE f.follower_id = ?1 AND f.followee_id = e.actor_id) AS followed, \
+      a.name AS a_name, a.description AS a_description, a.icon AS a_icon, \
+      u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
+      u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version \
+    FROM picked p \
+    CROSS JOIN activity_events e ON e.id = p.id \
+    CROSS JOIN users u ON u.id = e.actor_id \
+    LEFT JOIN achievements a ON a.game_id = e.game_id AND a.ach_id = e.ach_id \
+    ORDER BY e.id DESC LIMIT ?3";
+
+/// GET /api/feed?cursor=&limit=&kinds= (🔒, `Limit::Feed`).
+pub async fn get_feed(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiQuery(query): ApiQuery<FeedQuery>,
+) -> AppResult<Json<FeedPage>> {
+    limit_user(&state, Limit::Feed, &user.id)?;
+    let cursor = parse_cursor(query.cursor.as_deref())?;
+    let limit = parse_feed_limit(query.limit.as_deref())?;
+    let kinds = parse_kinds(query.kinds.as_deref())?;
+
+    let rows = sqlx::query(FEED_SQL)
+        .bind(&user.id)
+        .bind(cursor)
+        .bind(limit + 1)
+        .bind(json_list(&kinds)?)
+        .fetch_all(&state.db)
+        .await?;
+
+    let has_more = rows.len() as i64 > limit;
+    let rows = &rows[..rows.len().min(limit as usize)];
+
+    // Games of this page in one query.
+    let mut game_ids: Vec<String> = Vec::new();
+    for r in rows {
+        let gid: String = r.try_get("game_id")?;
+        if !game_ids.contains(&gid) {
+            game_ids.push(gid);
+        }
+    }
+    let game_rows = sqlx::query(&format!(
+        "{GAME_SELECT} WHERE g.id IN (SELECT value FROM json_each(?))"
+    ))
+    .bind(json_list(&game_ids)?)
+    .fetch_all(&state.db)
+    .await?;
+    let games: HashMap<String, GameRow> = game_rows
+        .iter()
+        .map(|r| game_row_from_row(r).map(|g| (g.id.clone(), g)))
+        .collect::<Result<_, _>>()?;
+
+    // F004: non-empty notes of this page's updated games in one query; sliced per item below.
+    let mut updated_ids: Vec<String> = Vec::new();
+    for r in rows {
+        let kind: String = r.try_get("kind")?;
+        let gid: String = r.try_get("game_id")?;
+        if kind == KIND_GAME_UPDATED && !updated_ids.contains(&gid) {
+            updated_ids.push(gid);
+        }
+    }
+    let mut notes_by_game: HashMap<String, Vec<(i64, String)>> = HashMap::new();
+    if !updated_ids.is_empty() {
+        let note_rows: Vec<(String, i64, String)> = sqlx::query_as(
+            "SELECT game_id, version, notes FROM game_versions \
+             WHERE game_id IN (SELECT value FROM json_each(?)) AND notes <> '' \
+             ORDER BY version DESC",
+        )
+        .bind(json_list(&updated_ids)?)
+        .fetch_all(&state.db)
+        .await?;
+        for (gid, version, notes) in note_rows {
+            notes_by_game.entry(gid).or_default().push((version, notes));
+        }
+    }
+
+    let mut items = Vec::with_capacity(rows.len());
+    for r in rows {
+        let game_id: String = r.try_get("game_id")?;
+        let Some(game) = games.get(&game_id) else {
+            continue; // deleted between the two queries
+        };
+        let kind: String = r.try_get("kind")?;
+        let id: i64 = r.try_get("id")?;
+        let followed: i64 = r.try_get("followed")?;
+        let score = if kind == KIND_PERSONAL_BEST {
+            Some(FeedScore {
+                value: r.try_get::<Option<i64>, _>("score")?.unwrap_or(0),
+                first: r.try_get::<i64, _>("first_score")? != 0,
+                leaderboard: game.leaderboard.clone(),
+            })
+        } else {
+            None
+        };
+        let achievement = if kind == KIND_ACHIEVEMENT {
+            let icon: Option<String> = r.try_get("a_icon")?;
+            Some(FeedAchievement {
+                def: AchievementDef {
+                    id: r
+                        .try_get::<Option<String>, _>("ach_id")?
+                        .unwrap_or_default(),
+                    name: r
+                        .try_get::<Option<String>, _>("a_name")?
+                        .unwrap_or_default(),
+                    description: r
+                        .try_get::<Option<String>, _>("a_description")?
+                        .unwrap_or_default(),
+                    icon_url: achievement_icon_url(&game_id, icon.as_deref()),
+                },
+                count: r.try_get::<i64, _>("ach_count")?.max(1),
+            })
+        } else {
+            None
+        };
+        let update = if kind == KIND_GAME_UPDATED {
+            let version: i64 = r.try_get::<Option<i64>, _>("version")?.unwrap_or(0);
+            let from_version: i64 = r
+                .try_get::<Option<i64>, _>("from_version")?
+                .unwrap_or(version);
+            let changes = notes_by_game
+                .get(&game_id)
+                .map(|vs| {
+                    vs.iter()
+                        .filter(|(v, _)| (from_version..=version).contains(v))
+                        .take(FEED_CHANGES_MAX)
+                        .map(|(v, n)| FeedChange {
+                            version: *v,
+                            notes: n.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(FeedUpdate {
+                from_version,
+                changes,
+            })
+        } else {
+            None
+        };
+        items.push(FeedItem {
+            id: id.to_string(),
+            actor: user_ref_from_row(r, "u_")?,
+            game: game.summary(),
+            reason: if followed != 0 {
+                "following"
+            } else {
+                "favorite"
+            },
+            created_at: r.try_get("created_at")?,
+            version: match kind.as_str() {
+                "gamePublished" | "gameUpdated" => r.try_get("version")?,
+                _ => None,
+            },
+            score,
+            achievement,
+            update,
+            kind,
+        });
+    }
+    // The cursor is the last *row* of this page, so a row skipped above never stalls paging.
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|r| r.try_get::<i64, _>("id"))
+            .transpose()?
+            .map(|id| id.to_string())
+    } else {
+        None
+    };
+    Ok(Json(FeedPage { items, next_cursor }))
+}
+
+#[derive(Serialize)]
+pub struct SuggestedCreator {
+    pub user: UserRef,
+    pub reason: &'static str,
+    pub games: i64,
+}
+
+const SUGGEST_USER_COLS: &str = "u.id AS u_id, u.username AS u_username, \
+     u.display_name AS u_display_name, u.avatar_ext AS u_avatar_ext, \
+     u.avatar_version AS u_avatar_version, \
+     (SELECT COUNT(*) FROM games pg WHERE pg.owner_id = u.id AND pg.published = 1) AS n_games";
+
+/// GET /api/feed/suggestions (🔒, `Limit::Feed`): up to 6 creators to follow.
+/// 1. Owners of published games the viewer favorited (by number of such favorites, then most
+///    recent favorite). 2. Filled up with owners by total plays of their published games.
+///    Never the viewer, users already followed, or users without a published game.
+pub async fn get_suggestions(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<Vec<SuggestedCreator>>> {
+    limit_user(&state, Limit::Feed, &user.id)?;
+    let mut out: Vec<SuggestedCreator> = Vec::new();
+
+    let favored = sqlx::query(&format!(
+        "SELECT {SUGGEST_USER_COLS} FROM ( \
+           SELECT g.owner_id, COUNT(*) AS n, MAX(f.created_at) AS last, MAX(f.rowid) AS last_rid \
+           FROM favorites f JOIN games g ON g.id = f.game_id \
+           WHERE f.user_id = ?1 AND g.published = 1 AND g.owner_id <> ?1 \
+             AND g.owner_id NOT IN (SELECT followee_id FROM follows WHERE follower_id = ?1) \
+           GROUP BY g.owner_id \
+         ) fo JOIN users u ON u.id = fo.owner_id \
+         ORDER BY fo.n DESC, fo.last DESC, fo.last_rid DESC LIMIT ?2"
+    ))
+    .bind(&user.id)
+    .bind(SUGGESTIONS_MAX)
+    .fetch_all(&state.db)
+    .await?;
+    for r in &favored {
+        out.push(SuggestedCreator {
+            user: user_ref_from_row(r, "u_")?,
+            reason: "favorited",
+            games: r.try_get("n_games")?,
+        });
+    }
+
+    let missing = SUGGESTIONS_MAX - out.len() as i64;
+    if missing > 0 {
+        let picked: Vec<&str> = out.iter().map(|s| s.user.id.as_str()).collect();
+        let popular = sqlx::query(&format!(
+            "SELECT {SUGGEST_USER_COLS} FROM ( \
+               SELECT g.owner_id, SUM(g.plays) AS plays FROM games g \
+               WHERE g.published = 1 AND g.owner_id <> ?1 \
+                 AND g.owner_id NOT IN (SELECT followee_id FROM follows WHERE follower_id = ?1) \
+                 AND g.owner_id NOT IN (SELECT value FROM json_each(?2)) \
+               GROUP BY g.owner_id \
+             ) po JOIN users u ON u.id = po.owner_id \
+             ORDER BY po.plays DESC, u.username_lower ASC LIMIT ?3"
+        ))
+        .bind(&user.id)
+        .bind(json_list(&picked)?)
+        .bind(missing)
+        .fetch_all(&state.db)
+        .await?;
+        for r in &popular {
+            out.push(SuggestedCreator {
+                user: user_ref_from_row(r, "u_")?,
+                reason: "popular",
+                games: r.try_get("n_games")?,
+            });
+        }
+    }
+    Ok(Json(out))
+}

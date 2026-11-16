@@ -78,6 +78,7 @@ pub async fn run(state: &AppState, zips: &[PathBuf]) -> anyhow::Result<()> {
             ),
             tags: vec!["demo".into()],
             published: true,
+            notes: String::new(),
         };
         match create_game_record(state, &owner, new, bytes, None).await {
             Ok(id) => println!("seeded {} -> /play/{id}", zip.display()),

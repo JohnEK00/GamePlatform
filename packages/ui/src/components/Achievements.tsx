@@ -4,7 +4,7 @@ import type { GameAchievement, UserAchievement } from "../api/types";
 import { useApi, useResolveUrl } from "../context/config";
 import { useAuth } from "../context/auth";
 import { formatCount, formatDate, hashString, timeAgo, useAsync } from "../util";
-import { Skeleton } from "./common";
+import { LoadError, Skeleton } from "./common";
 
 /** Achievement badge: the game's icon, or a generated trophy when there is none / it fails to load. */
 export function AchievementIcon({ iconUrl, seed, size = 48, locked }: { iconUrl: string | null; seed: string; size?: number; locked?: boolean }) {
@@ -41,8 +41,18 @@ export function AchievementIcon({ iconUrl, seed, size = 48, locked }: { iconUrl:
 export function GameAchievements({ gameId, refreshKey = 0 }: { gameId: string; refreshKey?: number }) {
   const api = useApi();
   const { user } = useAuth();
-  const { data, loading, error } = useAsync(() => api.listGameAchievements(gameId), [api, gameId, refreshKey, user?.id]);
-  if (!loading && (error || !data || data.length === 0)) return null;
+  const { data, loading, error, reload } = useAsync(() => api.listGameAchievements(gameId), [api, gameId, refreshKey, user?.id]);
+  // R15: a failed load says so (with Retry) instead of looking like "this game has no achievements".
+  if (!loading && error && !data)
+    return (
+      <section className="pf-panel" aria-labelledby="pf-ach-title">
+        <h2 id="pf-ach-title" className="pf-panel__title">
+          Achievements
+        </h2>
+        <LoadError message="Couldn't load achievements." onRetry={reload} />
+      </section>
+    );
+  if (!loading && (!data || data.length === 0)) return null;
   const items: GameAchievement[] = data ?? [];
   const mine = items.filter((a) => a.unlockedAt).length;
 
@@ -103,8 +113,17 @@ export function GameAchievements({ gameId, refreshKey = 0 }: { gameId: string; r
 /** "Recent achievements" on a profile page. Renders nothing when there are none. */
 export function RecentAchievements({ username, limit = 12 }: { username: string; limit?: number }) {
   const api = useApi();
-  const { data, loading, error } = useAsync(() => api.listUserAchievements(username, limit), [api, username, limit]);
-  if (error || (!loading && (!data || data.length === 0))) return null;
+  const { data, loading, error, reload } = useAsync(() => api.listUserAchievements(username, limit), [api, username, limit]);
+  if (!loading && error && !data)
+    return (
+      <section aria-labelledby="pf-recent-ach-title" className="pf-recent-ach">
+        <h2 id="pf-recent-ach-title" className="pf-section-title">
+          Recent achievements
+        </h2>
+        <LoadError message="Couldn't load achievements." onRetry={reload} />
+      </section>
+    );
+  if (!loading && (!data || data.length === 0)) return null;
   const items: UserAchievement[] = data ?? [];
   return (
     <section aria-labelledby="pf-recent-ach-title" className="pf-recent-ach">

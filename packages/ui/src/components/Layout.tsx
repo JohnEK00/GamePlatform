@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/auth";
 import { usePlatform } from "../context/config";
 import { Avatar, Spinner } from "./common";
+import { NotificationBell } from "./NotificationBell";
 
 export function Logo() {
   return (
@@ -85,6 +86,12 @@ function UserMenu() {
           <Link role="menuitem" to="/dashboard">
             My games
           </Link>
+          <Link role="menuitem" to="/feed">
+            Feed
+          </Link>
+          <Link role="menuitem" to="/notifications">
+            Notifications
+          </Link>
           <Link role="menuitem" to="/favorites">
             Favorites
           </Link>
@@ -112,8 +119,38 @@ function UserMenu() {
   );
 }
 
+/** Below this width the main nav collapses behind the ☰ toggle (keep in sync with styles.css). */
+export const HEADER_COLLAPSE_QUERY = "(max-width: 860px)";
+
+function subscribeMedia(query: string) {
+  return (cb: () => void) => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+    const mq = window.matchMedia(query);
+    // Safari < 14 only has addListener.
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", cb);
+      return () => mq.removeEventListener("change", cb);
+    }
+    mq.addListener?.(cb);
+    return () => mq.removeListener?.(cb);
+  };
+}
+
+/** True while `query` matches (false where matchMedia is unavailable, e.g. jsdom). */
+export function useMediaQuery(query: string): boolean {
+  const subscribe = useMemo(() => subscribeMedia(query), [query]);
+  return useSyncExternalStore(
+    subscribe,
+    () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches,
+    () => false,
+  );
+}
+
 export function Header() {
   const { user, loading } = useAuth();
+  // The bell lives where it is seen, so DOM (Tab) order matches visual order at every width (review 4, L5):
+  // narrow: in the header row before ☰ (the nav is collapsed); wide: inside the nav, just before the actions.
+  const collapsed = useMediaQuery(HEADER_COLLAPSE_QUERY);
   const location = useLocation();
   const [navOpen, setNavOpen] = useState(false);
   useEffect(() => setNavOpen(false), [location.pathname, location.search]);
@@ -124,6 +161,7 @@ export function Header() {
     <header className="pf-header">
       <div className="pf-header__inner pf-container">
         <Logo />
+        {collapsed && <NotificationBell />}
         <button
           type="button"
           className="pf-iconbtn pf-header__toggle"
@@ -142,10 +180,12 @@ export function Header() {
             <NavLink to="/studio">Studio</NavLink>
             <NavLink to="/docs">Make a game</NavLink>
             {user && <NavLink to="/dashboard">My games</NavLink>}
+            {user && <NavLink to="/feed">Feed</NavLink>}
             {user && <NavLink to="/favorites">Favorites</NavLink>}
             {user?.role === "admin" && <NavLink to="/admin">Admin</NavLink>}
           </nav>
           <SearchBox onDone={() => setNavOpen(false)} />
+          {!collapsed && <NotificationBell />}
           <div className="pf-header__actions">
             {loading ? (
               <Spinner size={18} label="Checking session" />

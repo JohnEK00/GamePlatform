@@ -5,6 +5,7 @@ import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
 import { Alert, Avatar, ProgressBar, Spinner } from "../components/common";
 import { FileDrop } from "../components/FileDrop";
+import { NotificationSettingsSection } from "../components/NotificationSettings";
 import { errorMessage, useDocumentTitle } from "../util";
 import { IMAGE_ACCEPT } from "./UploadPage";
 
@@ -106,6 +107,8 @@ export function SettingsPage() {
           </div>
         </div>
       </section>
+
+      <NotificationSettingsSection />
 
       {platform.extraSettings && <section className="pf-panel pf-extra-settings">{platform.extraSettings}</section>}
 

@@ -142,3 +142,77 @@ export async function looksLikeZip(file: Blob): Promise<boolean> {
     return true; // can't check — let the server decide
   }
 }
+
+/**
+ * F001: the single score formatter (leaderboard panel, toasts, in-game views).
+ * "number" → locale string; "time" (ms) → m:ss.mmm, or h:mm:ss.mmm from 1h. Negative/non-finite → "—".
+ */
+export function formatScore(score: number, format: "number" | "time" = "number"): string {
+  if (typeof score !== "number" || !Number.isFinite(score)) return "—";
+  if (format !== "time") return score.toLocaleString();
+  if (score < 0) return "—";
+  const total = Math.round(score);
+  const ms = total % 1000;
+  const totalSec = Math.floor(total / 1000);
+  const s = totalSec % 60;
+  const totalMin = Math.floor(totalSec / 60);
+  const pad = (n: number, w: number) => String(n).padStart(w, "0");
+  if (totalMin >= 60) {
+    const h = Math.floor(totalMin / 60);
+    return `${h}:${pad(totalMin % 60, 2)}:${pad(s, 2)}.${pad(ms, 3)}`;
+  }
+  return `${totalMin}:${pad(s, 2)}.${pad(ms, 3)}`;
+}
+
+/** F001: "5h 12m" / "3d 4h" / "12m" until `endIso`, or null when unknown/past. */
+export function formatTimeUntil(endIso: string | null | undefined, now = Date.now()): string | null {
+  if (!endIso) return null;
+  const end = Date.parse(endIso);
+  if (Number.isNaN(end)) return null;
+  const left = end - now;
+  if (left <= 0) return null;
+  const mins = Math.max(1, Math.floor(left / 60000));
+  const d = Math.floor(mins / 1440);
+  const h = Math.floor((mins % 1440) / 60);
+  const m = mins % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+/** F004: how long a card shows the "Updated" badge after a bundle replace (7 days). */
+export const UPDATED_BADGE_MS = 7 * 24 * 3600 * 1000;
+/** F004: tolerated clock skew for a `lastUpdatedAt` slightly in the future. */
+const UPDATED_BADGE_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * F004: true while `lastUpdatedAt` is a valid timestamp less than {@link UPDATED_BADGE_MS} ago.
+ * A timestamp up to 5 minutes in the future (clock skew) also counts. Missing (older servers) or null → false.
+ */
+export function isRecentlyUpdated(game: { lastUpdatedAt?: string | null }, now = Date.now()): boolean {
+  const iso = game?.lastUpdatedAt;
+  if (typeof iso !== "string" || !iso) return false;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return false;
+  const age = now - t;
+  return age >= -UPDATED_BADGE_SKEW_MS && age < UPDATED_BADGE_MS;
+}
+
+/** F004: max length of release notes (Unicode scalar values, checked server-side too). */
+export const RELEASE_NOTES_MAX = 1000;
+
+/** F004: query value that scrolls the game page to its "What's new" panel (works with HashRouter too). */
+export const VERSIONS_SECTION = "versions";
+
+/** F004: link to a game's version history (`?section=versions`, not a `#hash`, so it works under HashRouter). */
+export function gameVersionsPath(gameId: string): string {
+  return `/games/${encodeURIComponent(gameId)}?section=${VERSIONS_SECTION}`;
+}
+
+/** F004: copy for a 409 on bundle replace (a stale `expectedVersion` or a lost concurrent upload). */
+export const REPLACE_CONFLICT_MESSAGE = "This game was updated to a newer version since you opened this page. Reload and try again.";
+
+/** F004: a 422 whose message is about the release notes (shown under the notes textarea). */
+export function isNotesError(e: unknown): boolean {
+  return isApiError(e) && e.code === "validation" && /notes/i.test(e.message);
+}

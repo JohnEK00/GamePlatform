@@ -927,8 +927,11 @@ async fn rate_limits() {
     let r = login().await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(r.error_code(), "rate_limited");
-    let retry: u64 = r.header("retry-after").parse().unwrap();
-    assert!((1..=6).contains(&retry), "{retry}");
+    // 10/min: one token every 6 s (M2: the clock is frozen, so this is exact).
+    assert_eq!(r.header("retry-after"), "6");
+    t.clock.advance(std::time::Duration::from_secs(6));
+    assert_eq!(login().await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(login().await.status, StatusCode::TOO_MANY_REQUESTS);
 
     // Per-user buckets: save PUT 60/min.
     let g = t.create_game(&a, "RL", "", true).await;
@@ -943,7 +946,12 @@ async fn rate_limits() {
         .json(Method::PUT, &url, Some(&a), json!({"data": {}}))
         .await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
-    assert!(!r.header("retry-after").is_empty());
+    assert_eq!(r.header("retry-after"), "1");
+    t.clock.advance(std::time::Duration::from_secs(1));
+    let r = t
+        .json(Method::PUT, &url, Some(&a), json!({"data": {}}))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
     let r = t
         .json(Method::PUT, &url, Some(&b), json!({"data": {}}))
         .await;
@@ -1052,10 +1060,12 @@ async fn rate_limit_429_exposes_retry_after_to_cors() {
         r.header("access-control-allow-origin"),
         "http://localhost:5173"
     );
-    assert_eq!(
+    // F013 exposes more headers (X-Game-Version, Content-Disposition) next to Retry-After.
+    assert!(
         r.header("access-control-expose-headers")
-            .to_ascii_lowercase(),
-        "retry-after"
+            .to_ascii_lowercase()
+            .split(',')
+            .any(|h| h.trim() == "retry-after")
     );
 }
 

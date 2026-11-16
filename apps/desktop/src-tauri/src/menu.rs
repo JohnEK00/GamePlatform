@@ -1,6 +1,10 @@
 //! Native application menu. Window actions (reload, fullscreen, devtools, about, quit) run in Rust;
 //! navigation items are forwarded to the webview as a `MENU_EVENT` event whose payload is the item id
-//! (`"upload"`, `"open-folder"`, `"settings"`, `"docs"`), handled in src/nativeMenu.ts.
+//! (`"upload"`, `"open-folder"`, `"settings"`, `"feed"`, `"notifications"`, `"docs"`, `"screenshot"`, `"controls"`),
+//! handled in src/nativeMenu.ts. `"notifications"` is View → Notifications (`CmdOrCtrl+Shift+N`, F007).
+//! `"screenshot"` (View → Take Screenshot, `CmdOrCtrl+Shift+S`) is a native accelerator, so it fires even while
+//! the sandboxed game iframe has focus; the webview turns it into `PLAYER_SCREENSHOT_EVENT`. Likewise
+//! `"controls"` (View → Controls, `CmdOrCtrl+Shift+K`) becomes `PLAYER_CONTROLS_EVENT` (opens the controls panel).
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -12,7 +16,16 @@ use tauri_plugin_dialog::DialogExt;
 pub const MENU_EVENT: &str = "app-menu";
 const MAIN_WINDOW: &str = "main";
 /// Ids forwarded to the webview.
-const FORWARDED: &[&str] = &["upload", "open-folder", "settings", "docs"];
+const FORWARDED: &[&str] = &[
+    "upload",
+    "open-folder",
+    "settings",
+    "feed",
+    "notifications",
+    "docs",
+    "screenshot",
+    "controls",
+];
 
 /// The F11 menu accelerator and the webview's F11 key listener can both fire for one key press;
 /// toggles closer together than this are treated as one.
@@ -52,7 +65,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let quit = quit.accelerator("CmdOrCtrl+Q");
     let file = SubmenuBuilder::new(app, "&File")
         .item(&MenuItemBuilder::with_id("upload", "&Upload game").build(app)?)
-        .item(&MenuItemBuilder::with_id("open-folder", "&Open local game folder…").accelerator("CmdOrCtrl+O").build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("open-folder", "&Open local game folder…")
+                .accelerator("CmdOrCtrl+O")
+                .build(app)?,
+        )
         .separator()
         .item(&MenuItemBuilder::with_id("settings", "&Settings").build(app)?)
         .separator()
@@ -60,8 +77,37 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .build()?;
 
     let view = SubmenuBuilder::new(app, "&View")
-        .item(&MenuItemBuilder::with_id("reload", "&Reload").accelerator("CmdOrCtrl+R").build(app)?)
-        .item(&MenuItemBuilder::with_id("fullscreen", "Toggle &Fullscreen").accelerator("F11").build(app)?);
+        .item(
+            &MenuItemBuilder::with_id("feed", "F&eed")
+                .accelerator("CmdOrCtrl+Shift+F")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("notifications", "&Notifications")
+                .accelerator("CmdOrCtrl+Shift+N")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("screenshot", "Take &Screenshot")
+                .accelerator("CmdOrCtrl+Shift+S")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("controls", "&Controls")
+                .accelerator("CmdOrCtrl+Shift+K")
+                .build(app)?,
+        )
+        .separator()
+        .item(
+            &MenuItemBuilder::with_id("reload", "&Reload")
+                .accelerator("CmdOrCtrl+R")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("fullscreen", "Toggle &Fullscreen")
+                .accelerator("F11")
+                .build(app)?,
+        );
     #[cfg(debug_assertions)]
     let view = view
         .separator()
@@ -141,7 +187,18 @@ mod tests {
         let t = FullscreenToggle::default();
         let start = Instant::now();
         assert!(t.should_toggle(start));
-        assert!(!t.should_toggle(start + Duration::from_millis(100)), "double fire is ignored");
+        assert!(
+            !t.should_toggle(start + Duration::from_millis(100)),
+            "double fire is ignored"
+        );
         assert!(t.should_toggle(start + Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn feed_is_forwarded_to_the_webview() {
+        assert!(FORWARDED.contains(&"feed"));
+        assert!(FORWARDED.contains(&"screenshot"));
+        assert!(FORWARDED.contains(&"controls"));
+        assert!(FORWARDED.contains(&"notifications"));
     }
 }

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Pixelforge Arcade desktop app"
 authors = ["Pixelforge"]
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.90"
 
 [lib]
 # Distinct lib name avoids a Windows name clash between the bin and lib outputs.
@@ -13,6 +13,11 @@ name = "pixelforge_arcade_lib"
 # Re-add it if an iOS target is ever set up (`tauri ios init`).
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Native OS notifications (F007). Build without them (smaller target dir) with `--no-default-features`.
+default = ["os-notifications"]
+os-notifications = ["dep:tauri-plugin-notification"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -20,6 +25,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-window-state = "2"
+# Used from Rust only (notify.rs); the webview gets no notification:* permission.
+tauri-plugin-notification = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -29,3 +36,11 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+# Keep debug builds small on disk: line tables keep readable backtraces,
+# dependencies carry no debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

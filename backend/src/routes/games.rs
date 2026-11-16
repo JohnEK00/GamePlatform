@@ -2,22 +2,28 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::Row;
 
 use crate::AppState;
+use crate::activity;
 use crate::auth::{AuthUser, MaybeAuthUser};
 use crate::bundle::{self, AchievementMeta, BundleMeta};
 use crate::error::{AppError, AppResult};
+use crate::export::{self, ExportError};
 use crate::extract::{ApiJson, ApiMultipart, ApiPath, ApiQuery};
 use crate::models::{
-    AchievementDef, GAME_SELECT, Game, GameRow, GameSummary, Page, achievement_icon_url,
-    game_row_from_row, now_rfc3339, rating_avg,
+    AchievementDef, GAME_SELECT, Game, GameRow, GameSummary, GameVersion, Page,
+    achievement_icon_url, game_row_from_row, now_rfc3339, rating_avg,
 };
-use crate::ratelimit::Limit;
+use crate::ratelimit::{ClientIp, Limit, key_for};
+use crate::routes::GAME_VERSION_HEADER;
 use crate::storage::validate_image;
+use crate::trending;
+use crate::versions;
 
 pub const TITLE_MAX: usize = 80;
 pub const DESCRIPTION_MAX: usize = 5000;
@@ -113,7 +119,26 @@ pub async fn build_game(state: &AppState, id: &str, viewer: Option<&str>) -> App
     let rating = my_rating(state, id, viewer).await?;
     let fav = is_favorite(state, id, viewer).await?;
     let achievements = achievement_defs(state, id).await?;
-    Ok(row.game(rating, viewer, fav, achievements))
+    let latest = latest_version(state, &row).await?;
+    Ok(row.game(rating, viewer, fav, achievements, latest))
+}
+
+/// F004: the current version's `game_versions` row (synthesised if missing).
+async fn latest_version(state: &AppState, row: &GameRow) -> AppResult<GameVersion> {
+    let found: Option<(String, String)> = sqlx::query_as(
+        "SELECT notes, created_at FROM game_versions WHERE game_id = ? AND version = ?",
+    )
+    .bind(&row.id)
+    .bind(row.version)
+    .fetch_optional(&state.db)
+    .await?;
+    let (notes, created_at) = found.unwrap_or_else(|| (String::new(), row.updated_at.clone()));
+    Ok(GameVersion {
+        version: row.version,
+        notes,
+        created_at,
+        current: true,
+    })
 }
 
 /// Replace the achievement definitions of a game. Unlocks of ids that still exist are kept;
@@ -150,6 +175,27 @@ async fn sync_achievements(
         .execute(&mut *tx)
         .await?;
     }
+    Ok(())
+}
+
+/// F004: write a `game_versions` row (part of the caller's main write, not best effort).
+async fn insert_version_row(
+    tx: &mut sqlx::SqliteConnection,
+    game_id: &str,
+    version: i64,
+    notes: &str,
+    created_at: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT OR REPLACE INTO game_versions (game_id, version, notes, created_at) \
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(game_id)
+    .bind(version)
+    .bind(notes)
+    .bind(created_at)
+    .execute(&mut *tx)
+    .await?;
     Ok(())
 }
 
@@ -258,6 +304,8 @@ pub struct NewGame {
     pub description: String,
     pub tags: Vec<String>,
     pub published: bool,
+    /// F004: version 1's release notes (already parsed with `versions::parse_notes`).
+    pub notes: String,
 }
 
 /// Validate + extract a bundle and insert a new game. Returns the new game id.
@@ -270,6 +318,7 @@ pub async fn create_game_record(
 ) -> AppResult<String> {
     let id = uuid::Uuid::new_v4().to_string();
     let game_dir = state.storage.game_dir(&id);
+    let published = new.published;
     let result: AppResult<()> = async {
         let (meta, staging) = extract_bundle(state, &id, bundle_bytes).await?;
         let title = match new.title {
@@ -283,7 +332,9 @@ pub async fn create_game_record(
         let mut tx = state.db.begin().await?;
         sqlx::query(
             "INSERT INTO games (id, owner_id, title, description, published, version, entry, \
-             width, height, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+             width, height, score_order, score_format, score_label, actions_json, \
+             controls_hint, created_at, updated_at, first_published_at) \
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(owner_id)
@@ -293,12 +344,24 @@ pub async fn create_game_record(
         .bind(&meta.entry)
         .bind(meta.width)
         .bind(meta.height)
+        .bind(&meta.leaderboard.order)
+        .bind(&meta.leaderboard.format)
+        .bind(&meta.leaderboard.label)
+        .bind(meta.actions_json())
+        .bind(&meta.controls_hint)
         .bind(&now)
         .bind(&now)
+        .bind(new.published.then_some(&now))
         .execute(&mut *tx)
         .await?;
         replace_tags(&mut tx, &id, &new.tags).await?;
         sync_achievements(&mut tx, &id, &meta.achievements).await?;
+        insert_version_row(&mut tx, &id, 1, &new.notes, &now).await?;
+        if new.published {
+            activity::record_game_published(&mut tx, &id, owner_id, 1).await;
+            // F007 L2: queued with the publish; fanned out in the background after commit.
+            crate::notifications::queue_game_published(&mut tx, &id, owner_id, &now).await?;
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -306,6 +369,11 @@ pub async fn create_game_record(
     if let Err(e) = result {
         let _ = tokio::fs::remove_dir_all(&game_dir).await;
         return Err(e);
+    }
+    if published {
+        // F007 L2: published at creation is the first publish; followers are notified in the
+        // background after the commit.
+        state.fan_out.kick(&state.db);
     }
 
     if let Some((bytes, ext)) = thumbnail {
@@ -383,15 +451,24 @@ fn like_pattern(s: &str) -> String {
     format!("%{escaped}%")
 }
 
-pub async fn list_games(
-    State(state): State<AppState>,
-    viewer: MaybeAuthUser,
-    ApiQuery(query): ApiQuery<ListQuery>,
-) -> AppResult<Json<Page<GameSummary>>> {
-    let (page, per_page) = parse_paging(query.page.as_deref(), query.per_page.as_deref(), 24)?;
-
+/// `WHERE` clause (over `games g` only, no joins) and its binds for the list filters.
+/// Each shape is index-backed (migration 0004): owner via `idx_games_owner_pub_new` after
+/// resolving the username through `users.username_lower`, tag via `idx_game_tags_tag_game`.
+pub fn list_filter(query: &ListQuery, viewer: Option<&str>) -> AppResult<(String, Vec<String>)> {
     let mut conds: Vec<&str> = Vec::new();
     let mut binds: Vec<String> = Vec::new();
+    let tag = query
+        .tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    // With a tag, drive the query from the tag's games (`+` keeps SQLite from walking the
+    // whole published index instead and probing each game against the tag list).
+    let published = if tag.is_some() {
+        "+g.published = 1"
+    } else {
+        "g.published = 1"
+    };
 
     match query
         .owner
@@ -400,24 +477,19 @@ pub async fn list_games(
         .filter(|s| !s.is_empty())
     {
         Some("me") => {
-            let uid = viewer.id().ok_or_else(AppError::unauthorized)?;
+            let uid = viewer.ok_or_else(AppError::unauthorized)?;
             conds.push("g.owner_id = ?");
             binds.push(uid.to_string());
         }
         Some(username) => {
-            conds.push("g.published = 1");
-            conds.push("u.username_lower = ?");
+            conds.push("g.owner_id = (SELECT id FROM users WHERE username_lower = ?)");
             binds.push(username.to_ascii_lowercase());
+            conds.push("g.published = 1");
         }
-        None => conds.push("g.published = 1"),
+        None => conds.push(published),
     }
-    if let Some(tag) = query
-        .tag
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        conds.push("EXISTS (SELECT 1 FROM game_tags t WHERE t.game_id = g.id AND t.tag = ?)");
+    if let Some(tag) = tag {
+        conds.push("g.id IN (SELECT t.game_id FROM game_tags t WHERE t.tag = ?)");
         binds.push(tag.to_lowercase());
     }
     if let Some(q) = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -430,47 +502,69 @@ pub async fn list_games(
         binds.push(pat.clone());
         binds.push(pat.to_lowercase());
     }
+    Ok((format!("WHERE {}", conds.join(" AND ")), binds))
+}
 
-    let order = match query.sort.as_deref().map(str::trim).unwrap_or("") {
+/// F003 `sort=trending` order (needs `GAME_SELECT`'s `plays_week` alias).
+pub const TRENDING_ORDER: &str = "COALESCE((SELECT tr.score FROM game_trending tr WHERE tr.game_id = g.id), 0) DESC, \
+     plays_week DESC, g.plays DESC, g.created_at DESC, g.id";
+
+/// `ORDER BY` for `sort`; each matches an index of migration 0004 column for column.
+pub fn list_order(sort: Option<&str>) -> AppResult<&'static str> {
+    Ok(match sort.map(str::trim).unwrap_or("") {
         "" | "new" => "g.created_at DESC, g.id",
         "popular" => "g.plays DESC, g.created_at DESC, g.id",
-        "favorites" => "favorites DESC, g.created_at DESC, g.id",
-        // Bayesian-style average: pulls games with few ratings toward a prior of 3.0 (weight 2).
-        "top" => {
-            "((g.rating_sum + 6.0) / (g.rating_count + 2.0)) DESC, g.rating_count DESC, \
-             g.created_at DESC, g.id"
-        }
+        "favorites" => "g.favorites_count DESC, g.created_at DESC, g.id",
+        // Bayesian-style average: pulls games with few ratings toward a prior of 3.0 (weight
+        // 2). `rating_score` is the generated column (rating_sum + 6.0) / (rating_count + 2.0).
+        "top" => "g.rating_score DESC, g.rating_count DESC, g.created_at DESC, g.id",
+        // F003: snapshot score, then `plays_week` (the GAME_SELECT alias), then all-time plays.
+        "trending" => TRENDING_ORDER,
         other => {
             return Err(AppError::BadRequest(format!(
-                "Unknown sort '{other}' (expected new, popular, top or favorites)"
+                "Unknown sort '{other}' (expected new, popular, top, favorites or trending)"
             )));
         }
-    };
+    })
+}
 
-    let where_sql = format!("WHERE {}", conds.join(" AND "));
-
-    let count_sql =
-        format!("SELECT COUNT(*) FROM games g JOIN users u ON u.id = g.owner_id {where_sql}");
-    let mut cq = sqlx::query_scalar::<_, i64>(&count_sql);
-    for b in &binds {
-        cq = cq.bind(b);
+pub async fn list_games(
+    State(state): State<AppState>,
+    viewer: MaybeAuthUser,
+    ApiQuery(query): ApiQuery<ListQuery>,
+) -> AppResult<Json<Page<GameSummary>>> {
+    let (page, per_page) = parse_paging(query.page.as_deref(), query.per_page.as_deref(), 24)?;
+    let (where_sql, binds) = list_filter(&query, viewer.id())?;
+    let order = list_order(query.sort.as_deref())?;
+    if order == TRENDING_ORDER {
+        trending::ensure_fresh(&state).await;
     }
-    let total = cq.fetch_one(&state.db).await?;
 
     let sql = format!("{GAME_SELECT} {where_sql} ORDER BY {order} LIMIT ? OFFSET ?");
+    let offset = (page - 1) * per_page;
     let mut q = sqlx::query(&sql);
     for b in &binds {
         q = q.bind(b);
     }
-    let rows = q
-        .bind(per_page)
-        .bind((page - 1) * per_page)
-        .fetch_all(&state.db)
-        .await?;
+    let rows = q.bind(per_page).bind(offset).fetch_all(&state.db).await?;
     let items = rows
         .iter()
         .map(|r| game_row_from_row(r).map(|g| g.summary()))
         .collect::<Result<Vec<_>, _>>()?;
+
+    // A short non-empty page (or a short first page) already gives the total; only count
+    // when the page is full or past the end.
+    let n = items.len() as i64;
+    let total = if n < per_page && (n > 0 || page == 1) {
+        offset + n
+    } else {
+        let count_sql = format!("SELECT COUNT(*) FROM games g {where_sql}");
+        let mut cq = sqlx::query_scalar::<_, i64>(&count_sql);
+        for b in &binds {
+            cq = cq.bind(b);
+        }
+        cq.fetch_one(&state.db).await?
+    };
 
     Ok(Json(Page {
         items,
@@ -500,10 +594,12 @@ pub async fn create_game(
     let mut published = true;
     let mut bundle_bytes: Option<Vec<u8>> = None;
     let mut thumbnail: Option<Vec<u8>> = None;
+    let mut notes = String::new();
 
     while let Some(field) = multipart.next_field().await? {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
+            "notes" => notes = versions::read_notes_field(field).await?,
             "title" => {
                 let t = field.text().await?;
                 if !t.trim().is_empty() {
@@ -544,6 +640,7 @@ pub async fn create_game(
         description,
         tags,
         published,
+        notes,
     };
     let id = create_game_record(&state, &user.id, new, bundle_bytes, thumbnail).await?;
     let game = build_game(&state, &id, Some(&user.id)).await?;
@@ -588,7 +685,34 @@ pub async fn update_game(
     if let Some(tags) = tags {
         replace_tags(&mut tx, &id, &tags).await?;
     }
+    // F002: the first publish (ever) emits `gamePublished`; re-publishing never does.
+    let mut first_publish = false;
+    if body.published == Some(true) && !game.published {
+        let first = sqlx::query(
+            "UPDATE games SET first_published_at = ? \
+             WHERE id = ? AND published = 1 AND first_published_at IS NULL",
+        )
+        .bind(now_rfc3339())
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+        if first.rows_affected() == 1 {
+            activity::record_game_published(&mut tx, &id, &game.owner_id, game.version).await;
+            crate::notifications::queue_game_published(
+                &mut tx,
+                &id,
+                &game.owner_id,
+                &now_rfc3339(),
+            )
+            .await?;
+            first_publish = true;
+        }
+    }
     tx.commit().await?;
+    if first_publish {
+        // F007 L2: in the background after the commit (resumable via notification_fanouts).
+        state.fan_out.kick(&state.db);
+    }
 
     Ok(Json(build_game(&state, &id, Some(&user.id)).await?))
 }
@@ -602,21 +726,55 @@ pub async fn upload_bundle(
     let game = fetch_owned_game(&state, &id, &user.id).await?;
     limit_user(&state, Limit::Upload, &user.id)?;
     let mut bundle_bytes = None;
+    let mut notes = String::new();
+    let mut expected_version: Option<i64> = None;
+    // F004: `notes` and `expectedVersion` are validated here, before the claim/extraction.
     while let Some(field) = multipart.next_field().await? {
-        if field.name() == Some("bundle") {
-            let b = field.bytes().await?;
-            check_bundle_size(&b)?;
-            bundle_bytes = Some(b.to_vec());
+        match field.name() {
+            Some("bundle") => {
+                let b = field.bytes().await?;
+                check_bundle_size(&b)?;
+                bundle_bytes = Some(b.to_vec());
+            }
+            Some("notes") => notes = versions::read_notes_field(field).await?,
+            Some("expectedVersion") => {
+                expected_version = Some(versions::parse_positive(
+                    &field.text().await?,
+                    "expectedVersion",
+                )?);
+            }
+            _ => {}
         }
     }
     let bytes = bundle_bytes
         .filter(|b| !b.is_empty())
         .ok_or_else(|| AppError::validation("bundle (zip) is required"))?;
 
+    // R1: one replace per game at a time. A concurrent replace (or one that started from a
+    // version that is no longer current) gets 409 and never touches the live files.
+    let conflict = || AppError::Conflict("The game was updated concurrently; please retry".into());
+    let _claim = state.bundle_locks.try_claim(&id).ok_or_else(conflict)?;
+    let current: Option<i64> = sqlx::query_scalar("SELECT version FROM games WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await?;
+    let old_version = match current {
+        Some(v) if expected_version.is_some_and(|ev| ev != v) => {
+            return Err(AppError::Conflict(format!(
+                "The game is at v{v}; reload and retry"
+            )));
+        }
+        Some(v) if v == game.version => v,
+        Some(_) => return Err(conflict()),
+        None => return Err(AppError::not_found("Game")),
+    };
+
+    // Extract into a unique staging dir; only this request (holding the claim) may then
+    // create `v{new}`.
     let (meta, staging) = extract_bundle(&state, &id, bytes).await?;
-    let old_version = game.version;
     let new_version = old_version + 1;
     let new_dir = state.storage.version_dir(&id, new_version);
+    // A leftover `v{new}` can only come from a crashed earlier attempt (it never went live).
     let _ = tokio::fs::remove_dir_all(&new_dir).await;
     if let Err(e) = tokio::fs::rename(&staging, &new_dir).await {
         let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -624,37 +782,61 @@ pub async fn upload_bundle(
     }
 
     let res: AppResult<bool> = async {
+        // One timestamp for `updated_at`, the version row and `last_updated_at`.
+        let now = now_rfc3339();
         let mut tx = state.db.begin().await?;
-        let r = sqlx::query(
-            "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, updated_at = ? \
-             WHERE id = ? AND version = ?",
+        // N10: `published` is read inside the transaction (the owner may have unpublished
+        // since the request read the game); it decides `last_updated_at` and `gameUpdated`.
+        let published: Option<bool> = sqlx::query_scalar(
+            "UPDATE games SET version = ?, entry = ?, width = ?, height = ?, score_order = ?, \
+             score_format = ?, score_label = ?, actions_json = ?, controls_hint = ?, \
+             updated_at = ? WHERE id = ? AND version = ? \
+             RETURNING published",
         )
         .bind(new_version)
         .bind(&meta.entry)
         .bind(meta.width)
         .bind(meta.height)
-        .bind(now_rfc3339())
+        .bind(&meta.leaderboard.order)
+        .bind(&meta.leaderboard.format)
+        .bind(&meta.leaderboard.label)
+        .bind(meta.actions_json())
+        .bind(&meta.controls_hint)
+        .bind(&now)
         .bind(&id)
         .bind(old_version)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        if r.rows_affected() != 1 {
+        let Some(published) = published else {
             return Ok(false);
-        }
+        };
         sync_achievements(&mut tx, &id, &meta.achievements).await?;
+        insert_version_row(&mut tx, &id, new_version, &notes, &now).await?;
+        if published {
+            sqlx::query("UPDATE games SET last_updated_at = ? WHERE id = ?")
+                .bind(&now)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+            activity::record_game_updated(&mut tx, &id, &game.owner_id, new_version).await;
+        }
         tx.commit().await?;
         Ok(true)
     }
     .await;
     match res {
         Ok(true) => {
+            // Only after the commit: the old version is no longer referenced.
             let _ = tokio::fs::remove_dir_all(state.storage.version_dir(&id, old_version)).await;
+            // L4: a changed `leaderboard.order` only marked the game's bests stale (boards use
+            // the fallback meanwhile); they are rebuilt outside the replace transaction.
+            if meta.leaderboard.order != game.leaderboard.order {
+                crate::bests::spawn_rebuild(&state);
+            }
         }
         Ok(false) => {
             let _ = tokio::fs::remove_dir_all(&new_dir).await;
-            return Err(AppError::Conflict(
-                "The game was updated concurrently; please retry".into(),
-            ));
+            return Err(conflict());
         }
         Err(e) => {
             let _ = tokio::fs::remove_dir_all(&new_dir).await;
@@ -665,6 +847,96 @@ pub async fn upload_bundle(
     Ok(Json(build_game(&state, &id, Some(&user.id)).await?))
 }
 
+/// F013 `GET /api/games/{id}/bundle` (owner only): the current version's stored files as a
+/// zip. Never takes the R1 `bundle_locks` claim, so it can't make a replace fail; a replace
+/// that lands during the build turns into a 409 here instead.
+pub async fn download_bundle(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Response> {
+    let game = fetch_owned_game(&state, &id, &user.id).await?;
+    limit_user(&state, Limit::BundleDownload, &user.id)?;
+    let Ok(permit) = state.export_slots.clone().try_acquire_owned() else {
+        let mut res = AppError::ServiceUnavailable(
+            "The server is busy preparing downloads; try again shortly".into(),
+        )
+        .into_response();
+        res.headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(5u32));
+        return Ok(res);
+    };
+
+    let version = game.version;
+    let created_at: Option<String> = sqlx::query_scalar(
+        "SELECT created_at FROM game_versions WHERE game_id = ? AND version = ?",
+    )
+    .bind(&id)
+    .bind(version)
+    .fetch_optional(&state.db)
+    .await?;
+    let date = created_at
+        .as_deref()
+        .and_then(export::zip_date)
+        .or_else(|| export::zip_date(&game.updated_at))
+        .unwrap_or_default();
+    let dir = state.storage.version_dir(&id, version);
+    let built = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        export::build_bundle_zip(&dir, date)
+    })
+    .await?;
+
+    let now: Option<i64> = sqlx::query_scalar("SELECT version FROM games WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await?;
+    let conflict =
+        || AppError::Conflict("The game was updated while preparing the download; retry".into());
+    match now {
+        None => return Err(AppError::not_found("Game")),
+        Some(v) if v != version => return Err(conflict()),
+        Some(_) => {}
+    }
+    let bytes = match built {
+        Ok(b) => b,
+        Err(ExportError::Vanished) => return Err(conflict()),
+        Err(ExportError::TooLarge) => {
+            return Err(AppError::PayloadTooLarge(
+                "The bundle is too large to download".into(),
+            ));
+        }
+        Err(e) => return Err(AppError::Internal(format!("export: {e}"))),
+    };
+
+    let disposition = format!(
+        "attachment; filename=\"{}-v{version}.zip\"",
+        export::download_slug(&game.title)
+    );
+    let headers = [
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/zip"),
+        ),
+        (
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(&disposition)
+                .map_err(|e| AppError::Internal(format!("header: {e}")))?,
+        ),
+        (
+            HeaderName::from_static(GAME_VERSION_HEADER),
+            HeaderValue::from(version),
+        ),
+        (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        (
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ),
+        (header::CONTENT_LENGTH, HeaderValue::from(bytes.len())),
+    ];
+    Ok((headers, bytes).into_response())
+}
+
 pub async fn upload_thumbnail(
     State(state): State<AppState>,
     user: AuthUser,
@@ -672,6 +944,7 @@ pub async fn upload_thumbnail(
     ApiMultipart(mut multipart): ApiMultipart,
 ) -> AppResult<Json<Game>> {
     fetch_owned_game(&state, &id, &user.id).await?;
+    limit_user(&state, Limit::Image, &user.id)?;
     let mut thumb = None;
     while let Some(field) = multipart.next_field().await? {
         if field.name() == Some("thumbnail") {
@@ -698,10 +971,18 @@ pub async fn delete_game(
 
 /// Delete a game row (cascades) and its files.
 pub async fn remove_game(state: &AppState, id: &str) -> AppResult<()> {
+    // F005: the screenshot rows cascade; collect their ids first to remove the files.
+    let shots: Vec<(String,)> = sqlx::query_as("SELECT id FROM screenshots WHERE game_id = ?")
+        .bind(id)
+        .fetch_all(&state.db)
+        .await?;
     sqlx::query("DELETE FROM games WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await?;
+    for (sid,) in &shots {
+        crate::screenshots::remove_screenshot_files(&state.storage, sid).await;
+    }
     let _ = tokio::fs::remove_dir_all(state.storage.game_dir(id)).await;
     let thumbs = state.storage.thumbnails_dir();
     state.storage.remove_images(&thumbs, id).await;
@@ -713,29 +994,57 @@ pub struct PlaysResponse {
     pub plays: i64,
 }
 
+/// POST /api/games/{id}/play. Rate limited (`Limit::Play`, per user or IP), and at most one
+/// play per (game, viewer) is counted per [`crate::ratelimit::PLAY_DEDUPE_WINDOW`] (10 min); a deduplicated call still
+/// returns 200 with the current count.
 pub async fn record_play(
     State(state): State<AppState>,
     viewer: MaybeAuthUser,
+    ip: ClientIp,
     ApiPath(id): ApiPath<String>,
 ) -> AppResult<Json<PlaysResponse>> {
+    let key = key_for(viewer.id(), &ip);
+    state.limiter.check(Limit::Play, &key)?;
     fetch_visible_game(&state, &id, viewer.id()).await?;
-    let now = chrono::Utc::now();
-    let mut tx = state.db.begin().await?;
-    let plays: i64 =
-        sqlx::query_scalar("UPDATE games SET plays = plays + 1 WHERE id = ? RETURNING plays")
+    if !state.play_dedupe.should_count(&id, &key) {
+        let plays: i64 = sqlx::query_scalar("SELECT plays FROM games WHERE id = ?")
             .bind(&id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&state.db)
             .await?
             .ok_or_else(|| AppError::not_found("Game"))?;
-    sqlx::query("INSERT INTO play_events (game_id, user_id, day, created_at) VALUES (?, ?, ?, ?)")
+        return Ok(Json(PlaysResponse { plays }));
+    }
+    let now = chrono::Utc::now();
+    let res: AppResult<i64> = async {
+        let mut tx = state.db.begin().await?;
+        let plays: i64 =
+            sqlx::query_scalar("UPDATE games SET plays = plays + 1 WHERE id = ? RETURNING plays")
+                .bind(&id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or_else(|| AppError::not_found("Game"))?;
+        sqlx::query(
+            "INSERT INTO play_events (game_id, user_id, day, created_at, viewer_key) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
         .bind(&id)
         .bind(viewer.id())
         .bind(now.format("%Y-%m-%d").to_string())
         .bind(now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .bind(trending::viewer_key(&state.config, viewer.id(), &ip.0))
         .execute(&mut *tx)
         .await?;
-    tx.commit().await?;
-    Ok(Json(PlaysResponse { plays }))
+        tx.commit().await?;
+        Ok(plays)
+    }
+    .await;
+    match res {
+        Ok(plays) => Ok(Json(PlaysResponse { plays })),
+        Err(e) => {
+            state.play_dedupe.forget(&id, &key);
+            Err(e)
+        }
+    }
 }
 
 #[derive(Deserialize)]

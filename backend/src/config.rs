@@ -24,6 +24,42 @@ pub struct Config {
     /// Number of trusted reverse-proxy hops in front of the server (`TRUST_PROXY`; `true` = 1,
     /// off = 0). When > 0 the client IP is the n-th `X-Forwarded-For` entry from the right.
     pub trust_proxy: usize,
+    /// Trending refresh cadence (`TRENDING_TTL_SECS`, default 600): a background task refreshes
+    /// the snapshot every TTL. 0 = no background task; every trending/related read refreshes
+    /// inline instead (tests).
+    pub trending_ttl: std::time::Duration,
+    /// F007: `pollAfterSecs` of `GET /api/notifications/unread-count`
+    /// (`NOTIFICATION_POLL_SECS`, default 60, 15-600).
+    pub notification_poll_secs: u64,
+}
+
+pub const DEFAULT_TRENDING_TTL_SECS: u64 = 600;
+
+/// `TRENDING_TTL_SECS`: unset → 600, otherwise a non-negative integer number of seconds.
+pub fn parse_trending_ttl(value: Option<&str>) -> Result<std::time::Duration, String> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(std::time::Duration::from_secs(DEFAULT_TRENDING_TTL_SECS)),
+        Some(v) => v
+            .parse::<u64>()
+            .map(std::time::Duration::from_secs)
+            .map_err(|_| format!("TRENDING_TTL_SECS must be a non-negative integer, got {v:?}")),
+    }
+}
+
+pub const DEFAULT_NOTIFICATION_POLL_SECS: u64 = 60;
+
+/// `NOTIFICATION_POLL_SECS`: unset → 60, otherwise an integer 15-600.
+pub fn parse_notification_poll_secs(value: Option<&str>) -> Result<u64, String> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(DEFAULT_NOTIFICATION_POLL_SECS),
+        Some(v) => v
+            .parse::<u64>()
+            .ok()
+            .filter(|n| (15..=600).contains(n))
+            .ok_or_else(|| {
+                format!("NOTIFICATION_POLL_SECS must be an integer from 15 to 600, got {v:?}")
+            }),
+    }
 }
 
 pub fn parse_admin_usernames(list: &str) -> Vec<String> {
@@ -185,6 +221,10 @@ impl Config {
             ),
             rate_limit: env_flag("RATE_LIMIT", true),
             trust_proxy: parse_trust_proxy(env_nonempty("TRUST_PROXY").as_deref())?,
+            trending_ttl: parse_trending_ttl(env_nonempty("TRENDING_TTL_SECS").as_deref())?,
+            notification_poll_secs: parse_notification_poll_secs(
+                env_nonempty("NOTIFICATION_POLL_SECS").as_deref(),
+            )?,
         })
     }
 
@@ -208,13 +248,42 @@ impl Config {
             admin_usernames: Vec::new(),
             rate_limit: false,
             trust_proxy: 0,
+            trending_ttl: std::time::Duration::from_secs(DEFAULT_TRENDING_TTL_SECS),
+            notification_poll_secs: DEFAULT_NOTIFICATION_POLL_SECS,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_public_origin, parse_trust_proxy};
+    use super::{
+        parse_notification_poll_secs, parse_public_origin, parse_trending_ttl, parse_trust_proxy,
+    };
+
+    #[test]
+    fn notification_poll_secs_values() {
+        assert_eq!(parse_notification_poll_secs(None), Ok(60));
+        assert_eq!(parse_notification_poll_secs(Some(" 15 ")), Ok(15));
+        assert_eq!(parse_notification_poll_secs(Some("600")), Ok(600));
+        for bad in ["14", "601", "0", "-1", "1.5", "sixty"] {
+            let e = parse_notification_poll_secs(Some(bad)).expect_err(bad);
+            assert!(e.contains("NOTIFICATION_POLL_SECS"), "{e}");
+        }
+    }
+
+    #[test]
+    fn trending_ttl_values() {
+        use std::time::Duration;
+        assert_eq!(parse_trending_ttl(None), Ok(Duration::from_secs(600)));
+        assert_eq!(parse_trending_ttl(Some("0")), Ok(Duration::ZERO));
+        assert_eq!(
+            parse_trending_ttl(Some(" 30 ")),
+            Ok(Duration::from_secs(30))
+        );
+        for bad in ["-1", "1.5", "ten"] {
+            assert!(parse_trending_ttl(Some(bad)).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn trust_proxy_values() {

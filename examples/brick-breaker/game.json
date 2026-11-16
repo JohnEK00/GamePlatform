@@ -5,7 +5,13 @@
   "height": 600,
   "engine": "1",
   "description": "Smash glowing walls of bricks across six levels. Chain hits for combo multipliers, catch power-ups, and chase the high score.",
-  "controls": "Mouse/touch or Arrows/A/D move the paddle; click/tap/Space launches the ball and fires lasers; M mute; F3 debug overlay.",
+  "controls": "Mouse/touch or Arrows/A/D move the paddle; click/tap/Space/Enter launches the ball and fires lasers; M mute; F3 debug overlay. Remap keys with ⌨.",
+  "actions": [
+    { "id": "left", "name": "Paddle left", "keys": ["ArrowLeft", "KeyA"], "gamepad": ["Left"] },
+    { "id": "right", "name": "Paddle right", "keys": ["ArrowRight", "KeyD"], "gamepad": ["Right"] },
+    { "id": "launch", "name": "Launch / fire", "keys": ["Space", "Enter", "Mouse0"], "gamepad": ["A"] },
+    { "id": "mute", "name": "Mute", "keys": ["KeyM"] }
+  ],
   "achievements": [
     { "id": "first_brick", "name": "First Break", "description": "Smash your first brick.", "icon": "assets/ach_first_brick.png" },
     { "id": "wall_breaker", "name": "Wall Breaker", "description": "Clear the first level.", "icon": "assets/ach_level_clear.png" },

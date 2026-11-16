@@ -53,6 +53,17 @@ pub fn js_string_content(s: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
+/// F009: escape JSON text for use as a JS literal inside an HTML `<script>`: the same escapes
+/// as [`js_string_content`] (`<`, `>`, `&`, U+2028, U+2029 → `\uXXXX`). In valid JSON these
+/// characters only occur inside strings, where the escapes are equivalent.
+pub fn js_json_literal(json: &str) -> String {
+    json.replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
 /// Percent-encode a relative URL path, keeping `/` separators.
 pub fn encode_path(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
@@ -75,10 +86,12 @@ pub fn render_player_html(
     version: i64,
     width: i64,
     height: i64,
+    actions_json: &str,
 ) -> String {
     let origin = js_string_content(origin);
     let id = js_string_content(id);
     let entry = js_string_content(&encode_path(entry));
+    let actions = js_json_literal(actions_json);
     format!(
         r#"<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -88,7 +101,7 @@ pub fn render_player_html(
   import {{ boot }} from "{origin}/runtime/engine.js";
   const base = "{origin}/games/{id}/files/";
   const mod = await import(base + "{entry}?v={version}");
-  await boot(document.getElementById("game"), mod.default, {{ width: {width}, height: {height}, baseUrl: base }});
+  await boot(document.getElementById("game"), mod.default, {{ width: {width}, height: {height}, baseUrl: base, actions: {actions} }});
 </script></body></html>
 "#
     )
@@ -124,17 +137,136 @@ pub fn render_studio_html(origin: &str) -> String {
 <script type="module">
   const post = (msg) => {{ try {{ window.parent.postMessage(msg, "*"); }} catch (_) {{}} }};
   const toInt = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : undefined);
+  // blob: URL -> bundle-relative path, for error attribution.
+  const urlToFile = new Map();
   const reportError = (stage, err, pos) => {{
     const msg = {{ type: "webgame:error", message: stage + ": " + String((err && err.message) || err || "unknown error") }};
+    let file = (pos && pos.file) || (err && typeof err.file === "string" ? err.file : undefined);
     let line = pos && toInt(pos.line), column = pos && toInt(pos.column);
     if (line === undefined && err) {{ line = toInt(err.lineNumber); column = toInt(err.columnNumber); }}
     if (line === undefined && err && typeof err.stack === "string") {{
-      const m = /blob:[^\s)]*?:(\d+):(\d+)/.exec(err.stack);
-      if (m) {{ line = Number(m[1]); column = Number(m[2]); }}
+      const m = /(blob:[^\s)]*?):(\d+):(\d+)/.exec(err.stack);
+      if (m) {{ line = Number(m[2]); column = Number(m[3]); file = file || urlToFile.get(m[1]); }}
     }}
+    if (file !== undefined) msg.file = file;
     if (line !== undefined) msg.line = line;
     if (column !== undefined) msg.column = column;
     post(msg);
+  }};
+  // Module linker (GAME_FORMAT.md "Studio multi-file modules"): every JS module reachable
+  // from the entry gets a blob: URL; relative specifiers in static/dynamic imports and
+  // re-exports are rewritten to the dependency's blob URL, dependencies first.
+  const SPEC = /(?<![\w$.])(import\s*\(\s*|from\s*|import\s*)(["'])([^"'\r\n]*)\2/g;
+  const isJs = (p) => /\.m?js$/i.test(p);
+  const resolveSpec = (from, spec) => {{
+    const parts = from.split("/");
+    parts.pop();
+    for (const seg of spec.split("/")) {{
+      if (seg === "..") {{ if (!parts.length) return null; parts.pop(); }}
+      else if (seg !== "." && seg !== "") parts.push(seg);
+    }}
+    return parts.join("/");
+  }};
+  // Studio linker (N9): marks comments, string/template text and regex literals (1) so only
+  // import specifiers in real code are rewritten. `${{…}}` inside templates is code. A `/`
+  // starts a regex at the start, after an operator/bracket/`,`/`;`, or after a keyword
+  // such as `return`; otherwise it is division.
+  const codeMask = (src) => {{
+    const n = src.length, mask = new Uint8Array(n), tpl = [];
+    let depth = 0, prev = "", i = 0;
+    const KW = /(?:^|[^\w$])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/;
+    const regexOk = () => prev === "" || /[(,=:[!&|?{{}};+\-*%<>~^]/.test(prev) ||
+      (/[\w$]/.test(prev) && KW.test(src.slice(Math.max(0, i - 32), i).trimEnd()));
+    // Template text from i up to the closing backtick or the next "${{".
+    const tplText = () => {{
+      const s = i;
+      while (i < n && src[i] !== "`" && !(src[i] === "$" && src[i + 1] === "{{")) i += src[i] === "\\" ? 2 : 1;
+      if (i >= n) {{ mask.fill(1, s, n); return; }}
+      if (src[i] === "`") {{ i++; mask.fill(1, s, i); prev = "`"; return; }}
+      mask.fill(1, s, i);
+      i += 2;
+      tpl.push(depth++);
+      prev = "{{";
+    }};
+    while (i < n) {{
+      const c = src[i], d = src[i + 1];
+      if (c === "/" && d === "/") {{
+        const s = i;
+        while (i < n && src[i] !== "\n" && src[i] !== "\r") i++;
+        mask.fill(1, s, i);
+        continue;
+      }}
+      if (c === "/" && d === "*") {{
+        const s = i, e = src.indexOf("*/", i + 2);
+        i = e < 0 ? n : e + 2;
+        mask.fill(1, s, i);
+        continue;
+      }}
+      if (c === "'" || c === '"') {{
+        const s = i++;
+        while (i < n && src[i] !== c && src[i] !== "\n") i += src[i] === "\\" ? 2 : 1;
+        i = Math.min(i + 1, n);
+        mask.fill(1, s, i);
+        prev = c;
+        continue;
+      }}
+      if (c === "`") {{ mask[i++] = 1; tplText(); continue; }}
+      if (c === "/" && regexOk()) {{
+        const s = i++;
+        let cls = false;
+        while (i < n && src[i] !== "\n") {{
+          const ch = src[i];
+          if (ch === "\\") {{ i += 2; continue; }}
+          if (ch === "[") cls = true;
+          else if (ch === "]") cls = false;
+          else if (ch === "/" && !cls) break;
+          i++;
+        }}
+        i = Math.min(i + 1, n);
+        while (i < n && /[\w$]/.test(src[i])) i++;
+        mask.fill(1, s, i);
+        prev = ")";
+        continue;
+      }}
+      if (c === "{{") depth++;
+      else if (c === "}}") {{
+        depth--;
+        if (tpl.length && depth === tpl[tpl.length - 1]) {{ tpl.pop(); i++; tplText(); continue; }}
+      }}
+      if (!/\s/.test(c)) prev = c;
+      i++;
+    }}
+    return mask;
+  }};
+  const linkModules = (files, entry) => {{
+    const urls = new Map(), state = new Map(), stack = [];
+    const fail = (file, message) => {{ const e = new Error(message); e.file = file; throw e; }};
+    const visit = (file) => {{
+      if (state.get(file) === 2) return urls.get(file);
+      if (state.get(file) === 1) {{
+        const cycle = stack.slice(stack.indexOf(file)).concat(file).join(" -> ");
+        fail(stack[stack.length - 1], "Import cycle " + cycle + " (cyclic imports cannot run in the Studio preview)");
+      }}
+      state.set(file, 1);
+      stack.push(file);
+      const raw = String(files[file]), mask = codeMask(raw);
+      const src = raw.replace(new RegExp(SPEC.source, "g"), (m, kw, q, spec, offset) => {{
+        if (mask[offset] || (!spec.startsWith("./") && !spec.startsWith("../"))) return m;
+        const target = resolveSpec(file, spec.replace(/[?#].*$/, ""));
+        if (target === null) fail(file, "Import '" + spec + "' points outside the project");
+        if (typeof files[target] !== "string" || !isJs(target)) {{
+          fail(file, "Import '" + spec + "' not found: no JavaScript file '" + target + "' in the project");
+        }}
+        return kw + q + visit(target) + q;
+      }});
+      stack.pop();
+      state.set(file, 2);
+      const url = URL.createObjectURL(new Blob([src], {{ type: "text/javascript" }}));
+      urls.set(file, url);
+      urlToFile.set(url, file);
+      return url;
+    }};
+    return visit(entry);
   }};
   let boot;
   try {{
@@ -152,14 +284,27 @@ pub fn render_studio_html(origin: &str) -> String {
       const manifest = d.manifest || {{}};
       const files = d.files && typeof d.files === "object" ? d.files : {{}};
       const entry = typeof manifest.entry === "string" ? manifest.entry.replace(/^\.\//, "") : "";
-      const src = files[entry] ?? files["./" + entry];
-      if (!entry || src === undefined) {{
+      // Bundle-relative keys without a leading "./".
+      const sources = {{}};
+      for (const [k, v] of Object.entries(files)) {{
+        if (typeof v === "string") sources[k.replace(/^\.\//, "")] = v;
+      }}
+      if (!entry || sources[entry] === undefined) {{
         reportError("Invalid project", new Error("manifest.entry '" + entry + "' is not in files"));
         return;
       }}
-      const url = URL.createObjectURL(new Blob([src], {{ type: "text/javascript" }}));
+      let url;
+      try {{
+        url = linkModules(sources, entry);
+      }} catch (err) {{
+        reportError("Failed to load " + entry, err);
+        return;
+      }}
       let pos;
-      const onError = (e) => {{ if (e && e.filename === url) pos = {{ line: e.lineno, column: e.colno }}; }};
+      const onError = (e) => {{
+        const file = e && urlToFile.get(e.filename);
+        if (file && !pos) pos = {{ file, line: e.lineno, column: e.colno }};
+      }};
       window.addEventListener("error", onError);
       let mod;
       try {{
@@ -174,6 +319,7 @@ pub fn render_studio_html(origin: &str) -> String {
       try {{
         await boot(document.getElementById("game"), mod.default, {{
           width: num(manifest.width, 800), height: num(manifest.height, 600), baseUrl: "about:blank", files,
+          actions: manifest.actions,
         }});
       }} catch (err) {{
         // boot() already posted webgame:error before rethrowing; don't report it twice.
@@ -247,6 +393,8 @@ pub async fn play_page(
         }
     }
     let origin = page_origin(&state, &headers)?;
+    // F009: re-serialise the parsed list so a NULL or unparsable column renders `[]`.
+    let actions_json = serde_json::to_string(&game.actions()).unwrap_or_else(|_| "[]".into());
     let html = render_player_html(
         &origin,
         &game.id,
@@ -254,6 +402,7 @@ pub async fn play_page(
         game.version,
         game.width,
         game.height,
+        &actions_json,
     );
     player_response(&origin, html)
 }

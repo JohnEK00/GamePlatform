@@ -1,6 +1,6 @@
 //! JSON DTOs (camelCase, matching docs/API.md) and row mapping helpers.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
@@ -45,6 +45,31 @@ pub struct GameSummary {
     pub created_at: String,
     pub updated_at: String,
     pub favorites: i64,
+    /// F003: counted non-owner plays over the last 7 UTC days (trending snapshot).
+    pub plays_week: i64,
+    /// F004: latest bundle replace made while the game was published; `None` if none.
+    pub last_updated_at: Option<String>,
+}
+
+/// `GameVersion` (API.md § F004): one row of a game's version history.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameVersion {
+    pub version: i64,
+    pub notes: String,
+    pub created_at: String,
+    pub current: bool,
+}
+
+/// `RelatedGame` (API.md § F003): a summary plus why it was picked.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedGame {
+    #[serde(flatten)]
+    pub summary: GameSummary,
+    /// `"tags"` or `"trending"`.
+    pub reason: &'static str,
+    pub shared_tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +124,51 @@ pub struct Game {
     pub is_owner: bool,
     pub is_favorite: bool,
     pub achievements: Vec<AchievementDef>,
+    pub leaderboard: LeaderboardConfig,
+    /// F004: the current version's history row.
+    pub latest_version: GameVersion,
+    /// F009: declared actions of the current version, normalised, in manifest order.
+    pub actions: Vec<ControlAction>,
+    /// F009: normalised game.json `controls` (0-300 chars, `""` when none).
+    pub controls_hint: String,
+}
+
+/// `ControlAction` (API.md § F009).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlAction {
+    pub id: String,
+    pub name: String,
+    pub keys: Vec<String>,
+    pub gamepad: Vec<String>,
+}
+
+/// Parse a stored `games.actions_json`. `NULL` → `[]`; unparsable → `[]` with a warning.
+pub fn parse_stored_actions(game_id: &str, raw: Option<&str>) -> Vec<ControlAction> {
+    let Some(raw) = raw else { return Vec::new() };
+    match serde_json::from_str(raw) {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::warn!(game_id, error = %e, "unparsable games.actions_json; using []");
+            Vec::new()
+        }
+    }
+}
+
+/// `Game.leaderboard` (API.md § F001): `{ order, format, label }`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaderboardConfig {
+    pub order: String,
+    pub format: String,
+    pub label: String,
+}
+
+impl LeaderboardConfig {
+    /// Lower scores are better.
+    pub fn ascending(&self) -> bool {
+        self.order == "asc"
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -110,7 +180,7 @@ pub struct Page<T> {
     pub per_page: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Comment {
     pub id: String,
@@ -118,6 +188,78 @@ pub struct Comment {
     pub author: UserRef,
     pub body: String,
     pub created_at: String,
+    /// F006: null for top-level comments, else the id of a top-level comment.
+    pub parent_id: Option<String>,
+    /// F006: replies only, the author of the reply that was answered.
+    pub reply_to: Option<UserRef>,
+    /// F006: the author is the game's current owner.
+    pub is_creator: bool,
+    pub hearts: i64,
+    /// F006: the viewer hearted it (false when anonymous).
+    pub my_heart: bool,
+    /// F006: the game's current owner hearted it.
+    pub creator_heart: bool,
+    /// F006: the viewer is the author, the game owner or an admin (false when anonymous).
+    pub can_delete: bool,
+    /// F017: top-level only, the game's pinned comment (always false on replies).
+    pub pinned: bool,
+    /// F017: top-level only, the thread is locked against new replies (always false on replies).
+    pub locked: bool,
+    /// F017: top-level only, the viewer is the game's current owner or an admin (false on
+    /// replies and when anonymous).
+    pub can_moderate: bool,
+}
+
+/// F006: a top-level comment with the oldest (at most 3) replies.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentThread {
+    #[serde(flatten)]
+    pub comment: Comment,
+    pub reply_count: i64,
+    pub replies: Vec<Comment>,
+}
+
+/// F006: `Page<CommentThread>` + `totalAll` (comments and replies).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentListPage {
+    pub items: Vec<CommentThread>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+    pub total_all: i64,
+    /// F017: the game's pinned thread on every page (`null` when none; excluded from `items`
+    /// and `total`).
+    pub pinned: Option<CommentThread>,
+}
+
+/// F017: `PUT`/`DELETE /api/comments/{id}/pin|lock`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadState {
+    pub id: String,
+    pub pinned: bool,
+    pub locked: bool,
+    /// `PUT …/pin` only: the previously pinned comment that is now unpinned.
+    pub unpinned_id: Option<String>,
+}
+
+/// F006: `GET /api/comments/{id}`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentContext {
+    pub comment: Comment,
+    pub thread: CommentThread,
+}
+
+/// F006: `PUT`/`DELETE /api/comments/{id}/heart`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeartResponse {
+    pub hearted: bool,
+    pub hearts: i64,
+    pub creator_heart: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -194,19 +336,31 @@ pub struct GameRow {
     pub created_at: String,
     pub updated_at: String,
     pub favorites: i64,
+    pub plays_week: i64,
+    pub last_updated_at: Option<String>,
     pub owner: UserRef,
     pub tags: Vec<String>,
+    pub leaderboard: LeaderboardConfig,
+    /// F009: raw `games.actions_json` (`None` = not yet backfilled); parsed only for `Game`
+    /// and the player page, so list queries don't pay for it.
+    pub actions_json: Option<String>,
+    /// F009: `games.controls_hint` (`None` → `""`).
+    pub controls_hint: String,
 }
 
 /// SELECT prefix for [`GameRow`]; append `WHERE ...`.
 pub const GAME_SELECT: &str = "SELECT g.id, g.owner_id, g.title, g.description, g.published, \
      g.version, g.entry, g.width, g.height, g.thumbnail_ext, g.thumbnail_version, g.plays, \
      g.rating_sum, g.rating_count, g.created_at, g.updated_at, \
+     g.score_order, g.score_format, g.score_label, g.last_updated_at, \
+     g.actions_json, g.controls_hint, \
      u.id AS o_id, u.username AS o_username, u.display_name AS o_display_name, \
      u.avatar_ext AS o_avatar_ext, u.avatar_version AS o_avatar_version, \
      (SELECT group_concat(tag, ',') FROM (SELECT tag FROM game_tags t WHERE t.game_id = g.id \
         ORDER BY t.position, t.tag)) AS tags, \
-     (SELECT COUNT(*) FROM favorites f WHERE f.game_id = g.id) AS favorites \
+     g.favorites_count AS favorites, \
+     COALESCE((SELECT tr.plays_week FROM game_trending tr WHERE tr.game_id = g.id), 0) \
+        AS plays_week \
      FROM games g JOIN users u ON u.id = g.owner_id";
 
 pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
@@ -229,6 +383,8 @@ pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         favorites: row.try_get("favorites")?,
+        plays_week: row.try_get("plays_week")?,
+        last_updated_at: row.try_get("last_updated_at")?,
         owner: user_ref_from_row(row, "o_")?,
         tags: tags
             .map(|t| {
@@ -237,6 +393,15 @@ pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
                     .map(str::to_string)
                     .collect()
             })
+            .unwrap_or_default(),
+        leaderboard: LeaderboardConfig {
+            order: row.try_get("score_order")?,
+            format: row.try_get("score_format")?,
+            label: row.try_get("score_label")?,
+        },
+        actions_json: row.try_get("actions_json")?,
+        controls_hint: row
+            .try_get::<Option<String>, _>("controls_hint")?
             .unwrap_or_default(),
     })
 }
@@ -269,6 +434,8 @@ impl GameRow {
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
             favorites: self.favorites,
+            plays_week: self.plays_week,
+            last_updated_at: self.last_updated_at.clone(),
         }
     }
 
@@ -278,6 +445,7 @@ impl GameRow {
         viewer: Option<&str>,
         is_favorite: bool,
         achievements: Vec<AchievementDef>,
+        latest_version: GameVersion,
     ) -> Game {
         Game {
             summary: self.summary(),
@@ -290,7 +458,16 @@ impl GameRow {
             is_owner: viewer == Some(self.owner_id.as_str()),
             is_favorite,
             achievements,
+            leaderboard: self.leaderboard.clone(),
+            latest_version,
+            actions: self.actions(),
+            controls_hint: self.controls_hint.clone(),
         }
+    }
+
+    /// F009: the stored actions (`NULL` or unparsable → `[]`).
+    pub fn actions(&self) -> Vec<ControlAction> {
+        parse_stored_actions(&self.id, self.actions_json.as_deref())
     }
 
     pub fn visible_to(&self, viewer: Option<&str>) -> bool {

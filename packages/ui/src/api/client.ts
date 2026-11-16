@@ -3,13 +3,23 @@ import type {
   AuthResponse,
   CloudSave,
   Comment,
+  CommentContext,
+  CommentListPage,
+  CommentListQuery,
   CreateGameInput,
   CreateReportRequest,
   CreatorStats,
   FavoriteResponse,
+  FeedPage,
+  FeedQuery,
+  FollowResponse,
+  SuggestedCreator,
+  UserRef,
   Game,
   GameAchievement,
   GameStats,
+  GameVersion,
+  HeartResponse,
   ListReportsQuery,
   PutSaveResponse,
   Report,
@@ -21,18 +31,32 @@ import type {
   ListGamesQuery,
   LoginRequest,
   Page,
+  RelatedGame,
   PageQuery,
+  ThreadState,
   PlayResponse,
   PreviewTokenResponse,
   RatingResponse,
   RegisterRequest,
   Score,
+  ScoreSubmitResult,
+  ScreenshotPage,
+  Screenshot,
+  Leaderboard,
+  LeaderboardPeriod,
+  LeaderboardQuery,
   TagCount,
   UpdateGameRequest,
   UpdateMeRequest,
   UploadProgress,
   User,
   UserProfileResponse,
+  MarkReadRequest,
+  MarkReadResponse,
+  NotificationListQuery,
+  NotificationPage,
+  NotificationSettings,
+  UnreadCount,
 } from "./types";
 
 const STATUS_CODES: Record<number, ApiErrorCode> = {
@@ -138,7 +162,15 @@ type RequestOptions = {
   query?: Query;
   json?: unknown;
   signal?: AbortSignal;
+  /** Use `fetch` keepalive when the body fits the browser's keepalive quota (see KEEPALIVE_MAX_BODY_BYTES). */
+  keepalive?: boolean;
 };
+
+/**
+ * Largest request body sent with `keepalive: true`. Browsers cap the bodies of all in-flight keepalive
+ * requests at 64 KiB; we leave a little room for other keepalive traffic and fall back to a normal fetch above it.
+ */
+export const KEEPALIVE_MAX_BODY_BYTES = 60 * 1024;
 
 /** Typed client for the WebGameApp REST API (docs/API.md). */
 export class ApiClient {
@@ -178,6 +210,10 @@ export class ApiClient {
       signal: opts.signal,
     };
     if (opts.json !== undefined) init.body = JSON.stringify(opts.json);
+    if (opts.keepalive) {
+      const size = typeof init.body === "string" ? new TextEncoder().encode(init.body).length : 0;
+      if (size <= KEEPALIVE_MAX_BODY_BYTES) init.keepalive = true;
+    }
     let res: Response;
     try {
       res = await f(this.baseUrl + path + buildQuery(opts.query), init);
@@ -251,8 +287,9 @@ export class ApiClient {
   }
 
   // ---------- Users ----------
-  getUser(username: string): Promise<UserProfileResponse> {
-    return this.request(`/api/users/${encodeURIComponent(username)}`);
+  /** `query` pages the profile's `games` list (server default 24 per page). */
+  getUser(username: string, query: PageQuery = {}): Promise<UserProfileResponse> {
+    return this.request(`/api/users/${encodeURIComponent(username)}`, { query: { page: query.page, perPage: query.perPage } });
   }
   updateMe(body: UpdateMeRequest): Promise<User> {
     return this.request("/api/users/me", { method: "PATCH", json: body });
@@ -267,6 +304,10 @@ export class ApiClient {
   listGames(query: ListGamesQuery = {}, signal?: AbortSignal): Promise<Page<GameSummary>> {
     return this.request("/api/games", { query, signal });
   }
+  /** F003: "More like this" for a game (`limit` 1–24 server-side, default 8). */
+  getRelatedGames(id: string, query: { limit?: number } = {}, signal?: AbortSignal): Promise<RelatedGame[]> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/related`, { query: { limit: query.limit }, signal });
+  }
   getGame(id: string): Promise<Game> {
     return this.request(`/api/games/${encodeURIComponent(id)}`);
   }
@@ -278,15 +319,69 @@ export class ApiClient {
     form.append("published", input.published === false ? "false" : "true");
     form.append("bundle", input.bundle, fileName(input.bundle, "bundle.zip"));
     if (input.thumbnail) form.append("thumbnail", input.thumbnail, fileName(input.thumbnail, "thumbnail"));
+    if (input.notes && input.notes.trim()) form.append("notes", input.notes);
     return this.upload("POST", "/api/games", form, onProgress);
   }
   updateGame(id: string, body: UpdateGameRequest): Promise<Game> {
     return this.request(`/api/games/${encodeURIComponent(id)}`, { method: "PATCH", json: body });
   }
-  replaceBundle(id: string, bundle: Blob, onProgress?: UploadProgress): Promise<Game> {
+  /**
+   * F004: `opts.notes` (sent when non-empty after trim) and `opts.expectedVersion` (the version the page was
+   * based on; a mismatch returns 409 `conflict`).
+   */
+  replaceBundle(
+    id: string,
+    bundle: Blob,
+    onProgress?: UploadProgress,
+    opts: { notes?: string; expectedVersion?: number } = {},
+  ): Promise<Game> {
     const form = new FormData();
     form.append("bundle", bundle, fileName(bundle, "bundle.zip"));
+    if (opts.notes && opts.notes.trim()) form.append("notes", opts.notes);
+    if (opts.expectedVersion !== undefined && opts.expectedVersion !== null) {
+      form.append("expectedVersion", String(Math.trunc(opts.expectedVersion)));
+    }
     return this.upload("PUT", `/api/games/${encodeURIComponent(id)}/bundle`, form, onProgress);
+  }
+  /**
+   * F013 (owner only): the current version's files as a .zip. `version` comes from `X-Game-Version` (falling
+   * back to `getGame` when a proxy strips it), `filename` from `Content-Disposition` (else `game-v{version}.zip`).
+   * Servers without F013 (405, or a 404 without an error body) reject with code `unsupported`.
+   */
+  async downloadBundle(id: string, signal?: AbortSignal): Promise<{ blob: Blob; version: number; filename: string }> {
+    const f = this.fetchImpl ?? globalThis.fetch;
+    let res: Response;
+    try {
+      res = await f(`${this.baseUrl}/api/games/${encodeURIComponent(id)}/bundle`, {
+        method: "GET",
+        headers: this.headers({ Accept: "application/zip, application/json" }),
+        signal,
+      });
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") throw e;
+      throw new ApiError("network", "Could not reach the server. Check your connection.", 0);
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      let body: unknown = undefined;
+      if (text) {
+        try {
+          body = JSON.parse(text);
+        } catch {
+          /* not JSON */
+        }
+      }
+      const hasError = !!(body as { error?: unknown } | undefined)?.error;
+      if (res.status === 405 || (res.status === 404 && !hasError))
+        throw new ApiError("unsupported", "This server doesn't support opening games in the Studio.", res.status);
+      throw ApiError.fromResponse(res.status, body, res.statusText, res.headers?.get?.("Retry-After"));
+    }
+    const blob = await res.blob();
+    const rawVersion = (res.headers?.get?.("X-Game-Version") ?? "").trim();
+    let version = /^\d+$/.test(rawVersion) ? Number(rawVersion) : 0;
+    if (!Number.isSafeInteger(version) || version < 1) version = (await this.getGame(id)).version;
+    const filename = parseContentDispositionFilename(res.headers?.get?.("Content-Disposition")) ?? `game-v${version}.zip`;
+    return { blob, version, filename };
   }
   replaceThumbnail(id: string, thumbnail: Blob, onProgress?: UploadProgress): Promise<Game> {
     const form = new FormData();
@@ -309,19 +404,73 @@ export class ApiClient {
   clearRating(id: string): Promise<RatingResponse> {
     return this.request(`/api/games/${encodeURIComponent(id)}/rating`, { method: "DELETE" });
   }
-  listComments(id: string, query: PageQuery = {}): Promise<Page<Comment>> {
+  /**
+   * F006: top-level comments (newest first) with up to 3 replies each. `total` counts threads, `totalAll`
+   * everything. Older servers omit the F006 fields; read the result through `normalizeCommentListPage`.
+   */
+  listComments(id: string, query: CommentListQuery = {}): Promise<CommentListPage> {
+    // F017: `sort` only when given (buildQuery skips undefined).
     return this.request(`/api/games/${encodeURIComponent(id)}/comments`, { query });
   }
-  postComment(id: string, body: string): Promise<Comment> {
-    return this.request(`/api/games/${encodeURIComponent(id)}/comments`, { method: "POST", json: { body } });
+  /** F006: `parentId` (a top-level comment or a reply on the same game) posts a reply; omitted when not given. */
+  postComment(id: string, body: string, parentId?: string | null): Promise<Comment> {
+    const json = parentId ? { body, parentId } : { body };
+    return this.request(`/api/games/${encodeURIComponent(id)}/comments`, { method: "POST", json });
+  }
+  /** F006: a comment (top-level or reply) with its thread, for permalinks. */
+  getComment(commentId: string, signal?: AbortSignal): Promise<CommentContext> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}`, { signal });
+  }
+  /** F006: a thread's replies, oldest first; server default 50 per page (1–100). `total` = the thread's reply count. */
+  listReplies(commentId: string, query: PageQuery = {}, signal?: AbortSignal): Promise<Page<Comment>> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/replies`, {
+      query: { page: query.page, perPage: query.perPage },
+      signal,
+    });
+  }
+  /** F006: heart a comment (idempotent). */
+  heartComment(commentId: string): Promise<HeartResponse> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/heart`, { method: "PUT" });
+  }
+  /** F006: remove the viewer's heart (idempotent). */
+  unheartComment(commentId: string): Promise<HeartResponse> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/heart`, { method: "DELETE" });
+  }
+  /** F006 convenience: PUT or DELETE depending on `heart`. */
+  setCommentHeart(commentId: string, heart: boolean): Promise<HeartResponse> {
+    return heart ? this.heartComment(commentId) : this.unheartComment(commentId);
   }
   deleteComment(commentId: string): Promise<void> {
     return this.request(`/api/comments/${encodeURIComponent(commentId)}`, { method: "DELETE" });
   }
-  listScores(id: string, limit?: number): Promise<Score[]> {
-    return this.request(`/api/games/${encodeURIComponent(id)}/scores`, { query: { limit } });
+  /** F017 (game owner or admin): pin a top-level comment; replaces the game's previous pin (`unpinnedId`). Idempotent. */
+  pinComment(commentId: string): Promise<ThreadState> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/pin`, { method: "PUT" });
   }
-  submitScore(id: string, score: number): Promise<Score> {
+  /** F017 (game owner or admin): unpin a comment. Idempotent. */
+  unpinComment(commentId: string): Promise<ThreadState> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/pin`, { method: "DELETE" });
+  }
+  /** F017 (game owner or admin): lock a thread against new replies (except by the owner and admins). Idempotent. */
+  lockComment(commentId: string): Promise<ThreadState> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/lock`, { method: "PUT" });
+  }
+  /** F017 (game owner or admin): unlock a thread. Idempotent. */
+  unlockComment(commentId: string): Promise<ThreadState> {
+    return this.request(`/api/comments/${encodeURIComponent(commentId)}/lock`, { method: "DELETE" });
+  }
+  listScores(id: string, limit?: number, period?: LeaderboardPeriod): Promise<Score[]> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/scores`, { query: { limit, period } });
+  }
+  /** F001: per-period leaderboard with the viewer's own row and a player count. */
+  getLeaderboard(id: string, query: LeaderboardQuery = {}, signal?: AbortSignal): Promise<Leaderboard> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/leaderboard`, {
+      query: { period: query.period, limit: query.limit },
+      signal,
+    });
+  }
+  /** F001: returns a ScoreSubmitResult (a superset of Score). */
+  submitScore(id: string, score: number): Promise<ScoreSubmitResult> {
     return this.request(`/api/games/${encodeURIComponent(id)}/scores`, { method: "POST", json: { score } });
   }
   listTags(): Promise<TagCount[]> {
@@ -361,8 +510,13 @@ export class ApiClient {
   getSave(id: string, signal?: AbortSignal): Promise<CloudSave> {
     return this.request(`/api/games/${encodeURIComponent(id)}/save`, { signal });
   }
-  putSave(id: string, data: Record<string, unknown>): Promise<PutSaveResponse> {
-    return this.request(`/api/games/${encodeURIComponent(id)}/save`, { method: "PUT", json: { data } });
+  /**
+   * `opts.keepalive`: send with `fetch(…, { keepalive: true })` so the request survives the page being closed
+   * (use it for the pagehide / unmount flush). Bodies over {@link KEEPALIVE_MAX_BODY_BYTES} can't use keepalive
+   * (browser quota) and go out as a normal request instead.
+   */
+  putSave(id: string, data: Record<string, unknown>, opts: { keepalive?: boolean } = {}): Promise<PutSaveResponse> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/save`, { method: "PUT", json: { data }, keepalive: opts.keepalive });
   }
   deleteSave(id: string): Promise<void> {
     return this.request(`/api/games/${encodeURIComponent(id)}/save`, { method: "DELETE" });
@@ -386,6 +540,99 @@ export class ApiClient {
   resolveReport(reportId: string, action: ReportAction): Promise<Report> {
     return this.request(`/api/admin/reports/${encodeURIComponent(reportId)}/resolve`, { method: "POST", json: { action } });
   }
+
+  // ---------- F002: Follows & feed ----------
+  followUser(username: string): Promise<FollowResponse> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/follow`, { method: "PUT" });
+  }
+  unfollowUser(username: string): Promise<FollowResponse> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/follow`, { method: "DELETE" });
+  }
+  /** Convenience: PUT or DELETE depending on `follow`. */
+  setFollowing(username: string, follow: boolean): Promise<FollowResponse> {
+    return follow ? this.followUser(username) : this.unfollowUser(username);
+  }
+  listFollowers(username: string, query: PageQuery = {}): Promise<Page<UserRef>> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/followers`, { query: { page: query.page, perPage: query.perPage } });
+  }
+  listFollowing(username: string, query: PageQuery = {}): Promise<Page<UserRef>> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/following`, { query: { page: query.page, perPage: query.perPage } });
+  }
+  /** Newest first. `kinds` is sent comma-separated and omitted when empty. */
+  getFeed(query: FeedQuery = {}, signal?: AbortSignal): Promise<FeedPage> {
+    const kinds = query.kinds && query.kinds.length > 0 ? query.kinds.join(",") : undefined;
+    return this.request("/api/feed", { query: { cursor: query.cursor, limit: query.limit, kinds }, signal });
+  }
+  getFeedSuggestions(): Promise<SuggestedCreator[]> {
+    return this.request("/api/feed/suggestions");
+  }
+
+  // ---------- F004: Version history ----------
+  /** Highest version first; server default 20 per page (max 100). */
+  listGameVersions(id: string, query: PageQuery = {}): Promise<Page<GameVersion>> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/versions`, { query: { page: query.page, perPage: query.perPage } });
+  }
+  /** Owner-only: fix a version's release notes. */
+  updateVersionNotes(id: string, version: number, notes: string): Promise<GameVersion> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/versions/${encodeURIComponent(String(version))}`, {
+      method: "PATCH",
+      json: { notes },
+    });
+  }
+
+  // ---------- F005: Screenshots ----------
+  /** Newest first; `perPage` 1–50 server-side (default 12). */
+  listScreenshots(gameId: string, query: PageQuery = {}, signal?: AbortSignal): Promise<ScreenshotPage> {
+    return this.request(`/api/games/${encodeURIComponent(gameId)}/screenshots`, { query: { page: query.page, perPage: query.perPage }, signal });
+  }
+  /**
+   * Multipart `image` (png/jpg/webp ≤ 2MB) + `caption` (sent when non-empty after trim). Only ever pass an image
+   * the UI re-encoded itself (see `launderImage`), never a Blob that came from a game.
+   */
+  postScreenshot(gameId: string, image: Blob, caption = "", onProgress?: UploadProgress): Promise<Screenshot> {
+    const form = new FormData();
+    const ext = image.type === "image/jpeg" ? "jpg" : image.type === "image/webp" ? "webp" : "png";
+    form.append("image", image, `screenshot.${ext}`);
+    if (caption.trim()) form.append("caption", caption.trim());
+    return this.upload("POST", `/api/games/${encodeURIComponent(gameId)}/screenshots`, form, onProgress);
+  }
+  deleteScreenshot(id: string): Promise<void> {
+    return this.request(`/api/screenshots/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  // ---------- F007: Notifications ----------
+  /** Newest first (updatedAt desc). `unread: true` lists unread only (the param is omitted otherwise). */
+  listNotifications(query: NotificationListQuery = {}, signal?: AbortSignal): Promise<NotificationPage> {
+    return this.request("/api/notifications", {
+      query: { cursor: query.cursor, limit: query.limit, unread: query.unread ? true : undefined },
+      signal,
+    });
+  }
+  /** The poll: unread count (capped at 100), newest unread `updatedAt`, suggested poll delay. */
+  unreadNotificationCount(signal?: AbortSignal): Promise<UnreadCount> {
+    return this.request("/api/notifications/unread-count", { signal });
+  }
+  /** Marks the caller's unread notifications with `updatedAt <= upTo` (only `ids`, when given) as read. */
+  markNotificationsRead(body: MarkReadRequest): Promise<MarkReadResponse> {
+    const json: MarkReadRequest = body.ids !== undefined ? { ids: body.ids, upTo: body.upTo } : { upTo: body.upTo };
+    return this.request("/api/notifications/read", { method: "POST", json });
+  }
+  getNotificationSettings(): Promise<NotificationSettings> {
+    return this.request("/api/notifications/settings");
+  }
+  /** Send only the changed fields; returns the settings after the change. */
+  updateNotificationSettings(partial: Partial<NotificationSettings>): Promise<NotificationSettings> {
+    return this.request("/api/notifications/settings", { method: "PUT", json: partial });
+  }
+}
+
+/** `filename="…"` (or a bare `filename=…`) from a Content-Disposition header, reduced to a safe base name. */
+function parseContentDispositionFilename(header: string | null | undefined): string | null {
+  if (!header) return null;
+  const m = /filename\s*=\s*(?:"([^"]*)"|([^;\s]+))/i.exec(header);
+  const raw = m ? (m[1] ?? m[2] ?? "") : "";
+  const base = raw.split(/[\\/]/).pop()?.replace(/[\u0000-\u001f]/g, "").trim() ?? "";
+  return base && base !== "." && base !== ".." ? base : null;
 }
 
 function fileName(b: Blob, fallback: string): string {

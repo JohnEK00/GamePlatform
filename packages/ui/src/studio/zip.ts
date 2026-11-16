@@ -1,4 +1,4 @@
-// Minimal store-only (no compression) ZIP writer with CRC-32. No dependencies.
+// Minimal ZIP writer with CRC-32 (stored, or DEFLATE via CompressionStream / a supplied deflater). No dependencies.
 // Format: PKWARE APPNOTE 6.3 — local file headers + data, central directory, end of central directory record.
 
 let CRC_TABLE: Uint32Array | null = null;
@@ -49,28 +49,131 @@ function normalizePath(p: string): string {
   return parts.join("/");
 }
 
-/**
- * Builds a store-only .zip in memory. Paths use "/" separators and must be relative (no "..").
- * Names are written as UTF-8 (general purpose flag bit 11). Returns the archive bytes; wrap it in
- * `new Blob([bytes], { type: "application/zip" })` to upload or download it.
- */
-export function createZip(files: ZipFiles, opts: { date?: Date } = {}): Uint8Array<ArrayBuffer> {
+/** Raw DEFLATE (RFC 1951, no zlib/gzip header) compressor, e.g. `pako.deflateRaw`. */
+export type DeflateRawSync = (data: Uint8Array) => Uint8Array;
+
+export type CreateZipOptions = {
+  date?: Date;
+  /**
+   * Optional synchronous raw-DEFLATE function. When given, entries are stored DEFLATE-compressed (method 8)
+   * whenever that makes them smaller and `shouldCompress(path)` allows it; otherwise they are stored as-is.
+   */
+  deflateRaw?: DeflateRawSync;
+  /** Which paths to try compressing. Default: everything except already-compressed formats (png, jpg, mp3, …). */
+  shouldCompress?: (path: string) => boolean;
+};
+
+export type CreateZipAsyncOptions = {
+  date?: Date;
+  /** "deflate" (default) uses `CompressionStream("deflate-raw")` when the runtime has it, else falls back to "store". */
+  compression?: "deflate" | "store";
+  shouldCompress?: (path: string) => boolean;
+};
+
+/** Extensions whose content is already compressed; DEFLATE rarely helps them. */
+const PRECOMPRESSED = new Set(["png", "jpg", "jpeg", "webp", "gif", "mp3", "ogg", "woff2", "zip"]);
+
+export function defaultShouldCompress(path: string): boolean {
+  const m = /\.([a-z0-9]+)$/i.exec(path);
+  return !(m && PRECOMPRESSED.has(m[1].toLowerCase()));
+}
+
+type PreparedEntry = { path: string; name: Uint8Array; data: Uint8Array; crc: number; dt: { time: number; date: number } };
+type ZipEntry = PreparedEntry & { method: 0 | 8; stored: Uint8Array };
+
+function prepare(files: ZipFiles, date: Date | undefined): PreparedEntry[] {
   const list = Array.isArray(files) ? files : Object.entries(files).map(([path, data]) => ({ path, data, date: undefined as Date | undefined }));
   if (list.length > 0xffff) throw new Error("createZip: too many files (max 65535)");
   const enc = new TextEncoder();
   const seen = new Set<string>();
-  const entries = list.map((f) => {
-    const name = normalizePath(f.path);
-    if (seen.has(name)) throw new Error(`createZip: duplicate path "${name}"`);
-    seen.add(name);
+  return list.map((f) => {
+    const path = normalizePath(f.path);
+    if (seen.has(path)) throw new Error(`createZip: duplicate path "${path}"`);
+    seen.add(path);
     const data = toBytes(f.data);
-    return { name: enc.encode(name), data, crc: crc32(data), dt: dosDateTime(f.date ?? opts.date ?? new Date()) };
+    return { path, name: enc.encode(path), data, crc: crc32(data), dt: dosDateTime(f.date ?? date ?? new Date()) };
   });
+}
 
+function pick(e: PreparedEntry, deflated: Uint8Array | null): ZipEntry {
+  return deflated && deflated.length < e.data.length ? { ...e, method: 8, stored: deflated } : { ...e, method: 0, stored: e.data };
+}
+
+/**
+ * Builds a .zip in memory. Paths use "/" separators and must be relative (no "..").
+ * Names are written as UTF-8 (general purpose flag bit 11). Entries are stored uncompressed unless
+ * `opts.deflateRaw` is supplied (see {@link createZipAsync} for built-in compression). Returns the archive
+ * bytes; wrap it in `new Blob([bytes], { type: "application/zip" })` to upload or download it.
+ */
+export function createZip(files: ZipFiles, opts: CreateZipOptions = {}): Uint8Array<ArrayBuffer> {
+  const should = opts.shouldCompress ?? defaultShouldCompress;
+  const entries = prepare(files, opts.date).map((e) => pick(e, opts.deflateRaw && e.data.length > 0 && should(e.path) ? opts.deflateRaw(e.data) : null));
+  return writeZip(entries);
+}
+
+/** True when the runtime can raw-DEFLATE with `CompressionStream("deflate-raw")`. */
+export function canDeflateRaw(): boolean {
+  if (typeof CompressionStream !== "function") return false;
+  try {
+    new CompressionStream("deflate-raw" as CompressionFormat);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function deflateRawStream(data: Uint8Array): Promise<Uint8Array> {
+  const cs = new CompressionStream("deflate-raw" as CompressionFormat);
+  const writer = cs.writable.getWriter();
+  void writer.write(data as Uint8Array<ArrayBuffer>).catch(() => {});
+  void writer.close().catch(() => {});
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = cs.readable.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.length;
+  }
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.length;
+  }
+  return out;
+}
+
+/**
+ * Like {@link createZip}, but DEFLATE-compresses entries with the platform `CompressionStream("deflate-raw")`
+ * (falls back to stored entries where it is unavailable or fails). Each entry is only compressed if that
+ * makes it smaller.
+ */
+export async function createZipAsync(files: ZipFiles, opts: CreateZipAsyncOptions = {}): Promise<Uint8Array<ArrayBuffer>> {
+  const prepared = prepare(files, opts.date);
+  const should = opts.shouldCompress ?? defaultShouldCompress;
+  let useDeflate = (opts.compression ?? "deflate") === "deflate" && canDeflateRaw();
+  const entries: ZipEntry[] = [];
+  for (const e of prepared) {
+    let deflated: Uint8Array | null = null;
+    if (useDeflate && e.data.length > 0 && should(e.path)) {
+      try {
+        deflated = await deflateRawStream(e.data);
+      } catch {
+        useDeflate = false;
+      }
+    }
+    entries.push(pick(e, deflated));
+  }
+  return writeZip(entries);
+}
+
+function writeZip(entries: ZipEntry[]): Uint8Array<ArrayBuffer> {
   let localSize = 0;
   let centralSize = 0;
   for (const e of entries) {
-    localSize += 30 + e.name.length + e.data.length;
+    localSize += 30 + e.name.length + e.stored.length;
     centralSize += 46 + e.name.length;
   }
   if (localSize + centralSize > 0xffffffff) throw new Error("createZip: archive too large (zip64 not supported)");
@@ -92,20 +195,20 @@ export function createZip(files: ZipFiles, opts: { date?: Date } = {}): Uint8Arr
   for (const e of entries) {
     offsets.push(p);
     u32(0x04034b50); // local file header signature
-    u16(20); // version needed to extract (2.0)
+    u16(20); // version needed to extract (2.0: deflate)
     u16(FLAGS);
-    u16(0); // method: stored
+    u16(e.method); // 0 = stored, 8 = deflate
     u16(e.dt.time);
     u16(e.dt.date);
     u32(e.crc);
-    u32(e.data.length); // compressed size
+    u32(e.stored.length); // compressed size
     u32(e.data.length); // uncompressed size
     u16(e.name.length);
     u16(0); // extra field length
     out.set(e.name, p);
     p += e.name.length;
-    out.set(e.data, p);
-    p += e.data.length;
+    out.set(e.stored, p);
+    p += e.stored.length;
   }
 
   const cdStart = p;
@@ -114,11 +217,11 @@ export function createZip(files: ZipFiles, opts: { date?: Date } = {}): Uint8Arr
     u16(20); // version made by (2.0, MS-DOS attrs)
     u16(20); // version needed
     u16(FLAGS);
-    u16(0);
+    u16(e.method);
     u16(e.dt.time);
     u16(e.dt.date);
     u32(e.crc);
-    u32(e.data.length);
+    u32(e.stored.length);
     u32(e.data.length);
     u16(e.name.length);
     u16(0); // extra

@@ -1,25 +1,55 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isApiError } from "../api/client";
-import type { Game, Score, UnlockAchievementResponse } from "../api/types";
+import type { Game, Score, ScoreSubmitResult, UnlockAchievementResponse } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
-import { errorMessage } from "../util";
+import { errorMessage, formatScore } from "../util";
 import { Spinner } from "./common";
 import { AchievementIcon } from "./Achievements";
+import { ScreenshotTray } from "./ScreenshotTray";
+import { useScreenshotCapture } from "./useScreenshotCapture";
+import { ControlsPanel } from "./ControlsPanel";
+import { usePauseReasons } from "./usePauseReasons";
+import {
+  controlsMessage,
+  hasControls,
+  normalizeActions,
+  PLAYER_CONTROLS_EVENT,
+  readOverrides,
+  subscribeOverrides,
+  takeControlsHint,
+  useStoredOverrides,
+  writeOverrides,
+} from "../controls";
+import {
+  GAME_LEADERBOARD_MAX_LIMIT,
+  isRequestId,
+  parseLeaderboardRequest,
+  scoreToastText,
+  sliceLeaderboardView,
+  toLeaderboardView,
+  toScoreResultView,
+  type LeaderboardView,
+} from "../leaderboard";
 
 export type GamePlayerGame = Pick<Game, "id" | "title" | "width" | "height"> &
-  Partial<Pick<Game, "playUrl" | "version" | "published" | "isOwner">>;
+  Partial<Pick<Game, "playUrl" | "version" | "published" | "isOwner" | "leaderboard" | "actions" | "controlsHint">>;
+
+/** F009: how long the one-time "See and change the controls" hint stays up. */
+export const CONTROLS_HINT_MS = 8000;
 
 export type GamePlayerProps = {
   game: GamePlayerGame;
   /** Called after POST /play succeeded (once per load, when the game reports ready). */
   onPlayRecorded?: (plays: number) => void;
-  /** Called after a score was saved to the API (use it to refresh the leaderboard). */
-  onScoreSubmitted?: (score: Score) => void;
+  /** Called after a score was saved to the API (use it to refresh the leaderboard). F001: receives the ScoreSubmitResult. */
+  onScoreSubmitted?: (score: Score & Partial<ScoreSubmitResult>) => void;
   /** Called after POST …/achievements/{id} succeeded (v2), whether or not it was new. */
   onAchievementUnlocked?: (result: UnlockAchievementResponse) => void;
+  /** F005: after "Set as thumbnail" from the screenshot tray (owner only). */
+  onGameUpdated?: (game: Game) => void;
   className?: string;
 };
 
@@ -27,6 +57,20 @@ export type GamePlayerProps = {
 export const CLOUD_LOAD_TIMEOUT_MS = 400;
 /** Minimum delay between a `webgame:save` and the cloud PUT (and between PUTs). */
 export const CLOUD_SAVE_DEBOUNCE_MS = 2000;
+
+/** F001: how long a per-period leaderboard answer is reused for in-game requests. */
+export const GAME_LEADERBOARD_CACHE_MS = 10_000;
+/**
+ * N4: per player instance, at most this many in-game leaderboard API fetches per
+ * `GAME_LEADERBOARD_THROTTLE_WINDOW_MS`. Requests beyond that (that aren't served from cache or an
+ * in-flight fetch) are answered locally with `error: "rate_limited"` without hitting the API, so a game
+ * can't drain the viewer's shared leaderboard rate-limit bucket.
+ */
+export const GAME_LEADERBOARD_THROTTLE_MAX = 10;
+export const GAME_LEADERBOARD_THROTTLE_WINDOW_MS = 10_000;
+
+type LbOutcome = { leaderboard: LeaderboardView } | { error: "unavailable" | "rate_limited" };
+type LbCacheEntry = { at: number; value?: LbOutcome; inflight?: Promise<LbOutcome> };
 
 const ACHIEVEMENT_ID_RE = /^[a-z0-9_-]{1,32}$/;
 const ACH_HINT_KEY = "webgame.achievementHintShown";
@@ -147,7 +191,8 @@ export function hasGameSave(gameId: string): boolean {
 
 type GameMessage =
   | { type: "webgame:ready" }
-  | { type: "webgame:score"; score: number }
+  | { type: "webgame:score"; score: number; requestId?: string }
+  | { type: "webgame:leaderboard-get"; requestId: string; period: string; limit: number }
   | { type: "webgame:error"; message?: string }
   | { type: "webgame:hello" }
   | { type: "webgame:save"; data: unknown }
@@ -159,26 +204,47 @@ type GameMessage =
  * Sandboxed iframe player. Untrusted game code runs at an opaque origin and can only talk to us via
  * postMessage; messages are accepted ONLY when `event.source === iframe.contentWindow`.
  */
-export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, className = "" }: GamePlayerProps) {
+export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, onGameUpdated, className = "" }: GamePlayerProps) {
   const api = useApi();
   const { user, token } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const wrapRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const cameraRef = useRef<HTMLButtonElement>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const playRecorded = useRef(false);
-  const pausedByVisibility = useRef(false);
+  // F005: 📷 requests, game shares, PLAYER_SCREENSHOT_EVENT and the in-memory tray.
+  const shots = useScreenshotCapture(iframeRef, { mode: "player", title: game.title, ready: ready && !error });
+
+  // F009: declared actions (defaults), the hint, on-device overrides and the ⌨ panel.
+  const defaults = useMemo(() => normalizeActions(game.actions), [game.actions]);
+  const controlsHint = (game.controlsHint ?? "").trim();
+  const showControls = hasControls(defaults, controlsHint);
+  const overrides = useStoredOverrides(game.id);
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [controlsHinting, setControlsHinting] = useState(false);
 
   // Latest values for the message handler without re-subscribing.
-  const latest = useRef({ user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game });
-  latest.current = { user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game };
+  const latest = useRef({ user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game, defaults, showControls, controlsOpen });
+  latest.current = { user, token, onPlayRecorded, onScoreSubmitted, onAchievementUnlocked, game, defaults, showControls, controlsOpen };
   /** Achievement ids already sent (or being sent) by this player instance. */
   const unlocked = useRef(new Set<string>());
+  /**
+   * F001/N4: per-(viewer, period) cache with single flight for in-game leaderboard reads. Always fetches
+   * the maximum page (25) and slices to the requested limit, so at most 3 keys exist per viewer.
+   */
+  const lbCache = useRef(new Map<string, LbCacheEntry>());
+  /** N4: timestamps of recent in-game leaderboard API fetches (sliding-window throttle). */
+  const lbFetches = useRef<number[]>([]);
+  useEffect(() => {
+    lbCache.current = new Map();
+    lbFetches.current = [];
+  }, [game.id]);
 
   // ---- Cloud saves (GAME_FORMAT v2): prefetch as soon as the player mounts when logged in ----
   const cloud = useRef<CloudState>({ status: "off", data: null, savedSinceFetch: false, listeners: new Set() });
@@ -213,15 +279,18 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
     let timer: ReturnType<typeof setTimeout> | null = null;
     let inflight: Promise<void> | null = null;
     const arm = (ms: number) => {
-      if (timer === null) timer = setTimeout(flush, ms);
+      if (timer === null) timer = setTimeout(() => flush(), ms);
     };
-    function flush() {
+    // `final`: the page is going away (pagehide / unmount). Use fetch keepalive so the browser doesn't cancel
+    // the PUT; ApiClient falls back to a normal request for bodies over the keepalive quota. The data is
+    // already in localStorage either way (written before the debounce).
+    function flush(final = false) {
       if (timer !== null) clearTimeout(timer);
       timer = null;
       const data = pending;
       pending = null;
       if (!data || !latest.current.token) return;
-      const p: Promise<void> = api.putSave(gameId, data).then(
+      const p: Promise<void> = (final ? api.putSave(gameId, data, { keepalive: true }) : api.putSave(gameId, data)).then(
         () => {},
         (e: unknown) => {
           if (isApiError(e) && e.code === "rate_limited") {
@@ -253,11 +322,11 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
       pending = data;
       arm(CLOUD_SAVE_DEBOUNCE_MS);
     };
-    const onPageHide = () => flush();
+    const onPageHide = () => flush(true);
     window.addEventListener("pagehide", onPageHide);
     return () => {
       window.removeEventListener("pagehide", onPageHide);
-      flush();
+      flush(true);
       cloudWrite.current = null;
       writers.delete(writer);
       if (writers.size === 0 && cloudWriters.get(gameId) === writers) cloudWriters.delete(gameId);
@@ -333,7 +402,16 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
         case "webgame:hello": {
           // Reply directly to the verified source (the game frame); opaque origin => "*".
           const source = event.source as Window;
-          const reply = (d: Record<string, unknown> | null) => source.postMessage({ type: "webgame:load", data: d }, "*");
+          let controlsSent = false;
+          const reply = (d: Record<string, unknown> | null) => {
+            source.postMessage({ type: "webgame:load", data: d }, "*");
+            // F009: right after the first load reply to each hello (restarts too). Reads the latest actions and
+            // overrides when it runs, which may be after the cloud-load timeout.
+            if (controlsSent) return;
+            controlsSent = true;
+            const { defaults: d0, game: g0 } = latest.current;
+            if (d0.length > 0) source.postMessage(controlsMessage(d0, readOverrides(g0.id)), "*");
+          };
           const st = cloud.current;
           const best = (): Record<string, unknown> | null => {
             if (st.status === "done" && st.data && !st.savedSinceFetch) {
@@ -430,6 +508,8 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
         case "webgame:ready": {
           setReady(true);
           setError(null);
+          // F009: the one-time "See and change the controls" hint (games with actions only).
+          if (latest.current.defaults.length > 0 && !latest.current.controlsOpen && takeControlsHint(g.id)) setControlsHinting(true);
           if (playRecorded.current) return;
           playRecorded.current = true;
           api.recordPlay(g.id).then(
@@ -440,15 +520,83 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           );
           return;
         }
+        case "webgame:leaderboard-get": {
+          const req = parseLeaderboardRequest(data as Record<string, unknown>);
+          if (!req) return;
+          const source = event.source as Window;
+          const key = `${u?.id ?? ""}|${req.period}`;
+          const cache = lbCache.current;
+          const now = Date.now();
+          const entry = cache.get(key);
+          let outcome: Promise<LbOutcome>;
+          if (entry?.inflight) outcome = entry.inflight;
+          else if (entry?.value && now - entry.at < GAME_LEADERBOARD_CACHE_MS) outcome = Promise.resolve(entry.value);
+          else {
+            const fetches = lbFetches.current.filter((t) => now - t < GAME_LEADERBOARD_THROTTLE_WINDOW_MS);
+            lbFetches.current = fetches;
+            if (fetches.length >= GAME_LEADERBOARD_THROTTLE_MAX) {
+              try {
+                source.postMessage({ type: "webgame:leaderboard", requestId: req.requestId, leaderboard: null, error: "rate_limited" }, "*");
+              } catch {
+                /* frame gone */
+              }
+              return;
+            }
+            fetches.push(now);
+            const viewerId = u?.id ?? null;
+            const fallback = g.leaderboard;
+            const e: LbCacheEntry = { at: now };
+            e.inflight = api.getLeaderboard(g.id, { period: req.period, limit: GAME_LEADERBOARD_MAX_LIMIT }).then(
+              (lb): LbOutcome => ({ leaderboard: toLeaderboardView(lb, viewerId, fallback) }),
+              (err: unknown): LbOutcome => ({ error: isApiError(err) && err.code === "rate_limited" ? "rate_limited" : "unavailable" }),
+            );
+            e.inflight.then((v) => {
+              e.inflight = undefined;
+              if ("leaderboard" in v) {
+                e.value = v;
+                e.at = Date.now();
+              } else if (cache.get(key) === e) cache.delete(key);
+            });
+            cache.set(key, e);
+            outcome = e.inflight;
+          }
+          outcome.then((v) => {
+            const msg = "leaderboard" in v
+              ? { type: "webgame:leaderboard", requestId: req.requestId, leaderboard: sliceLeaderboardView(v.leaderboard, req.limit) }
+              : { type: "webgame:leaderboard", requestId: req.requestId, leaderboard: null, error: v.error };
+            try {
+              source.postMessage(msg, "*");
+            } catch {
+              /* frame gone */
+            }
+          });
+          return;
+        }
         case "webgame:score": {
           const raw = (data as { score?: unknown }).score;
           const n = typeof raw === "number" ? raw : Number(raw);
           if (!Number.isFinite(n)) return;
           const score = Math.round(n);
+          const rid = (data as { requestId?: unknown }).requestId;
+          const requestId = isRequestId(rid) ? rid : null;
+          const source = event.source as Window;
+          const replyScore = (result: ReturnType<typeof toScoreResultView> | null, err?: "anonymous" | "rate_limited" | "failed") => {
+            if (!requestId) return;
+            try {
+              source.postMessage(
+                err ? { type: "webgame:score-result", requestId, result: null, error: err } : { type: "webgame:score-result", requestId, result },
+                "*",
+              );
+            } catch {
+              /* frame gone */
+            }
+          };
+          const format = g.leaderboard?.format === "time" ? "time" : "number";
           if (!u) {
+            replyScore(null, "anonymous");
             toast.show({
               kind: "info",
-              title: `You scored ${score.toLocaleString()}!`,
+              title: `You scored ${formatScore(score, format)}!`,
               message: "Log in to save your score to the leaderboard.",
               action: { label: "Log in", onClick: () => navigate(`/login?next=${encodeURIComponent(`/games/${g.id}`)}`) },
               duration: 8000,
@@ -457,10 +605,17 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           }
           api.submitScore(g.id, score).then(
             (s) => {
-              toast.success(`Score saved: ${s.score.toLocaleString()}`, s.rank ? `You're #${s.rank} on the leaderboard.` : undefined);
+              const t = scoreToastText(s, format);
+              toast.success(t.title, t.message);
+              replyScore(toScoreResultView(s, format));
+              // Drop cached boards so the game's next read reflects this score.
+              lbCache.current.clear();
               onScore?.(s);
             },
-            (e) => toast.error("Couldn't save your score", errorMessage(e)),
+            (e) => {
+              replyScore(null, isApiError(e) && e.code === "rate_limited" ? "rate_limited" : "failed");
+              toast.error("Couldn't save your score", errorMessage(e));
+            },
           );
           return;
         }
@@ -477,20 +632,45 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
     return () => window.removeEventListener("message", onMessage);
   }, [api, toast, navigate]);
 
-  // Pause when the tab is hidden, resume when visible again.
+  // Parent pause reasons (F009): the tab is hidden and/or the controls panel is open. Pause when the set becomes
+  // non-empty, resume only when it is empty again.
+  const setPause = usePauseReasons(post);
+  const wasControlsOpen = useRef(false);
   useEffect(() => {
-    const onVis = () => {
-      if (document.hidden) {
-        pausedByVisibility.current = true;
-        post({ type: "webgame:pause" });
-      } else if (pausedByVisibility.current) {
-        pausedByVisibility.current = false;
-        post({ type: "webgame:resume" });
-      }
+    setPause("controls", controlsOpen);
+    if (controlsOpen) setControlsHinting(false);
+    else if (wasControlsOpen.current) iframeRef.current?.focus(); // keys go back to the game
+    wasControlsOpen.current = controlsOpen;
+  }, [controlsOpen, setPause]);
+
+  useEffect(() => {
+    if (!showControls) setControlsOpen(false);
+  }, [showControls]);
+
+  // F009: every override change (this panel, another tab) goes to the running game at once.
+  useEffect(
+    () =>
+      subscribeOverrides(game.id, (o) => {
+        const d = latest.current.defaults;
+        if (d.length > 0) post(controlsMessage(d, o));
+      }),
+    [game.id, post],
+  );
+
+  // F009: hosts (desktop View → Controls) open the panel with a window event.
+  useEffect(() => {
+    const onOpen = () => {
+      if (latest.current.showControls) setControlsOpen(true);
     };
-    document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
-  }, [post]);
+    window.addEventListener(PLAYER_CONTROLS_EVENT, onOpen);
+    return () => window.removeEventListener(PLAYER_CONTROLS_EVENT, onOpen);
+  }, []);
+
+  useEffect(() => {
+    if (!controlsHinting) return;
+    const t = setTimeout(() => setControlsHinting(false), CONTROLS_HINT_MS);
+    return () => clearTimeout(t);
+  }, [controlsHinting]);
 
   useEffect(() => {
     const onFs = () => setFullscreen(document.fullscreenElement === wrapRef.current && !!wrapRef.current);
@@ -565,15 +745,55 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
             </button>
           </div>
         )}
+        {shots.flashKey > 0 && <div key={shots.flashKey} className="pf-shot-flash" aria-hidden="true" />}
       </div>
+      <span className="pf-sr-only" aria-live="polite">
+        {shots.announcement}
+      </span>
       <div className="pf-player__bar">
         <span className="pf-player__title">{game.title}</span>
         <div className="pf-player__controls">
           <button type="button" className="pf-iconbtn" onClick={() => setReloadKey((k) => k + 1)} aria-label="Restart game" title="Restart">
             ↻
           </button>
+          {showControls && (
+            <span className="pf-player__ctrl">
+              <button
+                type="button"
+                className="pf-iconbtn"
+                onClick={() => setControlsOpen(true)}
+                aria-haspopup="dialog"
+                aria-expanded={controlsOpen}
+                aria-label="Controls"
+                title="Controls"
+              >
+                ⌨
+              </button>
+              {controlsHinting && (
+                <span className="pf-controls-hint" role="status">
+                  <span>See and change the controls</span>
+                  <button type="button" className="pf-controls-hint__close" aria-label="Dismiss" onClick={() => setControlsHinting(false)}>
+                    ×
+                  </button>
+                </span>
+              )}
+            </span>
+          )}
           <button type="button" className="pf-iconbtn" onClick={toggleMute} aria-pressed={muted} aria-label={muted ? "Unmute" : "Mute"} title={muted ? "Unmute" : "Mute"}>
             {muted ? "🔇" : "🔊"}
+          </button>
+          <button
+            type="button"
+            className="pf-iconbtn"
+            ref={cameraRef}
+            onClick={shots.capture}
+            // aria-disabled, not disabled: the button keeps focus while a capture runs (review 3, L1a).
+            aria-disabled={!shots.canCapture}
+            aria-busy={shots.capturing || undefined}
+            aria-label="Take screenshot"
+            title="Screenshot"
+          >
+            {shots.capturing ? <Spinner size={14} label="Capturing screenshot" /> : "📷"}
           </button>
           <button
             type="button"
@@ -587,6 +807,27 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           </button>
         </div>
       </div>
+      <ScreenshotTray
+        items={shots.items}
+        mode="player"
+        game={{ id: game.id, title: game.title, published: game.published, isOwner: game.isOwner }}
+        onRemove={shots.remove}
+        onClear={shots.clear}
+        onGameUpdated={onGameUpdated}
+        emptyFocusRef={cameraRef}
+      />
+      {controlsOpen && showControls && (
+        // Inside the player wrapper so it also shows in fullscreen.
+        <ControlsPanel
+          mode="player"
+          title={game.title}
+          hint={controlsHint}
+          actions={defaults}
+          overrides={overrides}
+          onChange={(o) => writeOverrides(game.id, o, defaults)}
+          onClose={() => setControlsOpen(false)}
+        />
+      )}
     </div>
   );
 }

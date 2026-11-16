@@ -3,13 +3,26 @@ export { WebGameApp, WebGameProviders, WebGameRoutes } from "./WebGameApp";
 export type { WebGameAppProps } from "./WebGameApp";
 
 // API
-export { ApiClient, ApiError, isApiError, buildQuery, resolveApiUrl, parseRetryAfter, rateLimitMessage } from "./api/client";
+export { ApiClient, ApiError, isApiError, buildQuery, resolveApiUrl, parseRetryAfter, rateLimitMessage, KEEPALIVE_MAX_BODY_BYTES } from "./api/client";
 export type { ApiClientOptions } from "./api/client";
+export {
+  normalizeComment,
+  normalizeThread,
+  normalizeCommentListPage,
+  commentPermalink,
+  isF017CommentPage,
+  readCommentSort,
+  writeCommentSort,
+  COMMENT_SORT_STORAGE_KEY,
+} from "./api/comments";
+export type { RawComment, RawCommentThread, RawCommentListPage } from "./api/comments";
 export type * from "./api/types";
 
 // Contexts / hooks
 export { ConfigProvider, useConfig, usePlatform, useApi, useResolveUrl } from "./context/config";
-export type { WebGameConfig, PlatformConfig } from "./context/config";
+export type { WebGameConfig, PlatformConfig, OsNotifications } from "./context/config";
+export { NotificationsProvider, useNotifications } from "./context/notifications";
+export type { NotificationsState } from "./context/notifications";
 export { AuthProvider, useAuth, TOKEN_STORAGE_KEY, readStoredToken } from "./context/auth";
 export type { AuthState } from "./context/auth";
 export { ToastProvider, useToast } from "./context/toast";
@@ -28,27 +41,139 @@ export {
   discardPendingCloudSave,
   CLOUD_LOAD_TIMEOUT_MS,
   CLOUD_SAVE_DEBOUNCE_MS,
+  GAME_LEADERBOARD_CACHE_MS,
+  GAME_LEADERBOARD_THROTTLE_MAX,
+  GAME_LEADERBOARD_THROTTLE_WINDOW_MS,
+  CONTROLS_HINT_MS,
 } from "./components/GamePlayer";
 export { FavoritesProvider, FavoriteButton, useFavorites } from "./components/Favorite";
 export type { FavoriteButtonProps, FavoriteState, FavoritesApi } from "./components/Favorite";
+export { FollowProvider, FollowButton, useFollows } from "./components/Follow";
+export type { FollowButtonProps, FollowState, FollowsApi } from "./components/Follow";
+export { FeedItem, FeedItemSkeleton, FEED_ITEM_KINDS, isKnownFeedItem, feedScoreDisplay } from "./components/FeedItem";
 export { AchievementIcon, GameAchievements, RecentAchievements } from "./components/Achievements";
 export { ReportDialog, ReportButton, REPORT_REASONS } from "./components/Report";
 export type { ReportDialogProps } from "./components/Report";
 export { PlaysChart, niceMax } from "./components/PlaysChart";
 export type { PlaysChartProps } from "./components/PlaysChart";
+// F005: screenshots
+export {
+  PLAYER_SCREENSHOT_EVENT,
+  launderImage,
+  fitImageForUpload,
+  screenshotFileName,
+  sanitizeScreenshotCaption,
+  browserImageCodec,
+  SCREENSHOT_MAX_BLOB_BYTES,
+  SCREENSHOT_CAPTION_MAX,
+  SCREENSHOT_MAX_SIDE,
+  SCREENSHOT_MAX_PIXELS,
+  SCREENSHOT_MIN_UPLOAD_SIDE,
+  SCREENSHOT_UPLOAD_MAX_BYTES,
+  readImageHeader,
+  sniffImage,
+  imageDimensionsOk,
+  isBelowUploadMinimum,
+} from "./screenshot";
+export type { ImageCodec, DecodedImage, LaunderedImage, ImageHeader } from "./screenshot";
+export {
+  useScreenshotCapture,
+  SCREENSHOT_REQUEST_TIMEOUT_MS,
+  SCREENSHOT_SHARE_INTERVAL_MS,
+  SCREENSHOT_SHARE_MAX_PER_MOUNT,
+  SCREENSHOT_TRAY_MAX,
+} from "./components/useScreenshotCapture";
+export type { ScreenshotItem, ScreenshotCapture, ScreenshotCaptureOptions } from "./components/useScreenshotCapture";
+export { ScreenshotTray } from "./components/ScreenshotTray";
+export type { ScreenshotTrayProps } from "./components/ScreenshotTray";
+export { ScreenshotDialog, SCREENSHOTS_CHANGED_EVENT, screenshotErrorMessage } from "./components/ScreenshotDialog";
+export type { ScreenshotDialogProps, ScreenshotDialogGame } from "./components/ScreenshotDialog";
+export { ScreenshotGallery, SCREENSHOT_GALLERY_PER_PAGE } from "./components/ScreenshotGallery";
+export type { ScreenshotGalleryProps } from "./components/ScreenshotGallery";
+
+// F009: controls and remapping
+export {
+  PLAYER_CONTROLS_EVENT,
+  BINDABLE_KEYS,
+  GAMEPAD_BUTTON_NAMES,
+  MAX_ACTIONS,
+  MAX_ACTION_KEYS,
+  MAX_ACTION_GAMEPAD,
+  ACTION_NAME_MAX,
+  CONTROLS_HINT_MAX,
+  CONTROLS_OVERRIDES_MAX_BYTES,
+  ACTION_ID_PATTERN,
+  isBindableKey,
+  isBindableKeyboardCode,
+  isGamepadButton,
+  keyLabel,
+  gamepadLabel,
+  validateActions,
+  formatActionsProblem,
+  problemsForAction,
+  normalizeActions,
+  normalizeControlsHint,
+  hasControls,
+  sanitizeOverrides,
+  pruneOverrides,
+  effectiveActions,
+  isActionChanged,
+  findConflicts,
+  hasCtrlShortcutRisk,
+  controlsStorageKey,
+  controlsHintedKey,
+  readOverrides,
+  writeOverrides,
+  subscribeOverrides,
+  useStoredOverrides,
+  takeControlsHint,
+  useKeyboardLayout,
+  controlsMessage,
+} from "./controls";
+export type { ActionsProblem, ControlOverrides } from "./controls";
+export { ControlsPanel } from "./components/ControlsPanel";
+export type { ControlsPanelProps } from "./components/ControlsPanel";
+export { KeyCaptureButton, KEY_CAPTURE_TIMEOUT_MS } from "./components/KeyCaptureButton";
+export type { KeyCaptureButtonProps } from "./components/KeyCaptureButton";
+export { ControlsSummary } from "./components/ControlsSummary";
+export type { ControlsSummaryProps } from "./components/ControlsSummary";
+export { usePauseReasons } from "./components/usePauseReasons";
+export type { PauseReason } from "./components/usePauseReasons";
 
 // Studio
-export { createZip, crc32 } from "./studio/zip";
-export type { ZipFiles, ZipInput } from "./studio/zip";
+export { createZip, createZipAsync, canDeflateRaw, crc32 } from "./studio/zip";
+export type { ZipFiles, ZipInput, CreateZipOptions, CreateZipAsyncOptions, DeflateRawSync } from "./studio/zip";
 export {
   buildBundleZip,
+  buildBundleZipAsync,
   validateProject,
+  validateBundlePaths,
+  projectSize,
+  checkBundleSize,
+  resolveProjectFile,
+  MAX_BUNDLE_COMPRESSED_BYTES,
+  MAX_BUNDLE_UNCOMPRESSED_BYTES,
   projectFromFileList,
+  projectFromZip,
+  projectFromEntries,
+  decodeProjectFile,
+  isBinaryBmfont,
+  BINARY_BMFONT_MESSAGE,
   serializeProject,
   deserializeProject,
+  deserializeSession,
+  parseStudioLink,
   STUDIO_STORAGE_KEY,
+  leaderboardOf,
+  withLeaderboard,
 } from "./studio/project";
-export type { StudioProject, StudioManifest, StudioAchievement } from "./studio/project";
+export type { StudioProject, StudioManifest, StudioAchievement, StudioLeaderboard, StudioLink, StudioSession, LocalProject, ProjectEntry } from "./studio/project";
+export { readZip, canInflateRaw, MAX_OPEN_ZIP_BYTES } from "./studio/unzip";
+export type { ReadZipLimits, ZipEntryData } from "./studio/unzip";
+export { PublishDialog } from "./studio/PublishDialog";
+export type { PublishDialogProps, PublishMode } from "./studio/PublishDialog";
+export { OpenGameDialog } from "./studio/OpenGameDialog";
+export type { OpenGameDialogProps } from "./studio/OpenGameDialog";
 export { STUDIO_TEMPLATES } from "./studio/templates";
 export type { StudioTemplate } from "./studio/templates";
 export { StudioPreview, STUDIO_READY_TIMEOUT_MS } from "./studio/StudioPreview";
@@ -57,10 +182,66 @@ export { CodeEditor } from "./studio/CodeEditor";
 export type { CodeEditorHandle, CodeEditorProps } from "./studio/CodeEditor";
 export type { GamePlayerProps, GamePlayerGame } from "./components/GamePlayer";
 export { GameCard, GameCardSkeleton, GameGrid } from "./components/GameCard";
+export type { GameCardProps, GameCardHighlight } from "./components/GameCard";
+export { RelatedGames, RELATED_GAMES_LIMIT } from "./components/RelatedGames";
+export { VersionHistory } from "./components/VersionHistory";
+export type { VersionHistoryProps } from "./components/VersionHistory";
+export { ReleaseNotesField } from "./components/ReleaseNotesField";
+export type { ReleaseNotesFieldProps } from "./components/ReleaseNotesField";
+export type { RelatedGamesProps } from "./components/RelatedGames";
+export { Tabs, TabPanel, ToggleGroup, tabId, tabPanelId } from "./components/Tabs";
+export type { TabsProps, TabPanelProps, TabItem, ToggleGroupProps } from "./components/Tabs";
 export { StarRating } from "./components/StarRating";
 export type { StarRatingProps } from "./components/StarRating";
-export { Leaderboard } from "./components/Leaderboard";
-export { Comments } from "./components/Comments";
+export { Leaderboard, LEADERBOARD_PERIOD_KEY } from "./components/Leaderboard";
+export type { LeaderboardProps } from "./components/Leaderboard";
+export {
+  LEADERBOARD_PERIODS,
+  DEFAULT_LEADERBOARD_CONFIG,
+  normalizeLeaderboardConfig,
+  toLeaderboardView,
+  toScoreResultView,
+  sampleLeaderboardView,
+  sliceLeaderboardView,
+} from "./leaderboard";
+export type { LeaderboardView, LeaderboardViewEntry, ScoreResultView } from "./leaderboard";
+export { Comments, REPLIES_PER_PAGE } from "./components/Comments";
+export type { CommentsProps } from "./components/Comments";
+export { CommentItem } from "./components/CommentItem";
+export type { CommentItemProps } from "./components/CommentItem";
+export { CommentForm, COMMENT_MAX_LENGTH } from "./components/CommentForm";
+export type { CommentFormProps } from "./components/CommentForm";
+export { CommentSortToggle } from "./components/CommentSortToggle";
+export type { CommentSortToggleProps } from "./components/CommentSortToggle";
+export { HeartButton } from "./components/HeartButton";
+export type { HeartButtonProps, HeartState } from "./components/HeartButton";
+// F007: notifications
+export { NotificationBell, NOTIFICATION_PANEL_ID, NOTIFICATION_PANEL_LIMIT } from "./components/NotificationBell";
+export { NotificationItem } from "./components/NotificationItem";
+export type { NotificationItemProps } from "./components/NotificationItem";
+export { NotificationSettingsSection, NOTIFICATION_SETTING_FIELDS } from "./components/NotificationSettings";
+export {
+  NOTIFICATION_KINDS,
+  isKnownNotification,
+  notificationParts,
+  notificationText,
+  safeNotificationPath,
+  mergeNotifications,
+  unreadBadgeText,
+  bellLabel,
+  OS_WATERMARK_PREFIX,
+  readOsWatermark,
+  writeOsWatermark,
+  OS_NOTIFICATION_TITLE,
+  OS_NOTIFICATION_MAX,
+  osNotificationsFor,
+  DEFAULT_POLL_SECS,
+  POLL_MAX_BACKOFF_SECS,
+  POLL_STALE_MS,
+  normalizePollSecs,
+  notificationPollDelay,
+} from "./notifications";
+export type { NotificationPart, PollOutcome, PollDelayInput } from "./notifications";
 export { FileDrop } from "./components/FileDrop";
 export type { FileDropProps } from "./components/FileDrop";
 export { Layout, Header, Footer, Logo, RequireAuth } from "./components/Layout";
@@ -71,6 +252,7 @@ export {
   EmptyState,
   ErrorState,
   FallbackArt,
+  LoadError,
   Pagination,
   ProgressBar,
   Skeleton,
@@ -80,6 +262,8 @@ export {
   Thumbnail,
   UserLink,
 } from "./components/common";
+export { useModal } from "./components/useModal";
+export type { UseModalOptions } from "./components/useModal";
 
 // Pages
 export { HomePage } from "./pages/HomePage";
@@ -96,6 +280,24 @@ export { FavoritesPage } from "./pages/FavoritesPage";
 export { GameStatsPage } from "./pages/GameStatsPage";
 export { AdminPage } from "./pages/AdminPage";
 export { StudioPage, STUDIO_OPEN_FOLDER_EVENT } from "./pages/StudioPage";
+export { FeedPage, FEED_TAB_KEY } from "./pages/FeedPage";
+export type { FeedTab } from "./pages/FeedPage";
+export { FollowListPage } from "./pages/FollowListPage";
+export { NotificationsPage, NOTIFICATIONS_PER_PAGE } from "./pages/NotificationsPage";
+export type { NotificationsFilter } from "./pages/NotificationsPage";
+export type { FollowListMode } from "./pages/FollowListPage";
 
 // Utils
-export { formatCount, formatDate, timeAgo, errorMessage, looksLikeZip } from "./util";
+export {
+  formatCount,
+  formatDate,
+  timeAgo,
+  errorMessage,
+  looksLikeZip,
+  formatScore,
+  formatTimeUntil,
+  UPDATED_BADGE_MS,
+  isRecentlyUpdated,
+  RELEASE_NOTES_MAX,
+  gameVersionsPath,
+} from "./util";

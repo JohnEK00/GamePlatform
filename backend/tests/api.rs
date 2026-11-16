@@ -545,13 +545,13 @@ async fn list_search_sort() {
         StatusCode::UNAUTHORIZED
     );
 
-    // Popular.
-    for _ in 0..3 {
+    // Popular. Plays are deduplicated per (game, viewer), so use three different viewers.
+    for who in [None, Some(tok.as_str()), Some(tok2.as_str())] {
         let r = t
             .send(
                 Method::POST,
                 &format!("/api/games/{bid}/play"),
-                None,
+                who,
                 None,
                 vec![],
                 &[],
@@ -935,7 +935,7 @@ async fn play_page_and_files() {
         "  import { boot } from \"https://localhost:8080/runtime/engine.js\";".to_string(),
         format!("  const base = \"https://localhost:8080/games/{id}/files/\";"),
         "  const mod = await import(base + \"main.js?v=1\");".to_string(),
-        "  await boot(document.getElementById(\"game\"), mod.default, { width: 800, height: 600, baseUrl: base });".to_string(),
+        "  await boot(document.getElementById(\"game\"), mod.default, { width: 800, height: 600, baseUrl: base, actions: [] });".to_string(),
         "</script></body></html>".to_string(),
         String::new(),
     ]
@@ -1034,6 +1034,7 @@ async fn runtime_missing_is_503() {
         router: webgame_server::app(state.clone()),
         state,
         dir,
+        clock: Default::default(),
     };
     let r = t.get("/runtime/engine.js", None).await;
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
@@ -1203,6 +1204,7 @@ async fn spa_fallback_with_web_dist() {
         router: webgame_server::app(state.clone()),
         state,
         dir,
+        clock: Default::default(),
     };
 
     let (owner, _) = t.register("sam").await;

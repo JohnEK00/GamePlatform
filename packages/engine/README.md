@@ -84,6 +84,7 @@ missing or `load()` throws. In that case it shows an overlay and posts `webgame:
 | `pauseOverlay` | `true` | draw "PAUSED" while the host has paused the game |
 | `files` | — | in-memory bundle: `{ [bundlePath]: Blob \| ArrayBuffer \| ArrayBufferView \| string }` (see below) |
 | `debug` | `false` | start with the debug overlay visible |
+| `actions` | `[]` | the game.json `actions` list (F009), parsed leniently; see [Actions and remapping](#actions-and-remapping-f009) |
 
 ### In-memory files (`files`)
 
@@ -111,17 +112,20 @@ paths such as `"assets/ship.png"`; `./`, a leading `/`, `..` segments and query 
 | `debug` | show the debug overlay (**F3** also toggles it) |
 | `debugStats` | `{ fps, frameMs, workMs, drawCalls, sprites, tweens, particles, bodies }`, updated every frame |
 | `files` | the in-memory bundle files (`boot` option `files`) |
+| `captureFrame({ maxSize? })` | PNG Blob of the next frame, or `null` (see Screenshots) |
 | `renderer`, `assets`, `input`, `audio`, `scenes`, `tweens`, `storage`, `platform`, `random` | systems (below) |
-| `Vec2`, `Rect`, `Color`, `Random`, `Tilemap`, `Physics`, `Body`, `ParticleEmitter`, `Tween`, `Easing`, `SpriteSheet`, `Animation`, `Texture`, `Sound`, `Camera`, `GamepadButtons` | classes and constants |
+| `ui` | immediate-mode widgets: `panel`, `label`, `button` (see [UI widgets](#ui-widgets-f012)) |
+| `Vec2`, `Rect`, `Color`, `Random`, `Tilemap`, `Physics`, `Body`, `ParticleEmitter`, `Tween`, `Easing`, `SpriteSheet`, `Animation`, `Texture`, `Sound`, `Camera`, `GamepadButtons`, `NineSlice` | classes and constants |
 | `math` | `clamp, lerp, invLerp, remap, approach, wrap, degToRad, radToDeg, damp, circlesOverlap, circleRectOverlap` |
 
 **Each frame, in order:** each fixed step runs `game.update` → top scene(s) `update` → tweens → timers →
-camera shake. Then a render pass clears to `background` and runs `game.render` → scenes `render` (bottom to top).
+camera shake. Then a render pass clears to `background` and runs `game.render` → scenes `render` (bottom to top)
+→ the `engine.ui` layer (screen space) → batch flush → screenshot capture point → F3 debug overlay → host "PAUSED" overlay.
 
 **Automatic behavior:**
 * **Visibility:** the game pauses while the tab or iframe is hidden.
 * **Audio unlock:** audio is unlocked on the first pointer or key gesture.
-* **Host messages:** the engine handles `webgame:pause`, `webgame:resume` and `webgame:mute {muted}` from the parent window.
+* **Host messages:** the engine handles `webgame:pause`, `webgame:resume`, `webgame:mute {muted}` and `webgame:screenshot-request {requestId}` from the parent window.
 * **Crashes:** if `update` or `render` throws, the loop stops, an error overlay appears, and `webgame:error` is posted. Uncaught errors and rejections are also posted.
 
 ## Debug overlay
@@ -143,6 +147,8 @@ A batched WebGL2 sprite renderer. It uses one dynamic vertex buffer and premulti
 * **Atlas packing:** small pixel-art textures are packed into shared 2048² atlas pages, so most sprites batch into a single draw call.
 * **Shape batching:** every atlas page has a white texel, so shapes batch together with sprites.
 * **Text:** a canvas-generated font atlas with mipmaps. Glyphs are rasterized lazily, so any Unicode character works.
+  **Bitmap fonts** (F012) are drawn from their pages, which are ordinary textures: nearest-filtered pages are atlas-packed
+  and batch with sprites. See [Text and fonts](#text-and-fonts-f012).
 
 | method | notes |
 |---|---|
@@ -153,8 +159,10 @@ A batched WebGL2 sprite renderer. It uses one dynamic vertex buffer and premulti
 | `drawCircle(x, y, r, color, { outline?, segments?, alpha? })` | |
 | `drawTriangle(...)`, `drawPolygon([x0, y0, ...], color)` | polygons must be convex |
 | `drawText(text, x, y, { size = 16, color, align: left\|center\|right, baseline: top\|middle\|bottom, font, alpha, shadow, shadowOffset, letterSpacing, lineHeight, maxWidth })` | `\n` and word-wrap are supported |
-| `measureText(text, opts) → { width, height }` | |
-| `setFont(name, cssFamily, weight)` | built-in fonts: `"default"` (bold sans) and `"mono"` |
+| `measureText(text, opts) → { width, height }` | with a bitmap font, `size` defaults to its native size |
+| `setFont(name, cssFamily, weight)` | built-in fonts: `"default"` (bold sans), `"mono"` and the bitmap `"pixel"`; `pixel` can't be replaced |
+| `addBitmapFont(name, font)` / `hasFont(name)` | register a `BitmapFont`; `default`, `mono`, `pixel` are reserved (`font name "…" is reserved`) |
+| `drawNineSlice(nineSlice \| texture, x, y, w, h, { insets?, scale = 1, tint, alpha, center = true })` | corners keep their size × `scale`; one sprite in the stats |
 | `setBlend('normal' \| 'additive' \| 'multiply')` | |
 | `ui(fn)` / `setCamera(bool)` | draw in screen space (HUD) without the camera |
 | `camera` | `x, y` (view top-left at zoom 1), `zoom` (around the view center), `bounds`, `roundPixels`, `shake(intensity, duration)`, `follow(x, y, smoothing)`, `centerOn(x, y)`, `view()`, `screenToWorld(x, y)`, `worldToScreen(x, y)` |
@@ -176,10 +184,13 @@ Paths are relative to the bundle's `baseUrl`. Loads are cached, and `assets.prog
   * `loadSound(path) → Sound` (`.duration`)
   * `loadJSON(path)`, `loadText(path)`, `loadBinary(path)`
   * `loadFont(name, path, weight?)`: registers a woff2 or ttf font for `drawText({ font: name })`
+  * `loadBitmapFont(name, path, { smooth? }) → BitmapFont`: an AngelCode BMFont (`.fnt` text or `.json`) and its pages
+  * `loadNineSlice(path, insets, { smooth?, atlas? }) → NineSlice`
 * **Procedural textures:**
   * `createTexture(w, h, (ctx2d, w, h) => {...}, opts) → Texture`
   * `textureFrom(canvasOrImage, opts)`
   * `spriteSheet(texture, frameW, frameH)`
+  * `gridFont(name, texture, { cellW, cellH, chars, spacing?, margin?, advance?, lineHeight? }) → BitmapFont` (synchronous)
 * `Animation(frames[], fps, loop)` is a frame helper: call `.update(dt)`, then read `.frame` and `.finished`.
 
 ## `engine.input`
@@ -192,9 +203,66 @@ Keys use `KeyboardEvent.code` (`"ArrowLeft"`, `"KeyA"`, `"Space"`). Mouse button
 * `touches: { id, x, y, startX, startY, pressed, released }[]`
 * `gamepad(i)` returns:
   * `connected`, `axes`, `leftX`, `leftY`, `rightX`, `rightY`
-  * `isDown(b)`, `wasPressed(b)`, `wasReleased(b)`, where `b` is an index or a name: `A B X Y LB RB LT RT Back Start LS RS Up Down Left Right Home`
-* `axis('horizontal' | 'vertical')` returns -1..1 from the arrow keys, WASD, or the first gamepad (left stick with a deadzone, plus the d-pad)
+  * `isDown(b)`, `wasPressed(b)`, `wasReleased(b)`, where `b` is an index or a name: `A B X Y LB RB LT RT Back Start LS RS Up Down Left Right Home` (type `GamepadButtonKey`)
+* `axis('horizontal' | 'vertical')` returns -1..1 from the arrow keys, WASD, or the first gamepad (left stick with a deadzone, plus the d-pad). With movement actions it follows them instead (see below)
+* `actions`, `defaultActions`, `actionDown/actionPressed/actionReleased(id)`, `actionLabel(id)`, `keyLabel(code)`: see [Actions and remapping](#actions-and-remapping-f009)
 * `typed`: printable characters typed this step
+
+## Actions and remapping (F009)
+
+Contract: docs/GAME_FORMAT.md § F009. Declare every control your game uses as a named **action** in game.json.
+Players see them in the player's ⌨ controls panel and can remap the keys (up to 3 per action); the change reaches the
+running game at once through `webgame:controls`.
+
+```json
+"actions": [
+  { "id": "left",  "name": "Move left",  "keys": ["ArrowLeft", "KeyA"], "gamepad": ["Left"] },
+  { "id": "right", "name": "Move right", "keys": ["ArrowRight", "KeyD"], "gamepad": ["Right"] },
+  { "id": "jump",  "name": "Jump",       "keys": ["Space", "ArrowUp", "KeyW"], "gamepad": ["A"] },
+  { "id": "fire",  "name": "Fire",       "keys": ["Mouse0", "KeyZ"] }
+],
+"controls": "Mouse aims. Remap keys with ⌨."
+```
+
+* `id` matches `^[a-z0-9_-]{1,32}$` (unique); `name` is 1–40 chars; `keys` are up to 3 codes from the bindable table
+  (`BINDABLE_KEYS`: letters, digits, numpad, arrows, Space/Enter/Backspace, Shift/Ctrl/Alt, punctuation, Insert/Delete/Home/End/PageUp/PageDown,
+  `Mouse0..2`; **not** Escape, Tab, F-keys, Meta, CapsLock…); `gamepad` is up to 2 of `GAMEPAD_BUTTON_NAMES` (no `Home`).
+  At most 32 actions; each needs a key or a button. The backend rejects a bad list with a 422; the engine itself parses
+  the `actions` boot option leniently and drops bad entries with a `[pixelforge] actions:` warning.
+* `controls` (free text, ≤ 300 chars) is shown next to the action list. Use it for what actions can't say (mouse aim, touch).
+
+```js
+update(engine) {
+  const input = engine.input;
+  if (input.actionPressed('jump')) jump();          // up → down this step
+  if (input.actionDown('fire')) fire();             // held
+  if (input.actionReleased('jump')) cutJump();      // down → up this step
+  const dx = input.axis('horizontal');              // follows "left"/"right" when both are declared
+},
+render(engine) {
+  engine.renderer.drawText(`Press ${engine.input.actionLabel('jump')} to start`, 10, 10); // "Press Space" / "Press K" after a remap
+}
+```
+
+* `input.actions`: effective bindings (defaults plus the player's overrides), manifest order, frozen. `input.defaultActions`: as declared.
+* `actionDown(id)` = any bound key or gamepad button (first connected pad) is held.
+* **Edges are per action**, once per fixed step: `actionPressed` fires when the action goes from up to down, so pressing a
+  second bound key while the first is held does **not** fire it again; `actionReleased` fires when the last bound input
+  is let go (releasing one of two held keys does not). A tap within one step reports both `pressed` and `released`, like raw keys.
+* `actionLabel(id)`: the label of the first effective key, else of the first gamepad button, else `""`. Labels come from the
+  US-layout table (`keyLabel(code)`, also exported): the platform never tells games the player's keyboard layout, so an AZERTY
+  player's default `KeyW` is "W" in-game (the panel shows "Z").
+* Unknown ids return `false` / `""` and warn once per id.
+* **`axis()`**: when both `left` and `right` actions exist, `axis('horizontal')` uses them plus the left stick, and the built-in
+  Arrows/WASD/d-pad no longer apply; likewise `axis('vertical')` with `up`/`down`. With only one of the pair, `axis` is unchanged.
+* Overrides apply at the next fixed step. Button state is kept per code, so a key held during a remap is never stuck.
+* Keys bound to an action get `preventDefault()` on keydown (unless Ctrl or Meta is held), so `Slash` or `Quote` won't open
+  the browser's quick find.
+* **Read actions, not codes.** `isDown/wasPressed/wasReleased(code)`, `mouse`, `touches`, `gamepad(i)`, `anyPressed()` and
+  `typed` still report the physical input and ignore remapping (useful for text entry and debug keys). A game that declares
+  actions but checks `wasPressed('Space')` can't be remapped.
+* The dev harness (`index.html`, `studio.html`) has a ⌨ button with a small remapping panel that sends `webgame:controls`
+  (persisted in localStorage on `index.html`, in memory on `studio.html`).
 
 ## `engine.audio`
 
@@ -288,7 +356,8 @@ Arcade AABB physics.
 
 | call | posts to `window.parent` |
 |---|---|
-| `submitScore(n)` | `{ type: 'webgame:score', score: n }` (non-finite values are ignored) |
+| `submitScore(n)` | `{ type: 'webgame:score', score: n, requestId: 'sc-<n>' }` (non-finite values are ignored). Returns `Promise<ScoreResultView \| null>`, see [Leaderboards](#leaderboards-f001) |
+| `getLeaderboard(opts?)` | `{ type: 'webgame:leaderboard-get', requestId: 'lb-<n>', period, limit }`. Returns `Promise<LeaderboardView \| null>` |
 | `ready()` | `{ type: 'webgame:ready' }` (called automatically after `load`) |
 | `error(message)` | `{ type: 'webgame:error', message }` (also posted automatically on crashes) |
 | `requestFullscreen()` | `{ type: 'webgame:fullscreen' }` (the parent fullscreens its player wrapper) |
@@ -301,6 +370,41 @@ Messages accepted from the parent (only when `event.source === window.parent`):
 * `webgame:resume`
 * `webgame:mute { muted }`
 * `webgame:load { data }`, the handshake reply (a later one is merged in)
+* `webgame:leaderboard { requestId, leaderboard, error? }` and `webgame:score-result { requestId, result, error? }`,
+  the replies to the two requests below (unknown `requestId`s are ignored)
+
+## Leaderboards (F001)
+
+Optional `game.json` block (all keys optional; checked on upload and by `scripts/pack-examples.mjs`):
+```json
+"leaderboard": { "order": "asc", "format": "time", "label": "Best time" }
+```
+`order` is `"desc"` (higher is better, default) or `"asc"`; `format` is `"number"` (default) or `"time"`
+(integer milliseconds, shown as `m:ss.mmm`); `label` is at most 24 characters.
+
+```js
+// game over
+const result = await engine.platform.submitScore(score);       // posts immediately
+if (result?.personalBest) showNewBest(result.ranks);              // { day, week, all }
+const board = await engine.platform.getLeaderboard({ period: 'week', limit: 5 });
+if (board) for (const e of board.entries) draw(e.rank, e.name, e.display, e.isMe);
+```
+
+* `getLeaderboard({ period?: 'day' | 'week' | 'all' = 'all', limit?: number = 10 })`: `limit` is rounded and
+  clamped to 1–25. It resolves `null` when there is no parent window, on an invalid period (warned), on a reply
+  carrying `error`, after `LEADERBOARD_TIMEOUT_MS` (5000 ms), or when `MAX_PENDING_LEADERBOARD` (4) requests
+  are already pending (warned).
+* `submitScore(n)` still posts synchronously; the promise resolves with the parent's `ScoreResultView`
+  (`{ score, display, rank, personalBest, ranks: { day, week, all } }`), or `null` on `error` (e.g. anonymous
+  player, Studio preview), without a parent, or after `SCORE_RESULT_TIMEOUT_MS` (8000 ms). Ignoring the
+  return value is fine.
+* `LeaderboardView` is `{ period, order, format, label, totalPlayers, entries: [{ rank, name, score, display, isMe }], me: { rank, score, display } | null, sample? }`.
+  `me` is null for anonymous players or when they have no score in the period; `sample: true` marks the
+  Studio preview's fake data. The view is sanitised by the parent: no user ids, avatars or tokens.
+* Destroying the engine resolves every pending request with `null`. Always handle `null`: older hosts never
+  reply.
+* The types `LeaderboardPeriod`, `LeaderboardView`, `ScoreResultView` and `PlatformReply` are exported.
+* The dev harness (`index.html`) and `studio.html` answer with sample boards so the UI can be tested locally.
 
 ## Achievements
 
@@ -324,12 +428,146 @@ The backend checks these rules on upload, and so does `scripts/pack-examples.mjs
 The platform records the unlock for logged-in players and shows a toast. To stay compatible with v1 engines,
 guard the call: `engine.platform.unlockAchievement?.(id)`.
 
+## Screenshots (F005)
+
+Contract: docs/GAME_FORMAT.md § F005. There are three entry points, and all of them capture the **next rendered frame**:
+
+| entry point | who starts it | where the image goes |
+|---|---|---|
+| 📷 in the player bar (`webgame:screenshot-request`) | the player / host | the engine replies `webgame:screenshot` (`source: "player"`) to the parent's tray |
+| `engine.platform.shareScreenshot({ caption? })` → `Promise<boolean>` | the game | offered to the player's tray (`source: "game"`); `true` when the parent accepted it |
+| `engine.captureFrame({ maxSize? })` → `Promise<Blob \| null>` | the game | an `image/png` Blob for the game itself; nothing is posted |
+
+```js
+// e.g. after a personal best: the player decides whether to post it
+if (input.wasPressed('KeyP')) engine.platform.shareScreenshot?.({ caption: `Score ${score}` });
+```
+
+* **Output size** doesn't depend on the window or `devicePixelRatio`. For the logical `w×h`, `k = max(1, floor(1280 / max(w, h)))`
+  gives `(w·k)×(h·k)` (small games are upscaled by a whole factor). It is then scaled by `max(min(1, maxSize / long), 64 / short)`
+  (`maxSize` default 1920, rounded and clamped to 64–4096), so the short side is never below 64 even if the long side
+  then exceeds `maxSize`; sides are clamped to 64–4096. 4096×128 → 2048×64, 64×4096 → 64×4096. Examples: 320×180 → 1280×720, 800×600 → 800×600, 3840×2160 → 1920×1080.
+  `screenshotSize(w, h, maxSize?)` is exported.
+* **Sampling**: nearest-neighbour when the backing-store → output ratio is a whole number and `smooth` is off, bilinear otherwise.
+  A small window therefore gives a softer image at the same size.
+* **What is captured**: everything the game and its scenes draw, including your own HUD. The capture point is after the
+  batch flush and before the engine's overlays, so the F3 debug overlay, the host "PAUSED" overlay and the error overlay
+  are never in the image. To hide your HUD for a "photo mode", skip drawing it in the frame where you call `shareScreenshot`
+  (see pixel-peaks).
+* **One at a time**: only one capture (from any entry point) is queued or encoding. Another call meanwhile fails fast:
+  `captureFrame` → `null` with a warning, a player request → `error: "busy"`, a share → `false`.
+* **Failures**: `null` / `false` / `unavailable` when the engine isn't running (loading, crashed, destroyed) or no frame
+  arrives within 2000 ms (hidden tab). `failed` for a lost context, an encoder or security error, or a PNG over 8 MiB.
+* **Shares** need a parent window, must be at least 3000 ms apart (earlier calls → `false` + a warning), and resolve `false`
+  on `accepted: false`, an error or no reply within 5000 ms. The caption is coerced to a string, control and bidi
+  characters are removed, and it is cut to 140 code points. The parent only adds the image to the tray: nothing is
+  uploaded or downloaded without the player clicking.
+* `destroy()` resolves pending captures with `null` and pending shares with `false`.
+* **Never draw secrets** (codes, tokens, private data) in frames you pass to `shareScreenshot`: the player can post the image publicly.
+* Encoding uses `OffscreenCanvas.convertToBlob` (or `<canvas>.toBlob`) after the frame; the drawing buffer is copied with
+  `drawImage` at the capture point (`gl.readPixels` is a fallback), so the context keeps `preserveDrawingBuffer: false`.
+* The dev harness (`index.html`) and `studio.html` have a 📷 button and an in-memory tray, and they answer game shares,
+  re-encoding every image in the parent as the real host does.
+
+## Text and fonts (F012)
+
+Contract: docs/GAME_FORMAT.md § F012. `drawText`/`measureText` take a `font` name; canvas fonts and bitmap fonts share
+one registry.
+
+```js
+r.drawText('SCORE ' + score, 4, 4, { font: 'pixel' });            // built-in, crisp 8 px, no asset
+r.drawText('SCORE ' + score, 4, 4, { font: 'pixel', size: 16 });  // exactly 2×
+await engine.assets.loadBitmapFont('title', 'assets/title.fnt');  // + assets/title_0.png
+r.drawText('GAME OVER', W / 2, 80, { font: 'title', align: 'center' });
+engine.assets.gridFont('retro', sheetTexture, { cellW: 8, cellH: 8, chars: ' !"#0123456789ABC…' });
+```
+
+* **`pixel`**: ASCII 32–126, `size` 8, `lineHeight` 10, `base` 7, every glyph advances 6. Capitals use rows 0–6 of the
+  line, descenders rows 7–8. Any other character draws as `?`. Its texture is built on first use (an `ImageData`, no canvas
+  text) and shares an atlas page with sprites. **Glyph source**: hand-drawn for Pixelforge and dedicated to the public
+  domain (CC0); the table is `PIXEL_GLYPHS` in `src/pixelfont.ts`.
+* **Crispness rule**: a nearest-filtered bitmap font (the default) has each line's start x and top rounded to whole game
+  units, so at whole multiples of its native size (`pixel`: 8, 16, 24…) every texel is a whole pixel. Other sizes work but
+  may shimmer. Canvas fonts (`default`, `mono`, `loadFont`) stay best for large smooth text.
+* **Bitmap layout**: `size` defaults to the font's native size, the line height is `lineHeight × scale × (opts.lineHeight ?? 1)`,
+  BMFont kerning and `letterSpacing` apply between glyphs, `maxWidth` wraps at spaces, `\r\n` is one newline, other control
+  characters are skipped, missing glyphs draw `?` (or advance `size / 2`) with one warning per font, and `shadow` is a
+  second pass. `layoutText(font, text, opts)` (exported) is the pure layout behind both `drawText` and `measureText`.
+* **Recommended exporter settings** (BMFont, Hiero, Snowb, Littera…): a **text or JSON** descriptor (XML is rejected with
+  `BMFont XML is not supported; export the text or JSON format`), **PNG pages**, **no channel packing**. Limits: descriptor
+  ≤ 1 MiB, 1–16 pages, ≤ 8192 chars, ≤ 65536 kernings, numbers within −32768..32767. Pages resolve relative to the
+  descriptor and must stay inside the bundle. Errors start with `BMFont "{path}": `; warnings with `[pixelforge] font "{name}":`.
+  Distance-field fonts are drawn as plain bitmaps (with a warning). `smooth: true` loads the pages with linear filtering
+  and without atlas packing.
+* `BitmapFont` is read-only: `name`, `face`, `size`, `lineHeight`, `base`, `pages`, `smooth`, `glyph(cp)`, `kerning(a, b)`,
+  `has(char)`. `parseBMFont(source, path?)` is exported for tools.
+
+### 9-slice
+
+```js
+const frame = await engine.assets.loadNineSlice('assets/ui/frame.png', 8); // or new engine.NineSlice(texture, { left, top, right, bottom })
+r.drawNineSlice(frame, 140, 70, 200, 120);              // a dialog
+r.drawNineSlice(frame, 195, 150, 90, 24, { scale: 2 }); // crisp 2× pixel-art borders
+```
+
+Insets are source pixels (integers ≥ 0, `left + right ≤ width`, `top + bottom ≤ height`, else `RangeError`). When the box
+is smaller than its borders, they shrink proportionally and the centre is omitted. `center: false` draws the frame only.
+A `Texture` with `opts.insets` works too; a texture without insets is one stretched quad. A sprite-sheet frame is a valid
+texture. `scale` must be > 0 (anything else draws at 1).
+
+## UI widgets (F012)
+
+`engine.ui` is an immediate-mode helper. **Call widgets from `update`** (the game's or a scene's): each fixed step builds a
+draw list, and the engine draws the last step's list in screen space (camera ignored, `normal` blend) after your render and
+**before** the screenshot capture point, so 📷 captures include menus (the F3 and PAUSED overlays are still excluded).
+
+```js
+update(engine) {
+  const ui = engine.ui;
+  if (ui.button('play', 'PLAY', 190, 140, 100, 24)) this.start();
+  if (ui.button('sound', `SOUND: ${engine.audio.muted ? 'OFF' : 'ON'}`, 190, 170, 100, 24)) engine.audio.muted = !engine.audio.muted;
+  if (this.playing && ui.button('pause', 'II', 4, 4, 16, 16, { nav: false })) this.paused = true; // a HUD button
+}
+```
+
+* `ui.panel(x, y, w, h, { style?, color?, alpha? })`: `theme.panel` as a 9-slice at `theme.nineSliceScale`, or a flat rect
+  with a 1-unit border.
+* `ui.label(text, x, y, textOptions)`: `drawText` with the theme's font, size and colour as defaults.
+* `ui.button(id, label, x, y, w, h, { disabled?, nav?, font?, textSize?, textColor? }) → boolean`: `true` exactly once per
+  activation, in the step it happens. Ids are 1–64 characters and unique within a step (otherwise one warning, and that
+  button never activates). States: normal, hover, down and disabled (alpha 0.5, `disabledTextColor`, never reacts).
+* **Pointer** (mouse and primary touch): a press and a release on the same button activate it; a press that started
+  elsewhere never does. `ui.hot` / `ui.active` are the button under the pointer / being pressed (read-only).
+* **Keyboard and gamepad**: "next" is action `down`/`right` if declared, else `ArrowDown`/`ArrowRight`, plus D-pad
+  Down/Right; "previous" likewise with `up`/`left`; "activate" is action `confirm` if declared, else `Enter`,
+  `NumpadEnter`, `Space`, plus gamepad A; `Escape` / gamepad B clear the focus. Declared actions follow the player's ⌨
+  remapping. `Tab` is never used. The order is the enabled `nav !== false` buttons of the previous step, and it wraps.
+  The focus ring (2 units of `theme.focusColor`, 2 units outside the button) appears on the first navigation press, a
+  pointer press hides it again, and `ui.focus = id` shows it. `ui.navigation = false` turns navigation off.
+* **`{ nav: false }`** for buttons shown during gameplay, so arrows and `confirm` keep controlling the game.
+* **Phases**: a widget called from `render` draws immediately, and a `button` there returns `false` (one warning per id).
+  From `load` or other code outside a step, widgets draw nothing. `panel`/`label` are fine in `render` as drawing helpers.
+* **Drawing**: a step's list replaces the previous one (even when empty); with no step in a frame (paused, high refresh
+  rate) the last list is drawn again. At most 256 commands per step. `ui.autoDraw = false` turns the automatic layer off;
+  `ui.draw()` (from `render`) draws the list at that point, once per frame, and skips the automatic layer.
+* **Theme** (`ui.theme`; assign fields to restyle): `font` `"default"`, `textSize` `null` (= the font's default), `textColor`
+  `#ffffff`, `disabledTextColor` `#8b91b0`, `panel` / `button` / `buttonHover` / `buttonDown` (`NineSlice | null`),
+  `panelColor` `#141a2e`, `panelBorder` `#3a4470`, `buttonColor` `#2a3358`, `buttonHoverColor` `#3a4780`,
+  `buttonDownColor` `#1e2540`, `buttonBorder` `#5a6bc0`, `focusColor` `#ffd166`, `nineSliceScale` 1.
+* `Ui` takes its input and renderer in the constructor (`new Ui({ input, renderer, warn })`), so its rules are unit-tested
+  without a DOM.
+
 ## Examples
 
 * `examples/space-dodge`: a neon arcade shooter. It uses procedural textures, additive particles, screen shake, power-ups, the synth SFX and a stored high score.
 * `examples/pixel-peaks`: a 3-level pixel-art platformer. It uses `Tilemap` and `Physics` (one-way and moving platforms), scenes, a sprite sheet, tweens, touch buttons, and levels loaded from `assets/levels.json`.
+  F012: its HUD uses the `pixel` font, titles and banners use the kerned, outlined BMFont `assets/fonts/peaks.fnt`, the
+  title is an `engine.ui` menu, and message boxes are a 9-slice (`assets/ui/panel.png`). The font and the panel are
+  generated by `node packages/engine/scripts/gen-bitmap-font.mjs` from the `pixel` glyph table.
 
 * `examples/brick-breaker`: a six-level neon brick breaker with levels loaded from `assets/levels.json`. It has tough, steel and explosive bricks; six power-ups (wide paddle, multi-ball, slow ball, lasers, catch, extra life); combo multipliers; tweened level intros; and achievement badge icons in `assets/`.
 
+All three declare their keys as game.json `actions` and read them with the action API (F009); space-dodge and
+pixel-peaks show the effective key labels on their title screens.
 All three games call `engine.platform.submitScore` on game over and keep their best score in `engine.storage`.
 Each declares achievements in game.json: brick-breaker has 6 (with icons), the other two have 3 each.

@@ -161,6 +161,10 @@ const game = {
     this.pickups = [];
     this.popups = [];
     this.score = 0;
+    this.board = null; // "This week" top 5 (LeaderboardView) shown on the game-over screen
+    this.serverBest = false; // submitScore result said personalBest
+    this.capturePrompt = 0; // seconds left of the "Press P to capture" hint (F005)
+    this.run = (this.run || 0) + 1; // ignore late replies from a previous run
     this.lives = 3;
     this.combo = 1;
     this.comboTimer = 0;
@@ -176,7 +180,16 @@ const game = {
 
   update(engine, dt) {
     const input = engine.input;
-    if (input.wasPressed('KeyM')) engine.audio.muted = !engine.audio.muted;
+    if (input.actionPressed('mute')) engine.audio.muted = !engine.audio.muted;
+    // F005: the "photo" action (P / gamepad Back) offers a screenshot to the player's tray. Nothing
+    // is posted until the player posts it. shareScreenshot is new in F005, so feature-detect it.
+    // F009: every key is a game.json action, so players can remap it in the player's controls panel.
+    const photo = input.actionPressed('photo');
+    if (photo && typeof engine.platform.shareScreenshot === 'function') {
+      this.capturePrompt = 0;
+      engine.platform.shareScreenshot({ caption: `Score ${Math.floor(this.score)} in Space Dodge` });
+    }
+    this.capturePrompt = Math.max(0, this.capturePrompt - dt);
     this.updateStars(dt * (this.state === 'play' ? 1 : 0.4));
     this.explosions.update(dt);
     this.sparks.update(dt);
@@ -187,7 +200,7 @@ const game = {
 
     if (this.state === 'title') {
       this.titleTime += dt;
-      if (this.titleTime > 0.3 && input.anyPressed()) {
+      if (this.titleTime > 0.3 && !photo && input.anyPressed()) {
         this.reset(engine);
         this.state = 'play';
         engine.audio.tone({ freq: 220, freqEnd: 880, duration: 0.25, type: 'triangle', volume: 0.3 });
@@ -196,7 +209,7 @@ const game = {
     }
     if (this.state === 'over') {
       this.overTime += dt;
-      if (this.overTime > 1.0 && input.anyPressed()) {
+      if (this.overTime > 1.0 && !photo && input.anyPressed()) {
         this.reset(engine);
         this.state = 'play';
       }
@@ -250,8 +263,7 @@ const game = {
 
     this.thrust.burst(1, p.x + engine.random.range(-4, 4), p.y + 20);
 
-    const pad = input.gamepad(0);
-    const firing = input.isDown('Space') || input.isDown('KeyZ') || input.isDown('KeyJ') || pointer || pad.isDown('A') || pad.isDown('RT');
+    const firing = input.actionDown('fire') || pointer;
     if (firing && p.cooldown <= 0) {
       p.cooldown = p.triple > 0 ? 0.12 : 0.17;
       const speed = -720;
@@ -420,7 +432,7 @@ const game = {
         this.best = this.score;
         engine.storage.set('best', this.best);
       }
-      engine.platform.submitScore(this.score);
+      this.submitAndLoadBoard(engine);
       return;
     }
     p.inv = 2.2;
@@ -491,7 +503,7 @@ const game = {
       for (let i = 0; i < this.lives; i++)
         r.drawSprite(this.tex.ship, W - 30 - i * 30, 28, { w: 24, h: 24, originX: 0.5, originY: 0.5 });
       if (p.triple > 0) r.drawText(`TRIPLE ${p.triple.toFixed(1)}s`, W - 16, 52, { size: 13, align: 'right', color: '#ffe14c' });
-      if (engine.audio.muted) r.drawText('MUTED (M)', W / 2, 14, { size: 12, align: 'center', color: '#8899aa' });
+      if (engine.audio.muted) r.drawText(`MUTED (${engine.input.actionLabel('mute') || 'M'})`, W / 2, 14, { size: 12, align: 'center', color: '#8899aa' });
       if (this.state === 'over') this.renderGameOver(engine);
     });
   },
@@ -504,18 +516,79 @@ const game = {
     r.drawText('Blast rocks. Dodge saucers. Grab power-ups.', W / 2, H / 2 - 30, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });
     if (Math.floor(t * 2) % 2 === 0)
       r.drawText('PRESS ANY KEY OR TAP TO START', W / 2, H - 110, { size: 20, align: 'center', baseline: 'middle', color: '#ffe14c' });
-    r.drawText('Arrows/WASD move  ·  Space fire  ·  Mouse/touch: hold to fly  ·  M mute', W / 2, H - 60, { size: 14, align: 'center', baseline: 'middle', color: '#7f8db0' });
+    const L = (id) => engine.input.actionLabel(id) || '—';
+    r.drawText(`${L('up')}${L('left')}${L('down')}${L('right')} move  ·  ${L('fire')} fire  ·  Mouse/touch: hold to fly  ·  ${L('mute')} mute`, W / 2, H - 60, { size: 14, align: 'center', baseline: 'middle', color: '#7f8db0' });
     if (this.best > 0) r.drawText(`BEST ${this.best}`, W / 2, 40, { size: 18, align: 'center', color: '#8ea2ff' });
+  },
+
+  /**
+   * Submit the score, then show the weekly top 5. Older engines return undefined from submitScore
+   * and have no getLeaderboard, so both are feature-detected. A null result (offline, anonymous,
+   * old host) simply shows nothing extra.
+   */
+  async submitAndLoadBoard(engine) {
+    const run = this.run;
+    const platform = engine.platform;
+    let result = null;
+    try {
+      result = await platform.submitScore(this.score);
+    } catch {
+      result = null;
+    }
+    if (run !== this.run) return;
+    if (result && result.personalBest) {
+      this.serverBest = true;
+      if (typeof platform.shareScreenshot === 'function') this.capturePrompt = 3;
+    }
+    if (typeof platform.getLeaderboard !== 'function') return;
+    let board = null;
+    try {
+      board = await platform.getLeaderboard({ period: 'week', limit: 5 });
+    } catch {
+      board = null;
+    }
+    if (run === this.run && board && Array.isArray(board.entries)) this.board = board;
   },
 
   renderGameOver(engine) {
     const r = engine.renderer;
+    const b = this.board;
+    const y0 = b ? 110 : H / 2 - 70; // compact layout when the board is shown
     r.drawRect(0, 0, W, H, '#000', { alpha: 0.55 });
-    r.drawText('GAME OVER', W / 2, H / 2 - 70, { size: 60, align: 'center', baseline: 'middle', color: '#ff5f5f', shadow: '#000', shadowOffset: 4 });
-    r.drawText(`SCORE ${this.score}`, W / 2, H / 2, { size: 30, align: 'center', baseline: 'middle', color: '#fff' });
-    if (this.newBest) r.drawText('NEW BEST!', W / 2, H / 2 + 40, { size: 22, align: 'center', baseline: 'middle', color: '#ffe14c' });
+    r.drawText('GAME OVER', W / 2, y0, { size: 60, align: 'center', baseline: 'middle', color: '#ff5f5f', shadow: '#000', shadowOffset: 4 });
+    r.drawText(`SCORE ${this.score}`, W / 2, y0 + 70, { size: 30, align: 'center', baseline: 'middle', color: '#fff' });
+    if (this.newBest || this.serverBest) r.drawText('NEW BEST!', W / 2, y0 + 110, { size: 22, align: 'center', baseline: 'middle', color: '#ffe14c' });
+    if (this.capturePrompt > 0)
+      r.drawText(`Press ${engine.input.actionLabel('photo') || 'P'} to capture`, W / 2, y0 + 133, { size: 15, align: 'center', baseline: 'middle', color: '#4cf2ff', alpha: Math.min(1, this.capturePrompt * 2) });
+    if (b) this.renderBoard(r, b, 265);
     if (this.overTime > 1 && Math.floor(engine.time * 2) % 2 === 0)
-      r.drawText('PRESS ANY KEY OR TAP TO PLAY AGAIN', W / 2, H / 2 + 100, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });
+      r.drawText('PRESS ANY KEY OR TAP TO PLAY AGAIN', W / 2, b ? H - 40 : H / 2 + 100, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });
+  },
+
+  /** "This week" top 5, my row highlighted; my own row is appended when I'm outside the top. */
+  renderBoard(r, b, y) {
+    const x0 = W / 2 - 170;
+    const x1 = W / 2 + 170;
+    const rowH = 26;
+    const title = b.label ? `THIS WEEK · ${b.label.toUpperCase()}` : 'THIS WEEK';
+    r.drawText(title, W / 2, y, { size: 16, align: 'center', baseline: 'middle', color: '#4cf2ff', letterSpacing: 2 });
+    const rows = b.entries.slice(0, 5).map((e) => ({ rank: e.rank, name: e.name, display: e.display, me: !!e.isMe }));
+    if (b.me && !rows.some((e) => e.me)) rows.push({ rank: b.me.rank, name: 'YOU', display: b.me.display, me: true, gap: true });
+    if (rows.length === 0) {
+      r.drawText('No scores this week yet - be the first!', W / 2, y + 34, { size: 14, align: 'center', baseline: 'middle', color: '#8899aa' });
+      return;
+    }
+    let ry = y + 30;
+    for (const e of rows) {
+      if (e.gap) ry += 8;
+      if (e.me) r.drawRect(x0 - 8, ry - rowH / 2 + 1, x1 - x0 + 16, rowH - 2, '#ffe14c', { alpha: 0.18 });
+      const color = e.me ? '#ffe14c' : '#cfe3ff';
+      const name = String(e.name).length > 18 ? `${String(e.name).slice(0, 17)}…` : String(e.name);
+      r.drawText(`#${e.rank}`, x0, ry, { size: 15, baseline: 'middle', color });
+      r.drawText(name, x0 + 50, ry, { size: 15, baseline: 'middle', color });
+      r.drawText(String(e.display), x1, ry, { size: 15, align: 'right', baseline: 'middle', color });
+      ry += rowH;
+    }
   },
 };
 

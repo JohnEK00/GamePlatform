@@ -9,12 +9,16 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
+use webgame_server::ratelimit::ManualClock;
 use webgame_server::{AppState, Config, app};
 
 pub struct TestApp {
     pub router: Router,
     pub state: AppState,
     pub dir: TempDir,
+    /// The rate limiter's clock (M2): frozen unless a test advances it, so bucket refills
+    /// never depend on how fast the test runs.
+    pub clock: ManualClock,
 }
 
 pub struct Resp {
@@ -63,11 +67,16 @@ pub async fn setup_with(customize: impl FnOnce(&mut Config)) -> TestApp {
     std::fs::write(engine.join("engine.js"), "export function boot() {}").unwrap();
     config.engine_dist = engine;
     customize(&mut config);
-    let state = AppState::new(config).await.unwrap();
+    let clock = ManualClock::new();
+    let state = AppState::new(config)
+        .await
+        .unwrap()
+        .with_clock(clock.clock());
     TestApp {
         router: app(state.clone()),
         state,
         dir,
+        clock,
     }
 }
 
@@ -103,6 +112,8 @@ impl TestApp {
         let status = res.status();
         let headers = res.headers().clone();
         let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+        // Review-4 L2: background `gamePublished` fan-outs finish before the test goes on.
+        self.state.fan_out.idle().await;
         Resp {
             status,
             headers,

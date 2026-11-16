@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { isApiError } from "../api/client";
 import type { ReportReason, ReportTargetType } from "../api/types";
@@ -7,6 +7,7 @@ import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
 import { errorMessage } from "../util";
 import { Alert, Spinner } from "./common";
+import { useModal } from "./useModal";
 
 export const REPORT_REASONS: { value: ReportReason; label: string; hint: string }[] = [
   { value: "spam", label: "Spam", hint: "Ads, scams or repeated junk" },
@@ -33,9 +34,7 @@ export function ReportDialog({ open, targetType, targetId, targetLabel, onClose 
   const [details, setDetails] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const ref = useRef<HTMLFormElement>(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  const ref = useModal<HTMLFormElement>(open, onClose, { initialFocus: "input[type=radio]:checked", canClose: !busy });
   const uid = useId();
 
   useEffect(() => {
@@ -43,14 +42,6 @@ export function ReportDialog({ open, targetType, targetId, targetLabel, onClose 
     setReason("spam");
     setDetails("");
     setError(null);
-    const prev = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>("input[type=radio]")?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      prev?.focus?.();
-    };
   }, [open]);
 
   if (!open) return null;
@@ -77,7 +68,7 @@ export function ReportDialog({ open, targetType, targetId, targetLabel, onClose 
     }
   };
 
-  const what = targetType === "game" ? "game" : "comment";
+  const what = targetType === "game" ? "game" : targetType === "screenshot" ? "screenshot" : "comment";
   return (
     <div className="pf-modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <form className="pf-modal pf-report" role="dialog" aria-modal="true" aria-labelledby={`${uid}-title`} ref={ref} onSubmit={submit}>

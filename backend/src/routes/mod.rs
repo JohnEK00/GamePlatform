@@ -4,18 +4,24 @@ pub mod achievements;
 pub mod auth;
 pub mod comments;
 pub mod favorites;
+pub mod feed;
 pub mod files;
+pub mod follows;
 pub mod games;
+pub mod notifications;
 pub mod play;
+pub mod related;
 pub mod reports;
 pub mod saves;
 pub mod scores;
+pub mod screenshots;
 pub mod stats;
 pub mod tags;
 pub mod users;
+pub mod versions;
 
 use axum::extract::{DefaultBodyLimit, Request};
-use axum::http::{HeaderValue, Method, header};
+use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
@@ -28,6 +34,8 @@ use crate::error::AppError;
 
 pub const UPLOAD_BODY_LIMIT: usize = 60 * 1024 * 1024;
 pub const IMAGE_BODY_LIMIT: usize = 3 * 1024 * 1024;
+/// F013: the version a downloaded bundle belongs to (lowercase for `HeaderName::from_static`).
+pub const GAME_VERSION_HEADER: &str = "x-game-version";
 
 async fn health() -> Json<serde_json::Value> {
     Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
@@ -59,6 +67,26 @@ pub fn api_router() -> Router<AppState> {
             "/users/{username}/achievements",
             get(achievements::list_user_achievements),
         )
+        // F002 follows + feed
+        .route(
+            "/users/{username}/follow",
+            put(follows::put_follow).delete(follows::delete_follow),
+        )
+        .route("/users/{username}/followers", get(follows::list_followers))
+        .route("/users/{username}/following", get(follows::list_following))
+        .route("/feed", get(feed::get_feed))
+        .route("/feed/suggestions", get(feed::get_suggestions))
+        // F007 notifications (literal paths, so a later `/notifications/{id}` can't clash)
+        .route("/notifications", get(notifications::list))
+        .route(
+            "/notifications/unread-count",
+            get(notifications::unread_count),
+        )
+        .route("/notifications/read", post(notifications::mark_read))
+        .route(
+            "/notifications/settings",
+            get(notifications::get_settings).put(notifications::put_settings),
+        )
         // games
         .route(
             "/games",
@@ -74,13 +102,21 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/games/{id}/bundle",
-            put(games::upload_bundle).layer(upload_limit),
+            get(games::download_bundle)
+                .put(games::upload_bundle)
+                .layer(upload_limit),
         )
         .route(
             "/games/{id}/thumbnail",
             put(games::upload_thumbnail).layer(image_limit),
         )
+        .route("/games/{id}/versions", get(versions::list_versions))
+        .route(
+            "/games/{id}/versions/{version}",
+            axum::routing::patch(versions::update_version_notes),
+        )
         .route("/games/{id}/play", post(games::record_play))
+        .route("/games/{id}/related", get(related::related_games))
         .route("/games/{id}/preview-token", post(games::preview_token))
         .route(
             "/games/{id}/rating",
@@ -90,11 +126,37 @@ pub fn api_router() -> Router<AppState> {
             "/games/{id}/comments",
             get(comments::list_comments).post(comments::create_comment),
         )
-        .route("/comments/{id}", delete(comments::delete_comment))
+        .route(
+            "/comments/{id}",
+            get(comments::get_comment).delete(comments::delete_comment),
+        )
+        .route("/comments/{id}/replies", get(comments::list_replies))
+        .route(
+            "/comments/{id}/heart",
+            put(comments::heart).delete(comments::unheart),
+        )
+        // F017 creator thread tools
+        .route(
+            "/comments/{id}/pin",
+            put(comments::pin).delete(comments::unpin),
+        )
+        .route(
+            "/comments/{id}/lock",
+            put(comments::lock).delete(comments::unlock),
+        )
+        // F005 screenshots
+        .route(
+            "/games/{id}/screenshots",
+            get(screenshots::list_screenshots)
+                .post(screenshots::create_screenshot)
+                .layer(image_limit),
+        )
+        .route("/screenshots/{id}", delete(screenshots::delete_screenshot))
         .route(
             "/games/{id}/scores",
             get(scores::list_scores).post(scores::submit_score),
         )
+        .route("/games/{id}/leaderboard", get(scores::get_leaderboard))
         .route(
             "/games/{id}/favorite",
             put(favorites::put_favorite).delete(favorites::delete_favorite),
@@ -135,6 +197,43 @@ pub fn public_router(state: &AppState) -> Router<AppState> {
             ServeDir::new(state.storage.thumbnails_dir()),
         )
         .nest_service("/media/avatars", ServeDir::new(state.storage.avatars_dir()))
+        .nest_service(
+            "/media/screenshots",
+            Router::new()
+                .fallback_service(ServeDir::new(state.storage.screenshots_dir()))
+                .layer(axum::middleware::map_response(screenshot_media_headers)),
+        )
+}
+
+/// L8: `Cache-Control` of stored screenshot files (full image and thumbnail). The bytes never
+/// change, but a moderation delete must reach caches: without `immutable` and with a 1 hour
+/// lifetime, browsers and shared caches revalidate (cheap `If-Modified-Since` → 304) and get
+/// the 404 within an hour of a delete.
+pub const SCREENSHOT_CACHE_CONTROL: &str = "public, max-age=3600";
+
+/// F005: stored screenshots must never be sniffed or run as a document. Successful responses
+/// are cacheable for [`SCREENSHOT_CACHE_CONTROL`]; anything else (404 after a delete) is
+/// `no-store`.
+async fn screenshot_media_headers(mut res: axum::response::Response) -> axum::response::Response {
+    let ok = res.status().is_success() || res.status() == axum::http::StatusCode::NOT_MODIFIED;
+    let h = res.headers_mut();
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if ok {
+            SCREENSHOT_CACHE_CONTROL
+        } else {
+            "no-store"
+        }),
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("sandbox"),
+    );
+    res
 }
 
 fn api_cors(origins: &[String]) -> CorsLayer {
@@ -152,7 +251,12 @@ fn api_cors(origins: &[String]) -> CorsLayer {
             Method::DELETE,
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
-        .expose_headers([header::RETRY_AFTER])
+        // F013: the bundle download's version and file name are read cross-origin.
+        .expose_headers([
+            HeaderName::from_static(GAME_VERSION_HEADER),
+            header::CONTENT_DISPOSITION,
+            header::RETRY_AFTER,
+        ])
         .max_age(std::time::Duration::from_secs(3600))
 }
 

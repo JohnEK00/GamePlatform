@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { WebGameApp, type WebGameConfig } from "@webgame/ui";
 import { OfflineBanner } from "./OfflineBanner";
 import { installNativeIntegrations } from "./nativeMenu";
-import { isTauri, openLocalProject, pickFile, saveFile } from "./platform";
+import { OsNotificationSetting } from "./OsNotificationSetting";
+import { isTauri, openLocalProject, osNotifications, pickFile, reloadLocalProject, saveFile } from "./platform";
 import { DEFAULT_SERVER, readSavedServer, saveServer } from "./server";
 import { ServerContext, type ServerState } from "./ServerContext";
 import { ServerSettings } from "./ServerForm";
@@ -25,9 +26,15 @@ export function App() {
       platform: {
         name: "Desktop",
         pickFile,
-        extraSettings: <ServerSettings />,
+        extraSettings: (
+          <>
+            <ServerSettings />
+            <OsNotificationSetting />
+          </>
+        ),
         // Desktop only: in a plain browser the Studio uses <input webkitdirectory> and <a download>.
-        ...(isTauri() ? { openLocalProject, saveFile } : {}),
+        // osNotifications.isEnabled() is false in a plain browser and the setting renders nothing there.
+        ...(isTauri() ? { openLocalProject, reloadLocalProject, saveFile, osNotifications } : {}),
       },
     }),
     [server],

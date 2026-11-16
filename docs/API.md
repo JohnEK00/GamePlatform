@@ -84,7 +84,7 @@ When `WEB_DIST` is set, any GET not matched above (including `/games/{id}` and `
 `/api/*`: allow any origin listed in env `CORS_ORIGINS` (comma list; default `http://localhost:5173,http://localhost:1420,http://tauri.localhost,tauri://localhost`), methods GET/POST/PUT/PATCH/DELETE, headers Authorization + Content-Type.
 
 ## Backend env
-`PORT` (8080), `DATABASE_URL` (`sqlite://data/webgame.db?mode=rwc`), `DATA_DIR` (`data`), `JWT_SECRET` (dev default with a warning), `ENGINE_DIST` (`../packages/engine/dist`), `WEB_DIST` (optional; serve SPA), `CORS_ORIGINS`, `PUBLIC_ORIGIN` (optional, e.g. `https://arcade.example.com`; when set, `/play` uses it as `{ORIGIN}` instead of the request `Host` header — recommended in production).
+`PORT` (8080), `DATABASE_URL` (`sqlite://data/webgame.db?mode=rwc`), `DATA_DIR` (`data`), `JWT_SECRET` (dev default with a warning), `ENGINE_DIST` (`../packages/engine/dist`), `WEB_DIST` (optional; serve SPA), `CORS_ORIGINS`, `ADMIN_USERNAMES` (comma list; register those accounts BEFORE listing them, or anyone can claim an unregistered name), `RATE_LIMIT` (`off` disables), `TRUST_PROXY` (number of trusted reverse-proxy hops; `true` = 1; client IP = n-th X-Forwarded-For entry from the right), `PUBLIC_ORIGIN` (optional, e.g. `https://arcade.example.com`; when set, `/play` uses it as `{ORIGIN}` instead of the request `Host` header — recommended in production).
 
 
 ---
@@ -166,3 +166,809 @@ Exceeding → 429 `rate_limited` + `Retry-After`. Disable with `RATE_LIMIT=off` 
 
 ## Studio player
 `GET /play/studio`: player HTML for unsaved projects (same CSP/sandbox headers as /play/{id}, `Access-Control-Allow-Origin: *`). See GAME_FORMAT.md "Studio protocol".
+
+
+---
+
+## F001 additions
+
+Leaderboards 2.0 (spec: `docs/features/F001-leaderboards-2.md`). All earlier rules apply.
+
+### Types
+```ts
+type LeaderboardPeriod = "day" | "week" | "all"
+type LeaderboardConfig = {
+  order: "desc" | "asc";        // "desc": higher is better (default); "asc": lower is better
+  format: "number" | "time";    // "time": score is milliseconds (default "number")
+  label: string;                // column label, "" = UI default; max 24 chars
+}
+type Game = { ...v2, leaderboard: LeaderboardConfig }   // + leaderboard (from game.json; defaults when absent)
+
+type Leaderboard = {
+  period: LeaderboardPeriod;
+  periodStart: string | null;   // RFC3339 UTC (ms, "Z"), inclusive; null for "all"
+  periodEnd: string | null;     // RFC3339 UTC, exclusive; null for "all"
+  config: LeaderboardConfig;
+  entries: Score[];             // each user's best score inside the window, best first; Score.rank = rank in this window
+  totalPlayers: number;         // distinct users with >= 1 score in the window
+  me: Score | null;             // 🔓 the viewer's best in the window with its rank; null if anonymous or no score
+}
+
+type ScoreSubmitResult = Score & {   // superset of v1 Score; `rank` keeps its v1 meaning (all-time rank of THIS score among other users' bests)
+  personalBest: boolean;             // true if this is the user's first score, or strictly better than their previous all-time best (per order)
+  ranks: { day: number; week: number; all: number };   // rank of the user's best score in each window, after this submit
+}
+```
+
+### Periods and ranking
+- `day` = [today 00:00:00.000Z, tomorrow 00:00:00.000Z).
+- `week` = ISO week: [Monday 00:00:00.000Z, next Monday 00:00:00.000Z).
+- `all` has no bounds.
+- A score belongs to the window that contains its `createdAt`. Server time is the source of truth.
+- "Best" is `MAX(score)` for `desc` and `MIN(score)` for `asc`. On equal scores the earlier `createdAt` is listed first.
+- Ranks use competition ranking (1, 2, 2, 4).
+
+### Endpoints
+| Method | Path | Query / Body | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/leaderboard | `?period=day\|week\|all` (default `all`) `&limit=10` (1–100, clamped) | `Leaderboard` |
+| GET 🔓 | /api/games/{id}/scores | v1 query + `period` (default `all`) | `Score[]`, now honours `order` and `period` (same as `Leaderboard.entries`) |
+| POST 🔒 | /api/games/{id}/scores | `{ score }` (v1 rules) | 201 `ScoreSubmitResult` |
+
+- An invalid `period` → 400 `bad_request`, and a non-integer `limit` → 400 (same as v1 `/scores`).
+- Visibility follows `GET /api/games/{id}`: an unpublished game → 404 unless the viewer is the owner.
+- `POST …/scores` on a `format: "time"` game: the score must satisfy 0 ≤ score ≤ 86400000 (24h in ms), else 422 `validation`.
+
+### Rate limits
+- Leaderboard reads (`GET …/leaderboard`): 120/min, per user when authenticated and per IP otherwise.
+- `GET …/scores` is unchanged (unlimited).
+- Score submits keep the existing 60/min.
+
+
+---
+
+## F002 additions
+
+Follow creators and an activity feed (spec: `docs/features/F002-follow-and-feed.md`). All earlier rules apply, including F001.
+
+### Types
+```ts
+type FollowResponse = { following: boolean; followers: number /* the target's follower count after the change */ }
+
+type UserProfileResponse = {      // GET /api/users/{username}; v1 { user, games } + three fields
+  user: User; games: GameSummary[];
+  followers: number;              // users following this user
+  following: number;              // users this user follows
+  isFollowing: boolean;           // 🔓 the viewer follows this user; false when anonymous or viewing yourself
+  gamesTotal: number;             // review-fix R12: games visible to the viewer (the `games` array is one page)
+}
+
+type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked"
+type FeedItem = {
+  id: string;                     // opaque cursor value (decimal string)
+  kind: FeedItemKind;
+  actor: UserRef;                 // the game owner for gamePublished/gameUpdated; the player otherwise
+  game: GameSummary;
+  reason: "following" | "favorite";   // "favorite": shown only because the viewer favorited the game (gamePublished/gameUpdated only)
+  createdAt: string;              // RFC3339 UTC; for coalesced items, the latest occurrence
+  version: number | null;         // gamePublished/gameUpdated: the game version at event time; else null
+  score: {                        // personalBest only; else null
+    value: number;                // the new best
+    first: boolean;               // true when it was the actor's first score on this game
+    leaderboard: LeaderboardConfig;   // the game's CURRENT config (F001), for formatting
+  } | null;
+  achievement: (AchievementDef & { count: number /* unlocks by the actor in this game that UTC day, >= 1; this def is the latest */ }) | null;   // achievementUnlocked only
+}
+type FeedPage = { items: FeedItem[]; nextCursor: string | null }
+
+type SuggestedCreator = {
+  user: UserRef;
+  reason: "favorited" | "popular";   // "favorited": owns games the viewer favorited
+  games: number;                     // their published game count (>= 1)
+}
+```
+Clients must ignore feed items with an unknown `kind` (more kinds may be added later).
+
+### Endpoints
+| Method | Path | Query / Body | Response |
+|---|---|---|---|
+| PUT 🔒 | /api/users/{username}/follow | – | `FollowResponse` `{ following: true }` (idempotent) |
+| DELETE 🔒 | /api/users/{username}/follow | – | `FollowResponse` `{ following: false }` (idempotent; 200 even if not following) |
+| GET | /api/users/{username}/followers | `?page=1&perPage=24` (max 100) | `Page<UserRef>`, newest follow first |
+| GET | /api/users/{username}/following | `?page=1&perPage=24` (max 100) | `Page<UserRef>`, newest follow first |
+| GET 🔓 | /api/users/{username} | – | `UserProfileResponse` (now with `followers`, `following`, `isFollowing`) |
+| GET 🔒 | /api/feed | `?cursor=&limit=20&kinds=` | `FeedPage`, newest first |
+| GET 🔒 | /api/feed/suggestions | – | `SuggestedCreator[]` (0–6 entries) |
+
+- `{username}` is matched case-insensitively; an unknown user → 404 `not_found`.
+- Follow yourself → 422 `validation`. Following more than **2000** users → 422 `validation` (only a PUT that would create a new row is refused).
+- `/api/feed`:
+  - `cursor`: optional, a `FeedItem.id` from a previous page. Returns items strictly older (lower id). Not a positive integer string → 400 `bad_request`.
+  - `limit`: 1–50, clamped, default 20. Non-integer → 400.
+  - `kinds`: optional comma list of `FeedItemKind`. Empty or absent = all. Any unknown value → 400.
+  - `nextCursor` is the last item's `id` when more items exist, else `null`.
+- Feed sources (an event is included when **all** apply):
+  1. Its actor is a user the viewer follows, **or** its kind is `gamePublished`/`gameUpdated` and the viewer has favorited the game.
+  2. The actor is not the viewer.
+  3. The game is currently published.
+  4. For `achievementUnlocked`, the achievement is still defined by the game's current version.
+  When both (1) conditions hold, `reason` is `"following"`.
+- `/api/feed/suggestions` returns up to 6 users. It never includes the viewer, users the viewer already follows, or users without a published game:
+  1. Owners of games the viewer favorited (`reason: "favorited"`), ranked by the number of their games the viewer favorited, then by most recent favorite.
+  2. Filled up with owners ranked by total plays across their published games (`reason: "popular"`).
+
+### Event production (server side; no new client calls)
+| Kind | Written when | Coalescing |
+|---|---|---|
+| `gamePublished` | a game becomes published for the **first time**: `POST /api/games` with `published` true, or `PATCH` unpublished → published while `first_published_at` is null | at most one per game, ever |
+| `gameUpdated` | `PUT /api/games/{id}/bundle` succeeds while the game is published | replaces any `gameUpdated` row for the same game from the last 24h |
+| `personalBest` | `POST /api/games/{id}/scores` returns `personalBest: true` (F001) on a published game, and the submitter is not the owner | one per (actor, game, UTC day); the latest replaces earlier ones |
+| `achievementUnlocked` | `POST /api/games/{id}/achievements/{achId}` returns `new: true` on a published game, and the user is not the owner | one per (actor, game, UTC day); `count` increments, the latest achievement is shown |
+
+- "Replaces" means the old row is deleted and a new one inserted, so the item moves to the top of the feed with a new `id`.
+- Writing an event is best effort: a failure is logged and never changes the response of the triggering request.
+- Studio sessions make no API calls, so they produce no events.
+
+### Rate limits
+- Follow + unfollow (`PUT`/`DELETE …/follow`, shared bucket): 60 per 10 min, per user.
+- Feed reads (`GET /api/feed` and `/api/feed/suggestions`, shared bucket): 60/min, per user.
+- Follower/following lists and profiles: unlimited (as other public reads).
+
+
+---
+
+## F003 additions
+
+Trending and "More like this" discovery (spec: `docs/features/F003-trending-and-related.md`). All earlier rules apply, including the review-fix play dedupe and rate limit on `POST /api/games/{id}/play`.
+
+### Types
+```ts
+type GameSummary = { ...v2, playsWeek: number }   // + playsWeek, on EVERY GameSummary (listings, profile, favorites, feed, related, Game)
+type GameSort = "new" | "popular" | "top" | "favorites" | "trending"
+
+type RelatedGame = GameSummary & {
+  reason: "tags" | "trending";   // "tags": shares >= 1 tag with the source game; "trending": fill-up
+  sharedTags: string[];          // shared tags in the SOURCE game's tag order; [] when reason is "trending"
+}
+```
+- `playsWeek` counts the game's counted (deduplicated) plays by anyone other than its owner, over the 7 UTC days ending today (inclusive).
+  - It comes from a snapshot refreshed at most every `TRENDING_TTL_SECS`, so it is **approximate** and may lag behind `plays`.
+  - It is `0` when the game has no plays in the window, or when the game is newer than the snapshot.
+
+### Trending score (normative)
+For each game, over the window days `d` (today and the 6 previous UTC days, by `play_events.day`):
+- `viewers(d)` is the number of distinct viewers with a counted play that day, excluding the owner's authenticated plays.
+  - A viewer is the signed-in user. For an anonymous play, it is a secret-keyed hash of the client IP, the same identity the play dedupe uses.
+  - Each play recorded before F003 counts as one viewer.
+- `trendingScore = Σ_d viewers(d) × (7 − age(d)) / 7`, where `age(today) = 0`. Today weighs 1, and six days ago weighs 1/7.
+
+`trendingScore` is not exposed. It only orders results.
+
+### Endpoints
+| Method | Path | Query / Body | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games | v1/v2 query; `sort` also accepts `trending` | `Page<GameSummary>` |
+| GET 🔓 | /api/games/{id}/related | `?limit=8` (1–24, clamped) | `RelatedGame[]` (0..limit items) |
+
+- **`sort=trending`**:
+  - Order: `trendingScore` desc, then `playsWeek` desc, `plays` desc, `createdAt` desc, `id`.
+  - It combines with `q`, `tag` and `owner` exactly like the other sorts, and `total` doesn't depend on the sort.
+  - Games with no plays in the window are still listed (score 0), after the scored ones.
+- **Unknown `sort`** → 400 `bad_request` "Unknown sort '…' (expected new, popular, top, favorites or trending)".
+- **`/related`**:
+  - Source visibility follows `GET /api/games/{id}`: an unknown id → 404, and an unpublished game → 404 unless the viewer is the owner.
+  - A non-integer `limit` → 400 `bad_request`.
+  - Results are always **published** games, never the source, and at most **2 per owner** (the source's owner included).
+  - Ranking:
+    1. Games sharing ≥ 1 tag with the source (`reason: "tags"`), ordered by `tagScore` desc, then shared-tag count desc, `trendingScore` desc, `plays` desc, `createdAt` desc, `id`. Here `tagScore = Σ over shared tags of 1 / log2(2 + n(tag))`, where `n(tag)` is the number of published games with that tag. Rarer tags weigh more.
+    2. If fewer than `limit` games share a tag, the rest is filled in `sort=trending` order (`reason: "trending"`, `sharedTags: []`).
+  - The response is the same for every viewer: nothing is personalised beyond source visibility.
+
+### Rate limits
+- No new limits. `/related` and `sort=trending` are unlimited public reads, like other listings.
+- Plays keep the review-fix `Limit::Play` and the 10-minute per-viewer dedupe. Only counted plays enter `playsWeek` and the trending score.
+
+### Backend env
+`TRENDING_TTL_SECS` (default `600`) is the maximum age of the trending snapshot before a `sort=trending` or `/related` read refreshes it.
+- `0` refreshes on every such read (used by tests).
+- The snapshot is also refreshed once at startup.
+- A non-integer value is a startup error.
+
+
+## Review-fix additions (REVIEW-2026-11-14-1)
+
+### `POST /api/games/{id}/play` (R2)
+- **Rate limit:** 30/min, keyed by user when signed in and by client IP otherwise. Over the limit → 429 `rate_limited` with `Retry-After`. `RATE_LIMIT=off` disables it.
+- **Dedupe (always on):** at most one counted play per (game, viewer) per 10 minutes. The viewer key is the same as for the rate limit.
+- **Duplicate calls:** still return `200 { plays }` with the current count, but don't increment `plays` or write a play event.
+- **Scope:** the dedupe is held in memory per process, so it resets when the server restarts.
+
+### `GET /api/users/{username}` (R12)
+- **Paging:** accepts `?page=` (default 1) and `&perPage=` (default 24, clamped 1–100). A non-integer value → 400.
+- **Response:** `{ user, games: GameSummary[] /* one page, newest first */, gamesTotal: number /* games visible to the viewer; includes unpublished for the owner */ }`.
+
+### Score retention (R12)
+- After each submit, that user's scores for that game are pruned.
+- **Kept:** the user's best 20 scores for the game, plus any score younger than 8 days that is the user's best of its UTC day or ISO week.
+- **Effect:** day, week and all-time boards are unchanged by pruning.
+
+### Game and runtime files (R6)
+- **Caching:** responses carry a strong `ETag`. `If-None-Match` → 304 with the same security headers. `Cache-Control: no-cache` stays, so browsers revalidate.
+
+### Bundles (R8)
+- A zip that contains both a file `x` and a folder `x/` (case-insensitive) → 422.
+
+### Ops
+- **Health check:** `webgame-server healthcheck` exits 0 when `GET /api/health` on `127.0.0.1:$PORT` returns 200. The Docker `HEALTHCHECK` uses it.
+- **Shutdown:** graceful on SIGTERM and Ctrl+C.
+- **Startup cleanup:** stale `.staging-*` folders and orphaned game folders are removed.
+
+
+---
+
+## F004 additions
+
+Version changelogs and an "Updated" badge (spec: `docs/features/F004-version-changelogs.md`). All earlier rules apply, including F002 (feed) and the review-fix bundle replace serialisation (R1).
+
+### Types
+```ts
+type GameVersion = {
+  version: number;                // >= 1
+  notes: string;                  // plain text, 0–1000 chars, "\n" line breaks; "" = no notes
+  createdAt: string;              // RFC3339 UTC: when this version went live (upload / replace time)
+  current: boolean;               // version === the game's current version
+}
+
+type GameSummary = { ...F003, lastUpdatedAt: string | null }
+// lastUpdatedAt: RFC3339 UTC of the latest bundle replace made while the game was PUBLISHED; null if none.
+// Not changed by metadata PATCHes, thumbnail changes, publishing, or notes edits.
+// On EVERY GameSummary (listings, profile, favorites, feed, related, Game).
+
+type Game = { ...F003, latestVersion: GameVersion }   // the current version's row (current: true)
+
+type FeedUpdate = {
+  fromVersion: number;            // lowest version covered by this (possibly coalesced) item; === FeedItem.version when only one
+  changes: { version: number; notes: string }[];   // covered versions with non-empty notes, newest first, at most 3
+}
+type FeedItem = { ...F002, update: FeedUpdate | null }   // non-null for kind "gameUpdated" only
+```
+The UI shows an "Updated" badge while `now − lastUpdatedAt < 7 days` (client-side; the server only reports the timestamp).
+
+### Notes rules (every endpoint that accepts `notes`)
+- `\r\n` and `\r` become `\n`; leading/trailing whitespace is trimmed; runs of 3+ blank lines collapse to 2.
+- After that, at most **1000** characters (Unicode scalar values), else 422 `validation` "notes must be at most 1000 characters". A multipart `notes` field larger than 8 KB raw → 422.
+- Control characters other than `\n` and `\t`, and the bidi controls U+202A–U+202E and U+2066–U+2069 → 422 `validation` "notes contain invalid characters".
+- A missing field means `""`. Notes are plain text: clients must not render them as HTML or Markdown.
+
+### Changed endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| POST 🔒 | /api/games | v1 multipart + optional `notes` (version 1's release notes) | 201 `Game` |
+| PUT 🔒 owner | /api/games/{id}/bundle | multipart `bundle` + optional `notes` + optional `expectedVersion` (decimal string) | `Game` (version+1, `latestVersion` = the new row) |
+| GET 🔒 | /api/feed | unchanged query | `FeedPage` whose `gameUpdated` items carry `update` |
+
+`PUT …/bundle` details:
+- `expectedVersion` not a positive integer → 400 `bad_request` (checked before the upload is processed).
+- `expectedVersion` present and different from the game's current version → 409 `conflict` "The game is at v{n}; reload and retry". Nothing is written.
+- Without `expectedVersion`, behaviour is unchanged: the R1 rules still return 409 for a concurrent replace.
+- On success the new version's `GameVersion` row is written atomically with the version bump. When the game is published, `lastUpdatedAt` is set to the same timestamp as `latestVersion.createdAt`, and the F002 `gameUpdated` event is recorded as before.
+- When the game is unpublished, the version row is written but `lastUpdatedAt` is unchanged and no feed event is recorded (F002 rule). Publishing later never sets `lastUpdatedAt`.
+
+### New endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/versions | `?page=1&perPage=20` (max 100) | `Page<GameVersion>`, highest version first |
+| PATCH 🔒 owner | /api/games/{id}/versions/{version} | `{ notes: string }` | `GameVersion` |
+
+- Visibility of `/versions` follows `GET /api/games/{id}`: unknown id → 404; unpublished → 404 unless the viewer is the owner.
+- History contains every version uploaded since F004, plus one row for each game's version that was current when F004 was deployed (empty notes; `createdAt` approximate). Older versions have no row. Old bundle files are not kept; there is no rollback.
+- `PATCH …/versions/{version}`:
+  - `{version}` not a positive integer → 400 `bad_request`. No row for that version → 404 `not_found`.
+  - Missing or non-string `notes` → 422 `validation`; otherwise the notes rules above.
+  - Only `notes` changes. It does not change `lastUpdatedAt`, `updatedAt`, the game's version or any feed event's position; feed items show the new text on their next read.
+  - Owner rules as for `PATCH /api/games/{id}` (anonymous 401, others 403/404 as today).
+
+### Feed (`FeedItem.update`)
+- `fromVersion`: when the F002 24h coalescing merges several `gameUpdated` events, the item keeps the lowest version it replaced, so `fromVersion..version` lists every covered version. Items created before F004 report `fromVersion === version`.
+- `changes` is read from the version history at request time (edits show immediately), filtered to non-empty notes, newest first, max 3.
+- Clients must treat a missing `update` as `null` (older servers).
+
+### Rate limits
+- Notes edits (`PATCH …/versions/{version}`): 30 per 10 min, per user (`Limit::VersionNotes`).
+- Bundle replace and create keep the existing 20/hour.
+- `GET …/versions` is an unlimited public read, like comments.
+
+
+---
+
+## F013 additions
+
+Studio: publish updates to an existing game (spec: `docs/features/F013-studio-publish-updates.md`). All earlier rules apply. Studio updates use the F004 `PUT /api/games/{id}/bundle` fields (`notes`, `expectedVersion`) unchanged. No other endpoint changes.
+
+### New endpoint
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔒 owner | /api/games/{id}/bundle | – | 200 `application/zip`: the **current** version's stored files |
+
+- **Auth**: a session JWT. Preview-scoped tokens → 401. Anonymous → 401. Unknown id → 404. Another user's game → the same 403/404 as `PUT …/bundle`. Unpublished games work for their owner. Admins get no extra access.
+- **Body**: a zip built from the extracted files of the current version.
+  - `game.json` comes first, then the other paths sorted byte-wise. Paths are the stored ones: the single top-level folder (if the upload had one) is already stripped.
+  - Only regular files are included.
+  - png/jpg/jpeg/webp/gif/mp3/ogg/woff2 entries are stored; everything else is DEFLATE-compressed.
+  - Every entry date is the version's `createdAt` (F004), else `updatedAt`.
+  - The archive is plain zip: no ZIP64, no encryption, no data descriptors. Re-uploading it unchanged passes bundle validation.
+- **Headers**:
+  - `Content-Type: application/zip`
+  - `Content-Disposition: attachment; filename="{slug}-v{version}.zip"`. `slug` is ASCII `[a-z0-9-]`, 1–40 chars, from the title (`game` if empty).
+  - `X-Game-Version: {version}`, the version the files belong to.
+  - `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Content-Length`.
+- **Errors**:
+  - The game was replaced while the archive was being built → 409 `conflict` "The game was updated while preparing the download; retry". Clients may retry once.
+  - Archive larger than 64 MiB → 413 `payload_too_large`.
+  - More than 2 builds already running server-wide → 503 `unavailable` with `Retry-After: 5`.
+- A download never takes the R1 bundle-replace claim, so it never causes a replace to fail.
+- On servers without F013, `GET` on this path returns 405 (the route has only `PUT`).
+
+### CORS
+`/api/*` responses add `Access-Control-Expose-Headers: X-Game-Version, Content-Disposition, Retry-After`, so cross-origin clients (the desktop app, the dev web app) can read them.
+
+### Rate limits
+- Bundle downloads (`GET …/bundle`): 30/hour, per user (`Limit::BundleDownload`). Over the limit → 429 `rate_limited` with `Retry-After`.
+- Bundle replace and create keep the existing 20/hour (`Limit::Upload`).
+
+
+---
+
+## F005 additions
+
+Screenshot capture and share (spec: `docs/features/F005-screenshots.md`). All earlier rules apply, including the review round 2 `Limit::Image` (N5) on thumbnail and avatar uploads.
+
+### Types
+```ts
+type Screenshot = {
+  id: string;
+  gameId: string;
+  author: UserRef;
+  caption: string;           // plain text, 0–140 chars, single line; "" = none
+  imageUrl: string;          // "/media/screenshots/{id}.png" or ".jpg" (server-relative)
+  thumbUrl: string;          // "/media/screenshots/{id}_t.jpg", fits in 480×480
+  width: number;             // of imageUrl, 64–4096
+  height: number;
+  gameVersion: number;       // the game's version when it was posted
+  createdAt: string;         // RFC3339 UTC
+  canDelete: boolean;        // 🔓 the viewer is the author, the game owner or an admin; false when anonymous
+}
+
+type ReportTargetType = "game" | "comment" | "screenshot"
+type Report = { ...v2, targetType: ReportTargetType, targetImageUrl: string | null }
+// targetImageUrl: the screenshot's thumbUrl while it exists; null for other target types and deleted screenshots.
+// targetPreview for screenshots: the caption's first 140 chars, else "Screenshot by {displayName or username}".
+```
+
+### Endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/screenshots | `?page=1&perPage=12` (1–50, clamped) | `Page<Screenshot>`, newest first (`createdAt` desc, then `id`) |
+| POST 🔒 | /api/games/{id}/screenshots | multipart `image` (required, png/jpg/webp ≤ 2MB) + `caption` (optional) | 201 `Screenshot` |
+| DELETE 🔒 | /api/screenshots/{id} | – | 204 |
+
+- **Visibility**: `GET` and `POST` follow `GET /api/games/{id}`. An unknown id → 404, and an unpublished game → 404 unless the viewer is the owner. A non-integer `page`/`perPage` → 400.
+- **`POST` validation, in this order**:
+  1. Auth → 401.
+  2. Visibility → 404.
+  3. `Limit::Screenshot` → 429.
+  4. Multipart:
+     - `image` missing or empty → 422 "image file is required";
+     - a `caption` field larger than 1 KB raw → 422;
+     - unknown fields are ignored.
+  5. `validate_image`: larger than 2 MB → 413; not PNG/JPEG/WebP by magic bytes → 422.
+  6. Caption: trimmed; at most **140** Unicode scalar values; any control character (including `\n` and `\t`) or a bidi control (U+202A–U+202E, U+2066–U+2069) → 422 `validation`.
+  7. The user already has **20** screenshots on this game → 422 `validation` "You can post at most 20 screenshots per game". The insert is guarded, so concurrent posts can't exceed 20.
+  8. More than 2 image decodes running server-wide → 503 `unavailable` with `Retry-After: 5`.
+  9. Dimensions (from the header, before decoding): each side 64–4096 → else 422. A decode failure → 422 "image could not be decoded".
+- **Stored image**: the server decodes and re-encodes every upload and keeps no original bytes.
+  - PNG input → PNG; JPEG/WebP → JPEG quality 90.
+  - Alpha is flattened on black, only the first frame is kept, and no metadata (EXIF, XMP, text chunks, ICC) is kept.
+  - The thumbnail is a JPEG (quality 80) that fits in 480×480 and is never upscaled.
+- **`DELETE`**:
+  - Allowed for the author, the owner of the screenshot's game, or an admin. Anyone else → 403. Unknown id → 404. Anonymous → 401.
+  - It removes the row and files and marks every open report on that screenshot `resolved` with resolution `delete`.
+- **Cascades**: deleting a game (owner or admin) deletes its screenshots and their files.
+
+### Reports (changed)
+| Method | Path | Body | Response |
+|---|---|---|---|
+| POST 🔒 | /api/reports | v2 body; `targetType` may be `"screenshot"` | 201 `Report` |
+| POST 🔒 admin | /api/admin/reports/{id}/resolve | `{ action }` | `Report` |
+
+- **Creating**: for `targetType: "screenshot"`, the screenshot must exist and its game must be visible to the reporter (else 404). `targetGameId` is the screenshot's game. The v2 duplicate rule (409) applies.
+- **Resolving**: for screenshot reports, `delete` deletes the screenshot (same effects as `DELETE /api/screenshots/{id}`), `dismiss` is unchanged, and `unpublish` → 422 `validation` (as for comments).
+- **Lists**: `GET /api/admin/reports` returns `targetImageUrl` on every report.
+
+### Media
+| Path | What |
+|---|---|
+| GET /media/screenshots/{file} | Stored screenshots and thumbnails. Headers: `Access-Control-Allow-Origin: *`, `Cache-Control: public, max-age=31536000, immutable` (a file never changes; ids are never reused), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox`. |
+
+Files stay reachable by direct URL after their game is unpublished, as thumbnails do. The ids are unguessable UUIDs, and listings hide them.
+
+### Rate limits
+- Screenshot posts (`POST …/screenshots`): **10/hour per user** (`Limit::Screenshot`, a separate bucket from `Limit::Image`). Over the limit → 429 `rate_limited` with `Retry-After`.
+- "Set as thumbnail" uses the existing `PUT /api/games/{id}/thumbnail` and its `Limit::Image`.
+- `GET …/screenshots` is an unlimited public read, like comments. `DELETE` is unlimited.
+
+
+## Review-fix additions (REVIEW-2026-11-14-2)
+- **`GET /api/games/{id}/scores`:** may return 429 `rate_limited` with `Retry-After`. The limit is 120/min, per user when signed in or per IP when anonymous, in its own bucket (separate from leaderboard reads).
+- **Image uploads:** `PUT /api/games/{id}/thumbnail` and `PUT /api/users/me/avatar` share an Image bucket of 20/hour per user and may return 429. The limit is checked after auth and owner checks, before the body is read.
+- **`TRENDING_TTL_SECS`** (default 600) is the background refresh cadence.
+  - The snapshot is refreshed at startup and then every TTL, alongside `PRAGMA optimize`. A failed refresh is retried after `min(TTL, 60s)`.
+  - `sort=trending` and `/related` read the current snapshot and never refresh it inline.
+  - `0` disables the background task: reads refresh inline instead, with a 60s backoff after a failure. This is for tests and development.
+- **Studio linker:** commented-out imports, and import-like text inside strings or templates, are ignored.
+- **Unchanged:** response shapes, the feed cursor semantics and leaderboard results. Leaderboards are now served from a precomputed `score_bests` table (migration `0008_review2.sql`).
+
+
+## F009 additions
+
+Controls overlay and key remapping (spec: `docs/features/F009-controls-and-remapping.md`). All earlier rules apply. No new endpoints and no rate limit changes.
+
+### Types
+```ts
+type GamepadButtonName = "A" | "B" | "X" | "Y" | "LB" | "RB" | "LT" | "RT" | "Back" | "Start" | "LS" | "RS" | "Up" | "Down" | "Left" | "Right"
+type ControlAction = {
+  id: string;                    // ^[a-z0-9_-]{1,32}$, unique per game
+  name: string;                  // 1–40 chars, trimmed, no control or bidi characters
+  keys: string[];                // 0–3 unique bindable codes (GAME_FORMAT.md § F009), e.g. "KeyA", "Space", "Mouse0"
+  gamepad: GamepadButtonName[];  // 0–2 unique; keys.length + gamepad.length >= 1
+}
+type Game = { ...F004, actions: ControlAction[]; controlsHint: string }
+// actions: from game.json `actions` of the CURRENT version, normalised, in declared order; [] when absent.
+// controlsHint: from game.json `controls` (string only), normalised, 0–300 chars; "" when absent or not a string.
+```
+- Only `Game` (the detail object returned by `GET /api/games/{id}`, upload, replace and edit responses) carries the two fields. `GameSummary` is unchanged.
+- Players' remapped keys are stored on the device (ARCHITECTURE § F009), never on the server.
+
+### Changed endpoints
+| Method | Path | Change |
+|---|---|---|
+| POST 🔒 | /api/games | game.json `actions` is validated (GAME_FORMAT § F009). A violation → 422 `validation` with a message naming the path. `controls` is never rejected. |
+| PUT 🔒 | /api/games/{id}/bundle | Same validation. The new version's `actions` and `controlsHint` replace the old ones (a bundle without them clears them). |
+| GET 🔓 | /api/games/{id} | + `actions`, `controlsHint`. |
+| GET | /play/{id} | The `boot` options carry `actions` (the stored list, escaped for `<script>`). `Cache-Control: no-cache` and the CSP are unchanged. |
+| GET | /play/studio | The page passes `manifest.actions` from `webgame:studio-load` to `boot`. |
+
+- `GET /api/games/{id}/bundle` (F013) is unchanged. It returns the stored `game.json` file as uploaded, not the normalised copy.
+- Example 422 messages: `game.json: actions must be an array`, `game.json: at most 32 actions are allowed`, `game.json: actions[0].id must match ^[a-z0-9_-]{1,32}$`, `game.json: actions[1].id "jump" is a duplicate`, `game.json: actions[2].keys[1] "Escape" can't be bound`, `game.json: actions[3].gamepad[0] "Home" is not a gamepad button`, `game.json: actions[4] needs at least one key or gamepad button`.
+
+### Existing games
+- Games uploaded before F009 are backfilled once at backend startup from their stored `game.json` (ARCHITECTURE § F009). Until the backfill has processed a game, it reports `actions: []` and `controlsHint: ""`.
+- A stored `game.json` whose `actions` would now fail validation is backfilled as `actions: []` (no error). The next upload of that bundle gets the 422.
+
+
+## Review-fix additions (REVIEW-2026-11-15-3)
+- **`Report.targetImageFullUrl: string | null`** (L7): the full-size screenshot URL (`/media/screenshots/{id}.{png|jpg}`) while the screenshot exists. It is `null` for other target types and for deleted screenshots. It appears wherever `targetImageUrl` does (create response, admin list, resolve response). `targetImageUrl` stays the thumbnail.
+- **Screenshot media caching** (L8): responses send `Cache-Control: public, max-age=3600`, no longer `immutable`, and use `Last-Modified` for revalidation. Non-2xx responses, such as the 404 after a delete, send `no-store`. A shared cache may keep serving a deleted screenshot for up to 1 hour unless it is purged.
+- **`POST …/screenshots`:**
+  - New 422 message: "image is too large to process; use fewer pixels or 8-bit color", returned when the estimated decode memory exceeds 80 MiB (L3).
+  - A 503 (decode slots busy) or a server-side 5xx failure (decode task, file write or database) does not use up the 10/hour quota (L5). A 422 (invalid, undecodable or over-budget image) is charged (review 4, M2).
+- **Leaderboards after a `leaderboard.order` change** (L4): boards are served by a slower fallback query until a background rebuild of `score_bests` finishes (migration `0011_review3.sql`). Results are identical.
+
+
+---
+
+## F006 additions
+
+Comment replies and reactions (spec: `docs/features/F006-comment-replies-and-reactions.md`). All earlier rules apply, including the v2 moderation flow and `Limit::Comment`.
+
+### Types
+```ts
+type Comment = {
+  ...v1,                          // id, gameId, author, body, createdAt
+  parentId: string | null;        // null = top-level; otherwise ALWAYS the id of a top-level comment (one level of nesting)
+  replyTo: UserRef | null;        // replies only: the author of the reply that was answered (see "Reply rules"); null otherwise or if that user was deleted
+  isCreator: boolean;             // the author is the game's CURRENT owner
+  hearts: number;                 // >= 0, distinct users who hearted this comment
+  myHeart: boolean;               // 🔓 the viewer hearted it; false when anonymous
+  creatorHeart: boolean;          // the game's current owner hearted it
+  canDelete: boolean;             // 🔓 the viewer is the author, the game owner or an admin; false when anonymous
+}
+
+type CommentThread = Comment & {  // a top-level comment (parentId === null) with a reply preview
+  replyCount: number;             // all replies in the thread
+  replies: Comment[];             // the OLDEST replies, oldest first, at most 3
+}
+
+type CommentListPage = Page<CommentThread> & {
+  totalAll: number;               // comments + replies on the game; `total` counts top-level comments only
+}
+
+type CommentContext = {
+  comment: Comment;               // the requested comment (top-level or reply)
+  thread: CommentThread;          // its thread; thread.id === comment.id when the comment is top-level
+}
+
+type HeartResponse = { hearted: boolean; hearts: number; creatorHeart: boolean }
+```
+- The fields are on every `Comment` the API returns: list items, previews, `/replies`, `CommentContext`, and the `POST` response.
+- Clients must treat missing new fields as `null` / `0` / `false` / `[]`, and a missing `totalAll` as `total` (older servers).
+
+### Changed endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/comments | `?page=1&perPage=20` (max 100) | `CommentListPage`: top-level comments only, newest first (`createdAt` desc, then insertion order desc) |
+| POST 🔒 | /api/games/{id}/comments | `{ body, parentId?: string \| null }` | 201 `Comment` |
+| DELETE 🔒 | /api/comments/{id} | – | 204 |
+
+- **`GET …/comments`** was `Page<Comment>` with `total` = all comments. Now `total` = top-level comments, `totalAll` = all comments. Paging and visibility are unchanged (unknown game → 404; unpublished → 404 unless owner; non-integer `page`/`perPage` → 400).
+- **`POST …/comments` validation, in this order**:
+  1. Auth → 401.
+  2. Game visibility → 404.
+  3. `Limit::Comment` (shared by top-level comments and replies) → 429.
+  4. `parentId` present and not a string or `null` → 422 `validation`.
+  5. `body`: trimmed, 1–2000 characters, else 422 (v1 rule, unchanged).
+  6. `parentId` (when a string): no such comment, or it belongs to another game → 404 `not_found` "Comment not found".
+  7. The thread already has **200** replies → 422 `validation` "This thread has reached 200 replies". The insert is guarded, so concurrent posts can't exceed 200.
+- **Reply rules** (when `parentId` names comment P):
+  - The stored `parentId` is P's id if P is top-level, else P's `parentId` (its root). Nesting never goes deeper than one level.
+  - `replyTo` is P's author when P is itself a reply **and** P's author is not the poster. Otherwise `replyTo` is `null`.
+- **`DELETE /api/comments/{id}`**:
+  - Allowed for the comment's author, the game's owner, or an admin (admins are new). Anyone else → 403. Unknown id → 404. Anonymous → 401.
+  - Deleting a top-level comment also deletes all its replies. Hearts on deleted comments are removed.
+  - Every open report whose target is a deleted comment (the comment itself and, for a top-level comment, each of its replies) is marked `resolved` with resolution `delete`, in the same transaction.
+
+### New endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/comments/{id} | – | `CommentContext` |
+| GET 🔓 | /api/comments/{id}/replies | `?page=1&perPage=50` (1–100) | `Page<Comment>`: the thread's replies, oldest first (`createdAt` asc, then insertion order); `total` = `replyCount` |
+| PUT 🔒 | /api/comments/{id}/heart | – | `HeartResponse` `{ hearted: true }` (idempotent) |
+| DELETE 🔒 | /api/comments/{id}/heart | – | `HeartResponse` `{ hearted: false }` (idempotent; 200 even if not hearted) |
+
+- **Visibility** (all four): unknown comment id → 404; the comment's game must be visible to the viewer under `GET /api/games/{id}` rules, else 404.
+- **`/replies`**: `{id}` is a reply (not top-level) → 422 `validation` "Replies are listed for top-level comments only". Non-integer `page`/`perPage` → 400.
+- **Hearts**, checked in this order: auth → 401; comment and visibility → 404; `Limit::Heart` → 429; `PUT` on your own comment → 422 `validation` "You can't heart your own comment" (`DELETE` on your own comment returns `{ hearted: false }`). The response carries the counts after the change.
+- `hearts`, `myHeart` and `creatorHeart` on later reads reflect the change immediately.
+- Who hearted a comment is not listed anywhere; only the count, the viewer's own state and `creatorHeart` are exposed.
+
+### Reports (changed)
+| Method | Path | Body | Response |
+|---|---|---|---|
+| POST 🔒 | /api/reports | v2 body; `targetType: "comment"` accepts replies too | 201 `Report` |
+| POST 🔒 admin | /api/admin/reports/{id}/resolve | `{ action }` | `Report` |
+
+- Creating a report on a reply follows the v2 comment rules (`targetGameId` = the reply's game; `targetPreview` = its first 140 chars).
+- Resolving a comment report with `delete` has exactly the effects of `DELETE /api/comments/{id}` (replies cascade, open reports on all deleted comments are resolved). `dismiss` is unchanged; `unpublish` → 422 as before.
+- `Report` has no new fields. Clients link a comment report to `/games/{targetGameId}?comment={targetId}`.
+
+### Stats (unchanged, clarified)
+`CreatorStats.totals.comments` and `GameStats.comments` count all comments, replies included.
+
+### Rate limits
+- Top-level comments and replies share `Limit::Comment`: 30 per 10 min, per user (unchanged).
+- Hearts (`PUT` and `DELETE …/heart`, shared bucket): **120 per 10 min, per user** (`Limit::Heart`). Over the limit → 429 `rate_limited` with `Retry-After`.
+- `GET /api/comments/{id}` and `/replies` are unlimited public reads, like the comment list. `DELETE /api/comments/{id}` is unlimited.
+
+
+---
+
+## F007 additions
+
+In-app notifications (spec: `docs/features/F007-in-app-notifications.md`). All earlier rules apply, including F002 (follows), F006 (comments, replies, hearts, permalinks) and the v2 error shape.
+
+### Types
+```ts
+type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished"
+
+type NotificationGame = { id: string; title: string; thumbnailUrl: string | null }
+
+type Notification = {
+  id: string;                     // decimal string; stable for the row's lifetime
+  kind: NotificationKind;
+  actors: UserRef[];              // 1–3 most recent distinct actors, newest first
+  actorCount: number;             // distinct actors in the group, >= 1
+  eventCount: number;             // events in the group, >= actorCount; comment/reply: comments posted; heart/follow/gamePublished: = actorCount
+  game: NotificationGame | null;  // null only for "follow"
+  commentId: string | null;       // comment: the newest comment in the group; reply: the newest reply; heart: the hearted comment; else null
+  excerpt: string | null;         // first 140 chars (Unicode scalar values) of commentId's current body; plain text; null when commentId is null
+  ownsThread: boolean;            // reply: the recipient wrote the thread's top-level comment; false otherwise
+  creatorHeart: boolean;          // heart: the game's current owner is among the actors; false otherwise
+  read: boolean;
+  createdAt: string;              // RFC3339 millis Z, first event of the group
+  updatedAt: string;              // RFC3339 millis Z, latest event of the group (the ordering key)
+  path: string;                   // in-app route to open, see "Paths"
+}
+
+type NotificationPage = {
+  items: Notification[];          // updatedAt desc, then id desc
+  nextCursor: string | null;      // opaque; null when there are no more items
+  unread: number;                 // same value as UnreadCount.unread
+}
+
+type UnreadCount = {
+  unread: number;                 // visible unread notifications, capped at 100 (clients show "99+" at 100)
+  latestAt: string | null;        // updatedAt of the newest visible unread notification; null when unread = 0
+  pollAfterSecs: number;          // suggested delay before the next poll (env NOTIFICATION_POLL_SECS)
+}
+
+type NotificationSettings = {     // all default to true
+  comments: boolean;              // "comment" kind
+  replies: boolean;               // "reply" kind
+  hearts: boolean;                // "heart" kind
+  follows: boolean;               // "follow" kind
+  newGames: boolean;              // "gamePublished" kind
+}
+
+type MarkReadRequest = {
+  ids?: string[];                 // 1–100 notification ids; absent = every unread notification of the caller
+  upTo: string;                   // RFC3339; only rows with updatedAt <= upTo are marked (race guard)
+}
+type MarkReadResponse = { unread: number }   // UnreadCount.unread after the change
+```
+Clients must ignore notifications with an unknown `kind` (more kinds may be added later).
+
+### Endpoints
+| Method | Path | Query / Body | Response |
+|---|---|---|---|
+| GET 🔒 | /api/notifications | `?cursor=&limit=20&unread=false` | `NotificationPage` |
+| GET 🔒 | /api/notifications/unread-count | – | `UnreadCount` |
+| POST 🔒 | /api/notifications/read | `MarkReadRequest` | `MarkReadResponse` |
+| GET 🔒 | /api/notifications/settings | – | `NotificationSettings` |
+| PUT 🔒 | /api/notifications/settings | `Partial<NotificationSettings>` | `NotificationSettings` (after the change) |
+
+- Order in every handler: auth → 401; `Limit::Notifications` → 429; validation → 400/422.
+- **`GET /api/notifications`**:
+  - `limit`: 1–50, clamped, default 20. Non-integer → 400 `bad_request`.
+  - `unread`: `true` lists unread notifications only; `false` or absent lists all. Any other value → 400.
+  - `cursor`: a `nextCursor` from a previous response; returns items strictly after it in the order `updatedAt desc, id desc`. Malformed → 400. The cursor is opaque; clients must not build or parse it.
+  - Across pages, a group that received a new event moves to the top; clients dedupe by `id`.
+- **`POST /api/notifications/read`**:
+  - `upTo` missing or not an RFC3339 timestamp → 422 `validation`.
+  - `ids`: not an array of strings, empty, or more than 100 entries → 422; an entry that is not a positive decimal integer → 400.
+  - Marks the caller's matching unread notifications with `updatedAt <= upTo` as read. Ids that don't exist or belong to someone else are ignored (no error). Idempotent.
+- **`PUT /api/notifications/settings`**: each present field must be a boolean, else 422. Unknown fields are ignored. An empty object is valid (no change). A setting turned off stops **new** notifications of that kind; existing ones are kept until they expire.
+
+### Triggers and recipients (server side; no new client calls)
+| Kind | Written when | Recipients | Group | Joins an unread group? |
+|---|---|---|---|---|
+| `comment` | `POST /api/games/{id}/comments` creates a top-level comment | the game owner | per game | yes; each comment is one event |
+| `reply` | `POST /api/games/{id}/comments` creates a reply | the thread's top-level author, and the reply's `replyTo` user | per thread | yes; each reply is one event |
+| `heart` | `PUT /api/comments/{id}/heart` inserts a heart | the comment's author | per comment | yes; one event per hearting user |
+| `follow` | `PUT /api/users/{username}/follow` creates a follow | the followed user | one per recipient | yes; one event per follower |
+| `gamePublished` | a game becomes published for the first time (the F002 `gamePublished` condition) | every follower of the owner | per game | n/a (written once per recipient per game, ever) |
+
+- **Never the actor.** The user who caused the event is never a recipient, and each recipient gets at most one notification per event (e.g. a reply whose thread author is also the `replyTo` user).
+- **Coalescing.** While a recipient has an unread notification for the same (kind, group), new events join it: `actorCount`/`eventCount` grow and `updatedAt` moves to the new event. Once it is read, it never changes again, and the next event creates a new unread notification.
+- **Dedupe (hearts and follows).** A user's heart on a comment, or follow of a user, notifies at most once while an earlier event of theirs for the same group is stored (read or unread).
+- **Retraction.** `DELETE /api/comments/{id}/heart` and `DELETE /api/users/{username}/follow` remove that user's event from the recipient's **unread** notification of that group. A read notification is not changed. A notification left with no events is no longer listed or counted.
+- **Settings** are checked when the notification is written. A recipient with the kind turned off gets nothing.
+- Writing notifications is best effort: a failure is logged and never changes the response of the triggering request. `gamePublished` notifications are written in the background after the publish commits; an interrupted fan-out resumes after a restart. Followers who follow after the publish are not notified.
+- **Deletions.** Deleting a comment (any path, including admin resolve `delete`) removes its events; deleting a thread or a hearted comment removes the whole `reply`/`heart` notification. Deleting a game removes all its notifications.
+
+### Visibility
+A notification is listed and counted only when (a) it has at least one event and (b) its game, if any, is visible to the recipient under `GET /api/games/{id}` rules (published, or owned by the recipient). Unpublishing hides a game's notifications; re-publishing shows them again unless they were pruned.
+
+### Paths
+| Kind | `path` |
+|---|---|
+| `comment`, `reply`, `heart` | `/games/{gameId}?comment={commentId}` (F006 permalink) |
+| `follow` | `/u/{recipient username}/followers` |
+| `gamePublished` | `/games/{gameId}` |
+
+### Retention
+Pruned by the server's maintenance task (about hourly):
+- read notifications 30 days after they were read;
+- any notification 90 days after its `updatedAt`;
+- beyond the newest **200** notifications per recipient;
+- notifications with no events.
+
+### Privacy
+- The author of a comment learns who hearted it (through `heart` notification actors). Nobody else does; there is still no public list of who hearted a comment (F006).
+- `excerpt` is read from the current comment at request time, so deletions apply immediately.
+
+### Rate limits
+- All five endpoints share **`Limit::Notifications`: 120/min, per user**. Over the limit → 429 `rate_limited` with `Retry-After`.
+- The writes that create notifications keep their existing buckets (`Limit::Comment`, `Limit::Heart`, `Limit::Follow`, `Limit::Upload`) and don't use this one.
+
+### Backend env
+`NOTIFICATION_POLL_SECS` (default `60`): the `pollAfterSecs` value returned by `GET /api/notifications/unread-count`. Integer 15–600; anything else is a startup error.
+
+## Review-fix additions (REVIEW-2026-11-15-4)
+- **Heart/follow toggles:** turning a heart or follow off and back on while its notification is unread no longer bumps `updatedAt` or moves the item. The unread count can still go 1→0→1. A different actor still bumps it.
+- **Empty notifications:** a notification is deleted as soon as its last event is removed or cascaded, not at the next prune (migration `0014_review4.sql`).
+- **Write robustness:** notification writes use `BEGIN IMMEDIATE` with the dedupe check folded into the upsert, so concurrent writers wait instead of losing notifications.
+
+
+## F012 additions
+
+Bitmap fonts, 9-slice and UI widgets (spec: `docs/features/F012-bitmap-fonts-and-ui-widgets.md`). All earlier rules apply. **No new types, endpoints, migrations or rate limits.** The engine API is in GAME_FORMAT.md § F012 additions.
+
+### Changed behaviour
+| Method | Path | Change |
+|---|---|---|
+| POST 🔒 | /api/games | `fnt` is an allowed bundle file extension. The 422 `validation` message for a disallowed extension lists it. |
+| PUT 🔒 | /api/games/{id}/bundle | Same allowlist. |
+| GET | /games/{id}/files/{path} | `*.fnt` → `Content-Type: text/plain; charset=utf-8`, with the existing `X-Content-Type-Options: nosniff`, CSP sandbox and `Access-Control-Allow-Origin: *`. |
+
+- The full allowlist is now: `png jpg jpeg webp gif svg json txt wav mp3 ogg js css woff2 ttf fnt`. Extension matching is unchanged.
+- The backend does **not** parse or validate `.fnt` contents. A broken descriptor fails in the engine at load time, inside the game's sandbox.
+- `GET /api/games/{id}/bundle` (F013) is unchanged; `.fnt` entries are deflated like other text files.
+
+
+---
+
+## F017 additions
+
+Creator comment tools: pin, lock and "Top" sort (spec: `docs/features/F017-creator-comment-tools.md`). All earlier rules apply, including F006 (threads, hearts, visibility) and F007 (notifications).
+
+### Types
+```ts
+type Comment = {
+  ...F006,
+  pinned: boolean;                // top-level only: this is the game's pinned comment; always false on replies
+  locked: boolean;                // top-level only: the thread is locked against new replies; always false on replies
+  canModerate: boolean;           // 🔓 top-level only: the viewer is the game's current owner or an admin (may pin/lock); false on replies and when anonymous
+}
+
+type CommentListPage = Page<CommentThread> & {
+  totalAll: number;               // F006, unchanged: all comments + replies on the game, pinned thread included
+  pinned: CommentThread | null;   // the game's pinned thread (same shape as items), on every page; null when none
+}
+
+type CommentSort = "new" | "top"
+
+type ThreadState = {
+  id: string;                     // the comment acted on
+  pinned: boolean;                // its state after the request
+  locked: boolean;                // its state after the request
+  unpinnedId: string | null;      // PUT …/pin only: the comment that was pinned before and is now unpinned; else null
+}
+```
+- The three `Comment` fields appear wherever a `Comment` is returned (list items, `pinned`, previews, `/replies`, `CommentContext`, the `POST` response).
+- Clients must treat missing `pinned`/`locked`/`canModerate` as `false` and a missing `CommentListPage.pinned` as `null` (older servers).
+- A game has at most one pinned comment.
+
+### Changed endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/comments | `?page=1&perPage=20&sort=new` (`sort`: `new` \| `top`) | `CommentListPage` |
+| POST 🔒 | /api/games/{id}/comments | F006 body | 201 `Comment` |
+
+- **`GET …/comments`**:
+  - `sort` absent, empty or `new`: top-level comments newest first (F006 order, unchanged). `top`: most hearts on the top-level comment first (replies' hearts don't count), then `createdAt` desc, then insertion order desc.
+  - Unknown `sort` → 400 `bad_request` "Unknown sort '…' (expected new or top)". It is checked before `page`/`perPage`.
+  - The pinned thread is **not** in `items` on any page and is **not** counted in `total`. It is returned in `pinned` (with its reply preview and `replyCount`) on every page.
+  - Visibility and paging rules are unchanged.
+- **`POST …/comments`**: one new step in the F006 validation order, between step 6 (`parentId` → 404) and step 7 (200-replies cap → 422):
+  - 6b. The thread (the root of `parentId`) is locked and the poster is neither the game's owner nor an admin → 422 `validation` "This thread is locked".
+  - The check is part of the guarded insert, so a reply racing a lock is either committed before it or refused.
+  - Top-level comments are never affected by locks.
+
+### New endpoints
+| Method | Path | Body | Response |
+|---|---|---|---|
+| PUT 🔒 owner/admin | /api/comments/{id}/pin | – | `ThreadState` `{ pinned: true }` (idempotent) |
+| DELETE 🔒 owner/admin | /api/comments/{id}/pin | – | `ThreadState` `{ pinned: false, unpinnedId: null }` (idempotent; 200 even if not pinned) |
+| PUT 🔒 owner/admin | /api/comments/{id}/lock | – | `ThreadState` `{ locked: true, unpinnedId: null }` (idempotent) |
+| DELETE 🔒 owner/admin | /api/comments/{id}/lock | – | `ThreadState` `{ locked: false, unpinnedId: null }` (idempotent) |
+
+- "owner/admin" = the current owner of the comment's game, or a user with `role: "admin"`.
+- Checked in this order (all four):
+  1. Auth → 401.
+  2. Unknown comment, or its game is not visible to the caller under `GET /api/games/{id}` rules → 404 `not_found` "Comment not found".
+  3. Caller is not the game's owner or an admin → 403 `forbidden`.
+  4. `Limit::ThreadTools` → 429.
+  5. The comment is a reply → 422 `validation` "Only top-level comments can be pinned" (`…/pin`) or "Only top-level comments can be locked" (`…/lock`).
+  6. The comment was deleted after step 2 → 404.
+- **`PUT …/pin`** unpins the game's previously pinned comment (if any, and if it is another comment) in the same transaction and reports it in `unpinnedId`. Pinning the already pinned comment returns `unpinnedId: null`.
+- Pin and lock are independent: a comment can be pinned and locked at the same time.
+- Deleting a comment (any path, including admin resolve `delete`) removes its pin and lock with it. No endpoint returns a dangling pin.
+- None of the four endpoints write F002 activity or F007 notifications, and none retract existing ones.
+
+### Reports and moderation (unchanged, clarified)
+- Comment reports, `DELETE /api/comments/{id}` and admin resolve `delete` behave as in F006 for pinned and locked comments. `Report` has no new fields.
+- Admins have the same pin/lock tools as owners on every game.
+
+### Rate limits
+- `PUT`/`DELETE …/pin` and `PUT`/`DELETE …/lock` share **`Limit::ThreadTools`: 60 per 10 min, per user**. Over the limit → 429 `rate_limited` with `Retry-After`.
+- They don't use `Limit::Comment` or `Limit::Heart`. `GET …/comments` with any `sort` stays an unlimited public read.

@@ -12,7 +12,7 @@
     // Dev copy of the backend's studio player page (GET /play/studio, docs/GAME_FORMAT.md "Studio protocol"):
     // 1. load the engine, post webgame:studio-ready to the parent;
     // 2. on webgame:studio-load { manifest, files } import the entry from a blob: URL and
-    //    boot(canvas, mod.default, { width, height, baseUrl: "about:blank", files }).
+    //    boot(canvas, mod.default, { width, height, baseUrl: "about:blank", files, actions: manifest.actions }).
     // 3. errors at any stage are posted as webgame:error (with line/column when available).
     import { boot } from '/src/index.ts';
 
@@ -48,7 +48,7 @@
           URL.revokeObjectURL(url);
         }
         stage = 'boot'; // boot() posts its own webgame:error on failure
-        window.engine = await boot(document.getElementById('game'), mod.default, { width, height, baseUrl: 'about:blank', files });
+        window.engine = await boot(document.getElementById('game'), mod.default, { width, height, baseUrl: 'about:blank', files, actions: manifest.actions });
         stage = 'running';
       } catch (err) {
         console.error('[studio]', err);
