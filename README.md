@@ -25,15 +25,22 @@ npm run dev:desktop            # Tauri window (needs the backend running)
 To seed a demo account and the example games, see [backend/README.md](backend/README.md).
 
 ## Features
-- **Play & share**: upload games as `.zip` bundles, browse/search/sort by tags, ratings, comments, leaderboards and favorites.
+- **Play & share**: upload games as `.zip` bundles, browse/search/sort by tags (including Trending), ratings, favorites, "More like this", and release notes with an "Updated" badge.
+- **Leaderboards**: daily, weekly and all-time boards, lower-is-better and time scores, and boards games can show in-game.
+- **Social**: follow creators, an activity feed, threaded comment replies with hearts, creator pin/lock tools, and in-app notifications (with optional desktop OS notifications).
+- **Screenshots**: capture with 📷 or a game's own key, share to a per-game gallery or set as the thumbnail; every image is re-encoded before use.
+- **Controls**: games declare named actions; players remap keys per game from a controls panel.
 - **Achievements**: games declare them in `game.json` and call `engine.platform.unlockAchievement(id)`. They show on game pages and profiles.
 - **Cloud saves**: `engine.storage` follows your account across devices, with a localStorage fallback.
 - **Game Studio** (`/studio`): write a game in the browser, starting from a template, with a live sandboxed preview, then publish it or export a `.zip`. On desktop you can also open a local game folder.
 - **Creator analytics**: dashboard totals and a 30-day plays chart for your games overall and per game.
 - **Moderation**: report games and comments, plus an admin queue at `/admin` (admins are set with `ADMIN_USERNAMES`).
 - **Security**: untrusted game code runs only in sandboxed iframes, owner previews use short-lived preview tokens, and rate limits protect auth, uploads and comments.
-- **Engine**: WebGL2 sprite batching, input, audio, scenes, tilemaps, physics, particles, tweens, and an F3 debug overlay. There are three example games: Space Dodge, Pixel Peaks and Brick Breaker.
-- **Desktop**: native menu, F11 fullscreen, native open and save dialogs, and a configurable server.
+- **Engine**: WebGL2 sprite batching, input with remappable actions, audio, scenes, tilemaps, physics, particles, tweens, bitmap and pixel fonts, 9-slice panels, simple menu widgets, frame capture, and an F3 debug overlay. There are three example games: Space Dodge, Pixel Peaks and Brick Breaker.
+- **Studio extras**: open your own published games, publish updates with release notes, and start from templates including Time trial and Menu & HUD.
+- **Desktop**: native menu (Feed, Controls, Notifications, Take Screenshot), F11 fullscreen, native open and save dialogs, local game folders in the Studio, opt-in OS notifications, and a configurable server.
+
+See [docs/ROADMAP.md](docs/ROADMAP.md) for shipped and upcoming features and [docs/reviews/](docs/reviews/) for the review history.
 
 ## Docker
 ```sh

@@ -682,12 +682,13 @@ Bitmap fonts, 9-slice and UI widgets (spec: `docs/features/F012-bitmap-fonts-and
   ```
   The UI layer is game content, so screenshots include it. It is drawn from the list built by the **last fixed step** (`ui.beginStep`/`endStep` wrap each step, inside `input.beginStep`/`endStep`), so widget logic follows the same per-step input edges as the rest of the game. Frames without a step redraw the previous list.
 - **Menu navigation reuses F009.** `engine.ui` reads the game's declared `up`/`down`/`left`/`right`/`confirm` actions when present (so ⌨ remaps apply to menus), with fixed key fallbacks otherwise. It checks `input.actions` before calling `actionPressed`, so F009's unknown-id warning never fires. No new message and no host involvement.
-- **Five copies of the bundle extension allowlist**, all gaining `fnt`, which must stay in sync:
+- **Six copies of the bundle extension allowlist**, all gaining `fnt`, which must stay in sync (review 5, L7 adds the pack script):
   - `backend/src/bundle.rs` `ALLOWED_EXTS` (authoritative, enforced on upload and replace);
   - `backend/src/routes/files.rs` `mime_for` (Content-Type);
   - `packages/ui/src/studio/project.ts` `ALLOWED_EXTENSIONS` and `TEXT_EXTENSIONS`;
   - `apps/desktop/src-tauri/src/project.rs` `ALLOWED_EXTS` and `TEXT_EXTS`;
-  - `packages/engine/src/files.ts` `MIME` and the dev harness map in `packages/engine/vite.config.ts`.
+  - `packages/engine/src/files.ts` `MIME` and the dev harness map in `packages/engine/vite.config.ts`;
+  - `scripts/pack-examples.mjs` (the example bundle validator).
   GAME_FORMAT § F012 "Bundle" is the normative list. Each area's tests assert `fnt` is present.
 - **Security posture unchanged.** Font descriptors are parsed only inside the sandboxed, opaque-origin game iframe, with hard limits (GAME_FORMAT § F012). Page paths go through `normalizePath` and can't leave the bundle. The engine never uses `DOMParser` on bundle content. `.fnt` is served like `.txt` (`text/plain`, `nosniff`, CSP sandbox).
 - **Studio**: the `menu-hud` template uses only procedural textures (templates ship no assets). `.fnt` is a text type in the Studio editor, the zip reader and writer, and the desktop folder opener.

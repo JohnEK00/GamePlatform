@@ -5,7 +5,7 @@
 my-game.zip
 ├─ game.json        (required, at zip root — or inside a single top-level folder, which the backend strips)
 ├─ main.js          (entry, ES module)
-└─ assets/...       (any png/jpg/webp/gif/svg/json/txt/wav/mp3/ogg/js/css/woff2/ttf files)
+└─ assets/...       (any png/jpg/jpeg/webp/gif/svg/json/txt/fnt/wav/mp3/ogg/js/css/woff2/ttf files; see the "F012 additions" section for .fnt)
 ```
 `game.json`:
 ```json
