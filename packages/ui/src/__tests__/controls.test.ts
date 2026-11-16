@@ -146,6 +146,13 @@ describe("validateActions (backend rules)", () => {
       expect(t.files["main.js"]).toMatch(/action(Pressed|Down)\(/);
     }
   });
+
+  it("the Menu & HUD template declares confirm and drives its menus with engine.ui (F012)", () => {
+    const t = STUDIO_TEMPLATES.find((x) => x.id === "menu-hud")!;
+    expect(validateActions(t.manifest)).toEqual([]);
+    expect(normalizeActions(t.manifest.actions).map((a) => a.id)).toContain("confirm");
+    expect(t.files["main.js"]).toContain("engine.ui.button(");
+  });
 });
 
 describe("lenient parsing", () => {

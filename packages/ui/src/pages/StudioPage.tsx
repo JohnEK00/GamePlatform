@@ -730,7 +730,7 @@ export function StudioPage() {
     if (newFile === null) return;
     const path = normalizeProjectPath(newFile.includes(".") ? newFile : `${newFile}.js`);
     if (!path || path === MANIFEST) return toast.error("Invalid file name");
-    if (!isTextPath(path) || !ALLOWED_EXTENSIONS.includes(extOf(path))) return toast.error("New files must be .js, .json, .txt, .css or .svg");
+    if (!isTextPath(path) || !ALLOWED_EXTENSIONS.includes(extOf(path))) return toast.error("New files must be .js, .json, .txt, .fnt, .css or .svg");
     if (path in project.files) return toast.error(`"${path}" already exists`);
     setFile(path, extOf(path) === "json" ? "{}\n" : "");
     setSelected(path);

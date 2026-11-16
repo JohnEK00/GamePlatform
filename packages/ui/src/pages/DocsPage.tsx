@@ -46,6 +46,43 @@ if (result?.personalBest) this.banner = "NEW BEST! #" + result.ranks.day + " tod
 const board = await engine.platform.getLeaderboard({ period: "week", limit: 5 });
 if (board) this.rows = board.entries.map((e) => (e.isMe ? "> " : "") + e.rank + ". " + e.name + "  " + e.display);`;
 
+const FONT_JS = `async load(engine) {
+  // A BMFont export: assets/title.fnt (text or JSON format) next to its PNG page(s).
+  await engine.assets.loadBitmapFont("title", "assets/title.fnt");
+  // Or a plain grid of glyphs in one image, in cell order.
+  const sheet = await engine.assets.loadTexture("assets/digits.png");
+  engine.assets.gridFont("digits", sheet, { cellW: 8, cellH: 8, chars: "0123456789" });
+},
+render(engine) {
+  const r = engine.renderer;
+  r.drawText("PIXEL PEAKS", engine.width / 2, 40, { font: "title", size: 32, align: "center" });
+  r.drawText("SCORE " + this.score, 4, 4, { font: "pixel", size: 8 });   // built in, always there
+}`;
+
+const NINESLICE_JS = `// A frame image whose 6 px borders must not stretch.
+this.frame = await engine.assets.loadNineSlice("assets/frame.png", 6);
+// ...or build one from any texture: new engine.NineSlice(texture, { left: 4, top: 4, right: 4, bottom: 6 })
+
+engine.renderer.drawNineSlice(this.frame, 20, 20, 200, 80, { scale: 2 });   // corners stay crisp`;
+
+const MENU_JS = `load(engine) {
+  engine.ui.theme.font = "pixel";
+  engine.ui.theme.textSize = 8;
+  engine.ui.theme.button = this.frame;          // optional NineSlice styles; flat colours otherwise
+},
+update(engine, dt) {
+  const { ui } = engine;                         // call widgets from update, not render
+  if (this.state === "title") {
+    ui.panel(140, 90, 200, 96);
+    if (ui.button("play", "PLAY", 160, 104, 160, 20)) this.state = "play";
+    if (ui.button("help", "HOW TO PLAY", 160, 130, 160, 20)) this.state = "help";
+  } else if (this.state === "play") {
+    // A HUD button during play: nav: false keeps the arrows and confirm for the game.
+    if (ui.button("pause", "II", engine.width - 22, 4, 18, 14, { nav: false })) this.state = "paused";
+    this.step(engine, dt);
+  }
+}`;
+
 const ACTIONS_JSON = `"controls": "Aim with the mouse. Remap keys with ⌨.",
 "actions": [
   { "id": "left",  "name": "Move left",  "keys": ["ArrowLeft", "KeyA"], "gamepad": ["Left"] },
@@ -128,7 +165,7 @@ export function DocsPage() {
         <Code label="my-game.zip">{`my-game.zip
 ├─ game.json        required
 ├─ main.js          entry (ES module)
-└─ assets/...       png jpg webp gif svg json txt wav mp3 ogg js css woff2 ttf`}</Code>
+└─ assets/...       png jpg webp gif svg json txt fnt wav mp3 ogg js css woff2 ttf`}</Code>
       </section>
 
       <section>
@@ -173,15 +210,18 @@ export function DocsPage() {
             <h3>renderer</h3>
             <p>
               <code>clear(color)</code>, <code>drawSprite(tex, x, y, {"{w,h,rotation,originX,originY,frame,flipX,tint,alpha}"})</code>,{" "}
-              <code>drawRect</code>, <code>drawLine</code>, <code>drawCircle</code>, <code>drawText(text, x, y, {"{size,color,align}"})</code>,{" "}
-              <code>camera {"{x, y, zoom, shake()}"}</code>
+              <code>drawRect</code>, <code>drawLine</code>, <code>drawCircle</code>,{" "}
+              <code>drawText(text, x, y, {"{font,size,color,align}"})</code> (<code>font: "pixel"</code> is built in),{" "}
+              <code>drawNineSlice(src, x, y, w, h)</code>, <code>camera {"{x, y, zoom, shake()}"}</code>. Menus and buttons:{" "}
+              <code>engine.ui</code> (see 16)
             </p>
           </div>
           <div className="pf-panel">
             <h3>assets</h3>
             <p>
               <code>loadTexture</code>, <code>loadSpriteSheet(path, frameW, frameH)</code>, <code>loadSound</code>, <code>loadJSON</code>,{" "}
-              <code>loadText</code> — paths are relative to your bundle.
+              <code>loadText</code>, <code>loadFont</code>, <code>loadBitmapFont(name, path)</code>, <code>gridFont</code>,{" "}
+              <code>loadNineSlice</code>, <code>createTexture(w, h, draw)</code> — paths are relative to your bundle.
             </p>
           </div>
           <div className="pf-panel">
@@ -471,6 +511,72 @@ const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
             or touch. It is shown next to the action list.
           </li>
         </ul>
+      </section>
+
+      <section>
+        <h2>16. Text, fonts and menus</h2>
+        <p>
+          Besides the smooth canvas fonts (<code>default</code>, <code>mono</code> and anything from <code>loadFont</code>), the
+          engine draws <strong>bitmap fonts</strong>, stretchable <strong>9-slice</strong> frames and simple{" "}
+          <strong>menus and buttons</strong> that work with the mouse, touch, keys and a gamepad. The Studio's{" "}
+          <em>Menu &amp; HUD</em> template shows all of it in one small game.
+        </p>
+        <h3>The built-in pixel font</h3>
+        <p>
+          <code>{'drawText(text, x, y, { font: "pixel", size: 8 })'}</code> is always available: ASCII only (anything else shows as{" "}
+          <code>?</code>), 8 units tall, 6 wide per character. <strong>Crispness rule:</strong> a bitmap font is drawn on whole
+          game units, so it stays sharp at whole multiples of its native size (<code>pixel</code>: 8, 16, 24…). Other sizes work
+          but may shimmer. Use canvas fonts for large smooth text.
+        </p>
+        <h3>Your own bitmap fonts</h3>
+        <Code label="main.js">{FONT_JS}</Code>
+        <ul>
+          <li>
+            Export from BMFont, Hiero, Snowb or Littera in the <strong>text</strong> (<code>.fnt</code>) or <strong>JSON</strong>{" "}
+            format with <strong>PNG pages</strong> and <strong>no channel packing</strong>. XML descriptors are rejected. Page
+            files are found next to the descriptor.
+          </li>
+          <li>
+            Fonts are crisp (nearest filtering) by default; pass <code>{"{ smooth: true }"}</code> for a smooth one. Kerning
+            pairs are applied. The names <code>default</code>, <code>mono</code> and <code>pixel</code> are reserved.
+          </li>
+          <li>
+            <code>gridFont</code> cuts a fixed-size grid of glyphs (left to right, top to bottom) from any texture, with no
+            descriptor needed.
+          </li>
+        </ul>
+        <h3>9-slice frames</h3>
+        <Code label="main.js">{NINESLICE_JS}</Code>
+        <p>
+          The corners are drawn as they are, the edges stretch in one direction and the centre in both, so one small image
+          makes panels and buttons of any size. Pass <code>{"{ center: false }"}</code> to draw only the frame.
+        </p>
+        <h3>Menus and buttons</h3>
+        <Code label="main.js">{MENU_JS}</Code>
+        <ul>
+          <li>
+            <strong>Call widgets from <code>update</code></strong> (or a scene's <code>update</code>), every step the menu
+            should be visible. <code>ui.button(...)</code> returns <code>true</code> once, in the step it is activated. The
+            engine draws the widgets in screen space after your <code>render</code>, so screenshots include them.
+          </li>
+          <li>
+            Players move between buttons with the arrows or the gamepad D-pad and activate them with Enter, Space or{" "}
+            <strong>A</strong>. Declare <code>up</code>, <code>down</code> and a <code>confirm</code> action (see 15) to let
+            them remap these keys. <code>Tab</code> is never used, so browser focus keeps working.
+          </li>
+          <li>
+            Buttons shown <strong>during play</strong>, like a pause button on the HUD, should pass{" "}
+            <code>{"{ nav: false }"}</code>, so the arrow keys and <code>confirm</code> keep controlling the game.
+          </li>
+          <li>
+            Restyle everything through <code>engine.ui.theme</code>: <code>font</code>, <code>textSize</code>, colours, and{" "}
+            <code>panel</code>/<code>button</code>/<code>buttonHover</code>/<code>buttonDown</code> 9-slices.
+          </li>
+        </ul>
+        <p>
+          Bundle layout: <code>.fnt</code> files are allowed next to your images (<code>assets/... png jpg webp gif svg json txt
+          fnt wav mp3 ogg js css woff2 ttf</code>), and the Studio opens them as text.
+        </p>
       </section>
 
       <div className="pf-panel pf-docs__cta">

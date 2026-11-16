@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "../api/client";
@@ -108,6 +108,27 @@ describe("StudioPage", () => {
     expect(screen.getByRole("link", { name: "Log in to publish" })).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Edit main.js" })).toBeTruthy();
     expect(document.querySelector("iframe")!.getAttribute("sandbox")).toBe("allow-scripts allow-pointer-lock");
+    window.location.hash = "";
+  });
+
+  it("lists the Menu & HUD template and accepts a .fnt asset as text (F012)", async () => {
+    window.location.hash = "#/studio";
+    const client = new ApiClient({ baseUrl: "" });
+    render(<WebGameApp config={{ apiBaseUrl: "", routerMode: "hash" }} client={client} />);
+    await screen.findByRole("heading", { name: "Studio" });
+    const picker = screen.getByRole("combobox", { name: "New from template" }) as HTMLSelectElement;
+    const option = Array.from(picker.options).find((o) => o.value === "menu-hud");
+    expect(option?.textContent).toBe("Menu & HUD");
+
+    const input = document.querySelector<HTMLInputElement>(".pf-studio__files input[type=file]")!;
+    expect(input.accept.split(",")).toContain(".fnt");
+    const fnt = 'info face="T" size=8\ncommon lineHeight=10 base=7\n';
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [new File([fnt], "font.fnt", { type: "" })] } });
+    });
+    const editor = (await screen.findByRole("textbox", { name: "Edit assets/font.fnt" })) as HTMLTextAreaElement;
+    expect(editor.value).toBe(fnt);
+    expect(screen.queryByText(/isn't an allowed file type/)).toBeNull();
     window.location.hash = "";
   });
 

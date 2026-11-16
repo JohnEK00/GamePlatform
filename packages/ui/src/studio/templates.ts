@@ -1,5 +1,6 @@
 // Starter templates for the Game Studio. Each is small but complete, written against the Pixelforge engine API
-// (docs/GAME_FORMAT.md, packages/engine/README.md). No asset files are needed: graphics are shapes, sounds are synth.
+// (docs/GAME_FORMAT.md, packages/engine/README.md). No asset files are needed: graphics are shapes or procedural
+// textures (assets.createTexture, e.g. the 9-slice frames of "Menu & HUD"), text uses the built-in fonts and sounds are synth.
 
 export type StudioTemplate = {
   id: string;
@@ -401,6 +402,220 @@ export default {
 };
 `;
 
+const MENU_HUD_MAIN = `// Menu & HUD: a title menu, a pause menu and a crisp pixel-font HUD around a tiny star-catching game.
+// Widgets come from engine.ui and are called from update, never render (/docs, section 16 "Text, fonts and menus").
+// No asset files: the panel and button frames are 9-slices drawn procedurally with assets.createTexture.
+const BTN_W = 120;
+const BTN_H = 20;
+
+// A small framed box with rounded corners, a light top edge and a darker bottom edge.
+// It is drawn once, then stretched by a NineSlice: the corners stay crisp, the middle stretches.
+function frame(engine, c) {
+  return engine.assets.createTexture(12, 12, (ctx, w, h) => {
+    ctx.fillStyle = c.border;
+    ctx.fillRect(1, 0, w - 2, h);
+    ctx.fillRect(0, 1, w, h - 2);
+    ctx.fillStyle = c.shade;
+    ctx.fillRect(1, 1, w - 2, h - 2);
+    ctx.fillStyle = c.fill;
+    ctx.fillRect(1, 1, w - 2, h - 3);
+    ctx.fillStyle = c.light;
+    ctx.fillRect(2, 1, w - 4, 1);
+  });
+}
+
+export default {
+  load(engine) {
+    const { ui, NineSlice } = engine;
+    const panel = frame(engine, { border: "#5a6bc0", fill: "#141a2e", shade: "#0c1020", light: "#3a4470" });
+    const button = frame(engine, { border: "#0c1020", fill: "#2a3358", shade: "#1e2540", light: "#5a6bc0" });
+    const hover = frame(engine, { border: "#0c1020", fill: "#3a4780", shade: "#2a3358", light: "#8a9af0" });
+    const down = frame(engine, { border: "#0c1020", fill: "#1e2540", shade: "#1e2540", light: "#141a2e" });
+
+    // Theme (section 16): every widget uses the built-in "pixel" font at its native size 8 and these frames.
+    ui.theme.font = "pixel";
+    ui.theme.textSize = 8;
+    ui.theme.panel = new NineSlice(panel, 4);
+    ui.theme.button = new NineSlice(button, 4);
+    ui.theme.buttonHover = new NineSlice(hover, 4);
+    ui.theme.buttonDown = new NineSlice(down, 4);
+    ui.theme.nineSliceScale = 1;
+
+    this.sound = engine.storage.get("sound", true) !== false;
+    this.best = engine.storage.get("best", 0);
+    this.state = "title"; // title | help | play | paused | over
+    this.keyboard = false; // was the last menu choice made with keys or a gamepad?
+    this.focusNext = null;
+    this.sky = Array.from({ length: 40 }, () => ({
+      x: Math.floor(Math.random() * engine.width),
+      y: Math.floor(Math.random() * engine.height),
+      s: Math.random() < 0.2 ? 2 : 1,
+    }));
+    this.reset(engine);
+  },
+
+  reset(engine) {
+    this.x = engine.width / 2;
+    this.stars = [];
+    this.score = 0;
+    this.lives = 3;
+    this.spawn = 0.6;
+  },
+
+  beep(engine, freq, freqEnd = freq, duration = 0.08) {
+    if (this.sound) engine.audio.tone({ freq, freqEnd, duration, volume: 0.2 });
+  },
+
+  // Switch screens. Keyboard and gamepad players land on the new menu's first button.
+  go(engine, state, focus = null) {
+    this.keyboard = engine.ui.focus !== null;
+    this.state = state;
+    this.focusNext = this.keyboard ? focus : null;
+    this.beep(engine, 660);
+  },
+
+  update(engine, dt) {
+    const { input } = engine;
+    if (this.state === "play") {
+      // "pause" is a game.json action (KeyP / Start), so players can remap it with ⌨.
+      if (input.actionPressed("pause")) {
+        this.state = "paused";
+        this.keyboard = true;
+        this.focusNext = "resume";
+      } else {
+        this.play(engine, dt);
+      }
+    } else if (this.state === "paused" && input.actionPressed("pause")) {
+      this.state = "play";
+    }
+    this.menus(engine);
+  },
+
+  play(engine, dt) {
+    const W = engine.width;
+    const H = engine.height;
+    this.x = engine.math.clamp(this.x + engine.input.axis("horizontal") * 200 * dt, 20, W - 20);
+
+    this.spawn -= dt;
+    if (this.spawn <= 0) {
+      this.spawn = Math.max(0.35, 1 - this.score * 0.02);
+      this.stars.push({ x: 12 + Math.random() * (W - 24), y: -6, vy: 50 + Math.min(110, this.score * 3) + Math.random() * 20 });
+    }
+
+    const top = H - 22;
+    this.stars = this.stars.filter((s) => {
+      s.y += s.vy * dt;
+      if (s.y >= top - 3 && s.y <= top + 4 && Math.abs(s.x - this.x) <= 22) {
+        this.score += 1;
+        this.beep(engine, 880, 1320, 0.06);
+        return false;
+      }
+      if (s.y > H + 6) {
+        this.lives -= 1;
+        engine.camera.shake(3, 0.15);
+        this.beep(engine, 180, 90, 0.2);
+        return false;
+      }
+      return true;
+    });
+
+    if (this.lives <= 0) {
+      this.state = "over";
+      this.focusNext = this.keyboard ? "again" : null;
+      if (this.score > this.best) {
+        this.best = this.score;
+        engine.storage.set("best", this.best);
+      }
+      engine.platform.submitScore(this.score);
+    }
+  },
+
+  // All widgets for the current screen. A button returns true once, in the step it is activated.
+  menus(engine) {
+    const { ui, input } = engine;
+    const W = engine.width;
+    const cx = W / 2;
+    const bx = cx - BTN_W / 2;
+    if (this.focusNext) {
+      ui.focus = this.focusNext; // shows the focus ring; the button is declared below in this same step
+      this.focusNext = null;
+    }
+
+    if (this.state === "title") {
+      ui.label("STAR CATCHER", cx, 48, { size: 24, color: "#ffd166", align: "center" });
+      ui.panel(bx - 12, 100, BTN_W + 24, 96);
+      if (ui.button("play", "PLAY", bx, 112, BTN_W, BTN_H)) {
+        this.reset(engine);
+        this.go(engine, "play");
+      }
+      if (ui.button("sound", "SOUND: " + (this.sound ? "ON" : "OFF"), bx, 138, BTN_W, BTN_H)) {
+        this.sound = !this.sound;
+        engine.storage.set("sound", this.sound);
+        this.beep(engine, 660);
+      }
+      if (ui.button("help", "HOW TO PLAY", bx, 164, BTN_W, BTN_H)) this.go(engine, "help", "back");
+      ui.label("BEST " + this.best, cx, 214, { color: "#8b91b0", align: "center" });
+    } else if (this.state === "help") {
+      const key = (id) => input.actionLabel(id).toUpperCase();
+      ui.panel(cx - 110, 60, 220, 130);
+      ui.label(
+        ["CATCH THE FALLING STARS.", "MISS THREE AND IT'S OVER.", "", "MOVE: LEFT / RIGHT", "CHOOSE: " + key("confirm"), "PAUSE: " + key("pause")].join("\\n"),
+        cx,
+        74,
+        { align: "center" },
+      );
+      if (ui.button("back", "BACK", bx, 158, BTN_W, BTN_H)) this.go(engine, "title", "help");
+    } else if (this.state === "play") {
+      // A HUD button during play: nav: false keeps the arrows and "confirm" for the game itself.
+      if (engine.ui.button("hud-pause", "II", W - 22, 4, 18, 14, { nav: false })) this.go(engine, "paused", "resume");
+    } else if (this.state === "paused") {
+      ui.panel(cx - 80, 80, 160, 100);
+      ui.label("PAUSED", cx, 92, { size: 16, align: "center" });
+      if (ui.button("resume", "RESUME", bx, 120, BTN_W, BTN_H)) this.go(engine, "play");
+      if (ui.button("quit", "QUIT", bx, 146, BTN_W, BTN_H)) this.go(engine, "title", "play");
+    } else if (this.state === "over") {
+      ui.panel(cx - 80, 64, 160, 136);
+      ui.label("GAME OVER", cx, 76, { size: 16, color: "#ff7a3d", align: "center" });
+      ui.label("SCORE " + this.score, cx, 100, { align: "center" });
+      ui.label("BEST " + this.best, cx, 112, { color: "#8b91b0", align: "center" });
+      if (ui.button("again", "PLAY AGAIN", bx, 134, BTN_W, BTN_H)) {
+        this.reset(engine);
+        this.go(engine, "play");
+      }
+      if (ui.button("menu", "MENU", bx, 160, BTN_W, BTN_H)) this.go(engine, "title", "play");
+    }
+  },
+
+  render(engine) {
+    const r = engine.renderer;
+    const W = engine.width;
+    const H = engine.height;
+    r.clear("#0b0e1c");
+    for (const s of this.sky) r.drawRect(s.x, s.y, s.s, s.s, "#2a3358");
+    if (this.state === "title" || this.state === "help") return; // the menus are drawn by the UI layer
+
+    r.drawRect(0, H - 8, W, 8, "#141a2e");
+    for (const s of this.stars) {
+      const x = Math.round(s.x);
+      const y = Math.round(s.y);
+      r.drawRect(x - 1, y - 3, 3, 7, "#ffd166");
+      r.drawRect(x - 3, y - 1, 7, 3, "#ffd166");
+    }
+    const bx = Math.round(this.x) - 20;
+    r.drawRect(bx, H - 22, 40, 6, "#ff7a3d");
+    r.drawRect(bx + 2, H - 16, 36, 2, "#b34f22");
+
+    // HUD in screen space, so camera shake leaves it still. "pixel" at size 8 (its native size) is crisp.
+    r.ui(() => {
+      const hud = { font: "pixel", size: 8, color: "#ffffff" };
+      r.drawText("SCORE " + this.score, 6, 6, hud);
+      r.drawText("LIVES " + this.lives, 6, 16, { ...hud, color: this.lives === 1 ? "#ff7a3d" : "#c3c7dc" });
+      r.drawText("BEST " + this.best, W / 2, 6, { ...hud, color: "#8b91b0", align: "center" });
+    });
+  },
+};
+`;
+
 // F009: game.json "actions" (GAME_FORMAT § F009). Movement actions named left/right/up/down make
 // input.axis() follow the player's remapping.
 const MOVE_LEFT = { id: "left", name: "Move left", keys: ["ArrowLeft", "KeyA"], gamepad: ["Left"] };
@@ -485,5 +700,26 @@ export const STUDIO_TEMPLATES: StudioTemplate[] = [
       actions: [...MOVEMENT(), { id: "restart", name: "Race again", keys: ["KeyR", "Space"], gamepad: ["Start"] }],
     },
     files: { "main.js": TIME_TRIAL_MAIN },
+  },
+  {
+    id: "menu-hud",
+    name: "Menu & HUD",
+    description: "Title and pause menus built with engine.ui and 9-slices, plus a crisp pixel-font HUD, around a tiny star-catching game.",
+    manifest: {
+      name: "Star Catcher",
+      entry: "main.js",
+      width: 480,
+      height: 270,
+      engine: "1",
+      achievements: [],
+      controls: "Arrows or WASD to move, Enter to choose, P to pause. Remap keys with ⌨.",
+      // F012: engine.ui navigates menus with the declared up/down/left/right and confirm actions, so ⌨ remaps apply.
+      actions: [
+        ...MOVEMENT(),
+        { id: "confirm", name: "Confirm", keys: ["Enter", "Space"], gamepad: ["A"] },
+        { id: "pause", name: "Pause", keys: ["KeyP"], gamepad: ["Start"] },
+      ],
+    },
+    files: { "main.js": MENU_HUD_MAIN },
   },
 ];

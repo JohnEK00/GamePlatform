@@ -61,8 +61,8 @@ export function withLeaderboard(manifest: object, patch: StudioLeaderboard): Stu
   return m;
 }
 
-export const ALLOWED_EXTENSIONS = ["json", "js", "png", "jpg", "jpeg", "webp", "gif", "svg", "txt", "wav", "mp3", "ogg", "css", "woff2", "ttf"];
-export const TEXT_EXTENSIONS = ["js", "json", "txt", "css", "svg", "md", "csv"];
+export const ALLOWED_EXTENSIONS = ["json", "js", "png", "jpg", "jpeg", "webp", "gif", "svg", "txt", "fnt", "wav", "mp3", "ogg", "css", "woff2", "ttf"];
+export const TEXT_EXTENSIONS = ["js", "json", "txt", "fnt", "css", "svg", "md", "csv"];
 export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "svg"];
 export const MAX_PROJECT_FILES = 2000;
 /** Backend bundle limits (GAME_FORMAT.md, backend/src/bundle.rs). */
