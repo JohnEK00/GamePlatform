@@ -704,7 +704,7 @@ async fn comment_deletes_remove_their_notifications() {
     assert_eq!(n2["excerpt"], "c1");
     assert_eq!(usernames(&n2["actors"]), vec!["ava"]);
 
-    // The author deletes the last one: the group is hidden, then pruned.
+    // The author deletes the last one: the group is deleted with its last event (0014).
     let before = unread(&t, &owner).await["unread"].as_i64().unwrap();
     let r = send_empty(&t, Method::DELETE, &format!("/api/comments/{c1}"), &ava).await;
     assert_eq!(r.status, StatusCode::NO_CONTENT);
@@ -722,9 +722,7 @@ async fn comment_deletes_remove_their_notifications() {
                 .unwrap()
         }
     };
-    assert_eq!(exists(&t).await, 1, "empty row kept until pruned");
-    assert!(prune(&t.state.db, Utc::now()).await.unwrap() >= 1);
-    assert_eq!(exists(&t).await, 0);
+    assert_eq!(exists(&t).await, 0, "removed with its last event");
 }
 
 // ---------------------------------------------------------------------------
@@ -1228,7 +1226,13 @@ async fn prune_applies_retention_rules() {
     let read_recent = insert(r1.clone(), "b".into(), Some(days(29)), days(40), true).await;
     let unread_old = insert(r1.clone(), "c".into(), None, days(91), true).await;
     let unread_recent = insert(r1.clone(), "d".into(), None, days(89), true).await;
-    let empty = insert(r1.clone(), "e".into(), None, days(1), false).await;
+    // An event-less row can't exist any more: the 0014 trigger removes it with its last event.
+    let empty = insert(r1.clone(), "e".into(), None, days(1), true).await;
+    sqlx::query("DELETE FROM notification_events WHERE notification_id = ?")
+        .bind(empty)
+        .execute(&t.state.db)
+        .await
+        .unwrap();
     let fresh = insert(r1.clone(), "f".into(), None, days(0), true).await;
     // 205 recent rows for r2: the 5 oldest go.
     let mut r2_ids = Vec::new();
@@ -1238,7 +1242,7 @@ async fn prune_applies_retention_rules() {
     }
 
     let deleted = prune(&t.state.db, now).await.unwrap();
-    assert_eq!(deleted, 3 + 5);
+    assert_eq!(deleted, 2 + 5);
     let left: Vec<i64> = sqlx::query_scalar("SELECT id FROM notifications ORDER BY id")
         .fetch_all(&t.state.db)
         .await

@@ -221,9 +221,10 @@ pub async fn create_screenshot(
         return Err(cap_error());
     }
 
-    // 8-9: a decode slot, then decode + re-encode off the async runtime. L5: when the server
-    // is busy (503), the image can't be decoded (422) or a server-side step fails, the
-    // screenshot token taken in step 3 is refunded.
+    // 8-9: a decode slot, then decode + re-encode off the async runtime. L5 / review-4 M2:
+    // the screenshot token taken in step 3 is refunded only when the server is busy (503) or a
+    // server-side step fails (5xx). A 422 (undecodable / over budget) stays charged, so
+    // invalid images can't be posted unmetered.
     let refund = || {
         state
             .limiter
@@ -241,7 +242,9 @@ pub async fn create_screenshot(
     {
         Ok(Ok(p)) => p,
         Ok(Err(e)) => {
-            refund();
+            if e.status().is_server_error() {
+                refund();
+            }
             return Err(e);
         }
         Err(e) => {

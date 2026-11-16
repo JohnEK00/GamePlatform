@@ -81,6 +81,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     // L4: finish `score_bests` rebuilds interrupted by a restart (boards use the fallback
     // until then).
     let _bests = webgame_server::bests::spawn_rebuild(&state);
+    // F007 L2: resume `gamePublished` fan-outs interrupted by a restart.
+    webgame_server::notifications::resume_fan_outs(&state.db, &state.fan_out).await;
     // N1/N3: periodic trending refresh + PRAGMA optimize, off the request path.
     let maintenance = webgame_server::trending::spawn_maintenance(&state);
     let listener = tokio::net::TcpListener::bind(addr).await?;

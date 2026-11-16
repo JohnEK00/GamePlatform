@@ -229,6 +229,8 @@ pub fn spawn_maintenance(state: &AppState) -> Option<tokio::task::JoinHandle<()>
             crate::db::optimize(&db, false).await;
             // L4: retry `score_bests` rebuilds that failed earlier (a no-op when none).
             let _ = crate::bests::spawn_rebuild(&state).await;
+            // F007 L2: pick up queued fan-outs (a no-op when none).
+            state.fan_out.kick(&db);
             if last_prune.is_none_or(|t| t.elapsed() >= PRUNE_EVERY) {
                 last_prune = Some(std::time::Instant::now());
                 match crate::notifications::prune(&db, Utc::now()).await {

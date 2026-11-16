@@ -89,7 +89,6 @@ pub const UNREAD_CAP: i64 = 100;
 pub const READ_RETENTION_DAYS: i64 = 30;
 pub const MAX_AGE_DAYS: i64 = 90;
 pub const PER_RECIPIENT_CAP: i64 = 200;
-const PRUNE_BATCH: u64 = 1000;
 
 /// RFC3339 with milliseconds and `Z`: the format of every stored timestamp.
 pub fn stamp(t: DateTime<Utc>) -> String {
@@ -108,13 +107,14 @@ pub struct NewNotification {
     pub actor_id: String,
     /// `comment`/`reply`: the newly posted comment; else `None`.
     pub event_comment_id: Option<String>,
-    /// Hearts, follows, `gamePublished`: skip when this actor already has an event in any
-    /// notification of (recipient, kind, group), read or unread.
+    /// Hearts, follows: skip when this actor already has an event in any notification of
+    /// (recipient, kind, group), read or unread; a retracted one is restored instead (L1).
     pub dedupe_actor: bool,
     pub now: DateTime<Utc>,
 }
 
-/// Record one event for one recipient (best effort; failures are logged).
+/// Record one event for one recipient (best effort; failures are logged). `conn` must not be
+/// inside a transaction: the write runs in its own `BEGIN IMMEDIATE` transaction (M1).
 pub async fn notify(conn: &mut SqliteConnection, n: &NewNotification) {
     if n.recipient_id == n.actor_id {
         return;
@@ -134,23 +134,30 @@ pub async fn notify_pool(pool: &SqlitePool, n: &NewNotification) {
     }
 }
 
+/// M1: `BEGIN IMMEDIATE` takes the write lock up front (waiting under `busy_timeout`), so no
+/// read snapshot can go stale before the first write; the dedupe check lives inside the
+/// upsert itself.
 async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::Result<()> {
     let kind = n.kind.as_str();
     let now = stamp(n.now);
-    let mut tx = conn.begin().await?;
+    let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
     if n.dedupe_actor {
-        let seen: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM notifications n JOIN notification_events e \
-             ON e.notification_id = n.id WHERE n.recipient_id = ?1 AND n.kind = ?2 \
-             AND n.group_key = ?3 AND e.actor_id = ?4)",
+        // L1: the actor re-joins a group they were retracted from: restore the event and keep
+        // `updated_at`, so the item neither moves nor counts as new activity.
+        let restored = sqlx::query(
+            "UPDATE notification_events SET retracted_at = NULL \
+             WHERE actor_id = ?4 AND retracted_at IS NOT NULL AND notification_id IN \
+             (SELECT id FROM notifications WHERE recipient_id = ?1 AND kind = ?2 \
+              AND group_key = ?3)",
         )
         .bind(&n.recipient_id)
         .bind(kind)
         .bind(&n.group_key)
         .bind(&n.actor_id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if seen {
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if restored > 0 {
             return tx.commit().await;
         }
     }
@@ -162,6 +169,10 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
          SELECT ?1, ?2, ?3, ?5, ?6, ?7, ?7 \
          WHERE NOT EXISTS (SELECT 1 FROM notification_settings s WHERE s.user_id = ?1 \
            AND s.{col} = 0) \
+         AND (?8 = 0 OR NOT EXISTS (SELECT 1 FROM notifications d \
+           JOIN notification_events e ON e.notification_id = d.id \
+           WHERE d.recipient_id = ?1 AND d.kind = ?2 AND d.group_key = ?3 \
+           AND e.actor_id = ?4)) \
          ON CONFLICT (recipient_id, kind, group_key) WHERE read_at IS NULL \
          DO UPDATE SET updated_at = excluded.updated_at \
          RETURNING id"
@@ -169,14 +180,15 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     .bind(&n.recipient_id)
     .bind(kind)
     .bind(&n.group_key)
-    .bind(&n.actor_id) // ?4: unused here, keeps the documented numbering
+    .bind(&n.actor_id)
     .bind(&n.game_id)
     .bind(&n.comment_id)
     .bind(&now)
+    .bind(i64::from(n.dedupe_actor))
     .fetch_optional(&mut *tx)
     .await?;
     let Some(id) = id else {
-        // Muted by the recipient's settings.
+        // Muted by the recipient's settings, or already seen (dedupe).
         return tx.commit().await;
     };
     sqlx::query(
@@ -192,8 +204,9 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     tx.commit().await
 }
 
-/// Remove `actor_id`'s events from the recipient's **unread** notification of the group
-/// (un-heart, unfollow). Best effort.
+/// Retract `actor_id`'s events from the recipient's **unread** notification of the group
+/// (un-heart, unfollow). L1: the event is tombstoned (`retracted_at`), not deleted, so a
+/// re-heart / re-follow restores it without re-notifying. Best effort.
 pub async fn retract(
     conn: &mut SqliteConnection,
     recipient_id: &str,
@@ -202,7 +215,8 @@ pub async fn retract(
     actor_id: &str,
 ) {
     let res = sqlx::query(
-        "DELETE FROM notification_events WHERE actor_id = ?4 AND notification_id IN \
+        "UPDATE notification_events SET retracted_at = ?5 \
+         WHERE actor_id = ?4 AND retracted_at IS NULL AND notification_id IN \
          (SELECT id FROM notifications WHERE recipient_id = ?1 AND kind = ?2 \
           AND group_key = ?3 AND read_at IS NULL)",
     )
@@ -210,6 +224,7 @@ pub async fn retract(
     .bind(kind.as_str())
     .bind(group_key)
     .bind(actor_id)
+    .bind(stamp(Utc::now()))
     .execute(&mut *conn)
     .await;
     if let Err(e) = res {
@@ -230,95 +245,309 @@ pub async fn retract_pool(
     }
 }
 
-/// `gamePublished` to every follower of the owner, in transactions of at most
-/// [`FAN_OUT_CHUNK`] recipients. Call after the publish committed. Best effort.
-pub async fn fan_out_game_published(
-    pool: &SqlitePool,
+// ---------------------------------------------------------------------------
+// gamePublished fan-out (L2: background, resumable)
+// ---------------------------------------------------------------------------
+
+/// A chunk is retried this many times in a row before the fan-out is parked until the next
+/// startup ([`resume_fan_outs`]).
+pub const FAN_OUT_MAX_ATTEMPTS: i64 = 5;
+const FAN_OUT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Queue the `gamePublished` fan-out of a first publish. Call inside the publishing
+/// transaction (so the entry commits with `first_published_at`), then [`FanOut::kick`] after
+/// the commit.
+pub async fn queue_game_published(
+    conn: &mut SqliteConnection,
     game_id: &str,
     owner_id: &str,
-    now: DateTime<Utc>,
-) {
-    let followers: Vec<String> =
-        match sqlx::query_scalar("SELECT follower_id FROM follows WHERE followee_id = ?")
-            .bind(owner_id)
-            .fetch_all(pool)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(game_id, error = %e, "failed to load followers for notifications");
+    now: &str,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO notification_fanouts (game_id, owner_id, created_at) VALUES (?, ?, ?) \
+         ON CONFLICT (game_id) DO NOTHING",
+    )
+    .bind(game_id)
+    .bind(owner_id)
+    .bind(now)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+type Tasks = std::sync::Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>;
+
+/// Runs queued fan-outs off the request path, one worker at a time. Tests await
+/// [`FanOut::idle`] instead of polling.
+#[derive(Clone, Default)]
+pub struct FanOut {
+    tasks: Tasks,
+    worker: std::sync::Arc<tokio::sync::Mutex<()>>,
+}
+
+impl FanOut {
+    /// Spawn a worker that drains every pending fan-out (a no-op when none is queued).
+    pub fn kick(&self, db: &SqlitePool) {
+        let db = db.clone();
+        let worker = self.worker.clone();
+        let handle = tokio::spawn(async move {
+            let _guard = worker.lock().await;
+            drain_fan_outs(&db).await;
+        });
+        let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        tasks.retain(|t| !t.is_finished());
+        tasks.push(handle);
+    }
+
+    /// Resolves once every worker spawned so far has finished.
+    pub async fn idle(&self) {
+        loop {
+            let tasks = {
+                let mut guard = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+                std::mem::take(&mut *guard)
+            };
+            if tasks.is_empty() {
                 return;
             }
-        };
-    for chunk in followers.chunks(FAN_OUT_CHUNK) {
-        let res: sqlx::Result<()> = async {
-            let mut tx = pool.begin().await?;
-            for recipient in chunk {
-                let n = NewNotification {
-                    recipient_id: recipient.clone(),
-                    kind: Kind::GamePublished,
-                    group_key: game_group(game_id),
-                    game_id: Some(game_id.to_string()),
-                    comment_id: None,
-                    actor_id: owner_id.to_string(),
-                    event_comment_id: None,
-                    // Once per (recipient, game) ever: the actor is always the owner.
-                    dedupe_actor: true,
-                    now,
-                };
-                notify(&mut tx, &n).await;
+            for t in tasks {
+                let _ = t.await;
             }
-            tx.commit().await
-        }
-        .await;
-        if let Err(e) = res {
-            tracing::warn!(game_id, error = %e, "failed to fan out gamePublished notifications");
         }
     }
 }
 
-/// Retention (API § F007): read > 30 days, any > 90 days, notifications without events, and
-/// beyond the newest 200 per recipient. Batched; returns the number of rows deleted.
+/// Startup: un-park fan-outs that ran out of attempts and resume every pending one.
+pub async fn resume_fan_outs(db: &SqlitePool, fan_out: &FanOut) {
+    if let Err(e) = sqlx::query("UPDATE notification_fanouts SET attempts = 0 WHERE attempts > 0")
+        .execute(db)
+        .await
+    {
+        tracing::warn!(error = %e, "failed to reset notification fan-out attempts");
+    }
+    fan_out.kick(db);
+}
+
+/// Process queued fan-outs chunk by chunk until none is left (or every remaining one is
+/// parked). Returns the number of chunks committed.
+pub async fn drain_fan_outs(db: &SqlitePool) -> u64 {
+    let mut chunks = 0;
+    loop {
+        let next: Option<(String, i64)> = match sqlx::query_as(
+            "SELECT game_id, attempts FROM notification_fanouts WHERE attempts < ? \
+             ORDER BY created_at, game_id LIMIT 1",
+        )
+        .bind(FAN_OUT_MAX_ATTEMPTS)
+        .fetch_optional(db)
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to read pending notification fan-outs");
+                return chunks;
+            }
+        };
+        let Some((game_id, attempts)) = next else {
+            return chunks;
+        };
+        match fan_out_chunk(db, &game_id, Utc::now()).await {
+            Ok(()) => chunks += 1,
+            Err(e) => {
+                tracing::warn!(game_id, error = %e, "gamePublished fan-out chunk failed");
+                let bumped = sqlx::query(
+                    "UPDATE notification_fanouts SET attempts = attempts + 1 WHERE game_id = ?",
+                )
+                .bind(&game_id)
+                .execute(db)
+                .await;
+                if bumped.is_err() {
+                    // Progress can't be recorded either; leave the rest to the next kick.
+                    return chunks;
+                }
+                if attempts + 1 < FAN_OUT_MAX_ATTEMPTS {
+                    let factor = u32::try_from(attempts + 1).unwrap_or(1);
+                    tokio::time::sleep(FAN_OUT_RETRY_DELAY * factor).await;
+                }
+            }
+        }
+    }
+}
+
+/// One chunk of at most [`FAN_OUT_CHUNK`] followers of one queued game, in one
+/// `BEGIN IMMEDIATE` transaction that also advances (or removes) the cursor.
+async fn fan_out_chunk(db: &SqlitePool, game_id: &str, now: DateTime<Utc>) -> sqlx::Result<()> {
+    let mut tx = db.begin_with("BEGIN IMMEDIATE").await?;
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT owner_id, after_follower, created_at FROM notification_fanouts \
+         WHERE game_id = ?",
+    )
+    .bind(game_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((owner_id, after, published_at)) = row else {
+        // Finished meanwhile, or the game was deleted.
+        return tx.commit().await;
+    };
+    let followers: Vec<String> = sqlx::query_scalar(
+        "SELECT follower_id FROM follows WHERE followee_id = ?1 AND follower_id > ?2 \
+         AND created_at <= ?3 ORDER BY follower_id LIMIT ?4",
+    )
+    .bind(&owner_id)
+    .bind(&after)
+    .bind(&published_at)
+    .bind(FAN_OUT_CHUNK as i64)
+    .fetch_all(&mut *tx)
+    .await?;
+    if !followers.is_empty() {
+        let recipients = serde_json::to_string(&followers).unwrap_or_else(|_| "[]".into());
+        let group = game_group(game_id);
+        let now = stamp(now);
+        // Exactly once per (recipient, game): the cursor commits with the chunk, so no dedupe.
+        sqlx::query(
+            "INSERT INTO notifications (recipient_id, kind, group_key, game_id, comment_id, \
+             created_at, updated_at) \
+             SELECT r.value, 'gamePublished', ?2, ?3, NULL, ?4, ?4 FROM json_each(?1) r \
+             WHERE r.value <> ?5 AND NOT EXISTS (SELECT 1 FROM notification_settings s \
+               WHERE s.user_id = r.value AND s.new_games = 0) \
+             ON CONFLICT (recipient_id, kind, group_key) WHERE read_at IS NULL \
+             DO UPDATE SET updated_at = excluded.updated_at",
+        )
+        .bind(&recipients)
+        .bind(&group)
+        .bind(game_id)
+        .bind(&now)
+        .bind(&owner_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO notification_events (notification_id, actor_id, comment_id, \
+             created_at) \
+             SELECT n.id, ?3, NULL, ?4 FROM notifications n \
+             WHERE n.recipient_id IN (SELECT value FROM json_each(?1)) \
+             AND n.kind = 'gamePublished' AND n.group_key = ?2 AND n.read_at IS NULL",
+        )
+        .bind(&recipients)
+        .bind(&group)
+        .bind(&owner_id)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if followers.len() < FAN_OUT_CHUNK {
+        sqlx::query("DELETE FROM notification_fanouts WHERE game_id = ?")
+            .bind(game_id)
+            .execute(&mut *tx)
+            .await?;
+    } else if let Some(last) = followers.last() {
+        sqlx::query(
+            "UPDATE notification_fanouts SET after_follower = ?, attempts = 0 WHERE game_id = ?",
+        )
+        .bind(last)
+        .bind(game_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
+// ---------------------------------------------------------------------------
+// Retention (L3: lock-friendly)
+// ---------------------------------------------------------------------------
+
+/// Ids per short delete statement.
+pub const PRUNE_BATCH: usize = 500;
+
+/// Delete `ids` that still satisfy `cond` (which may use `?2` and `?3`) in one short
+/// autocommit statement.
+async fn delete_ids(
+    pool: &SqlitePool,
+    ids: &[i64],
+    cond: &str,
+    b2: &str,
+    b3: Option<i64>,
+) -> sqlx::Result<u64> {
+    let json = serde_json::to_string(ids).unwrap_or_else(|_| "[]".into());
+    Ok(sqlx::query(&format!(
+        "DELETE FROM notifications WHERE id IN (SELECT value FROM json_each(?1)) AND ({cond})"
+    ))
+    .bind(json)
+    .bind(b2)
+    .bind(b3)
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
+/// Retention (API § F007): read > 30 days, any > 90 days, and beyond the newest 200 per
+/// recipient. Notifications without events are removed by the `0014` trigger when their last
+/// event goes. L3: candidate ids are read first (no write lock), then deleted in batches of
+/// [`PRUNE_BATCH`] in short transactions that re-check the rule. Returns the rows deleted.
 pub async fn prune(pool: &SqlitePool, now: DateTime<Utc>) -> sqlx::Result<u64> {
     let read_cutoff = stamp(now - Duration::days(READ_RETENTION_DAYS));
     let age_cutoff = stamp(now - Duration::days(MAX_AGE_DAYS));
-    let statements: [(&str, Option<&str>); 4] = [
+    let mut total = 0;
+    let rules: [(&str, &str, &str); 2] = [
         (
-            "DELETE FROM notifications WHERE id IN (SELECT id FROM notifications \
-             WHERE read_at IS NOT NULL AND read_at < ?1 LIMIT 1000)",
-            Some(&read_cutoff),
+            "SELECT id FROM notifications WHERE read_at IS NOT NULL AND read_at < ?1 LIMIT ?2",
+            "read_at IS NOT NULL AND read_at < ?2",
+            &read_cutoff,
         ),
         (
-            "DELETE FROM notifications WHERE id IN (SELECT id FROM notifications \
-             WHERE updated_at < ?1 LIMIT 1000)",
-            Some(&age_cutoff),
-        ),
-        (
-            "DELETE FROM notifications WHERE id IN (SELECT n.id FROM notifications n \
-             WHERE NOT EXISTS (SELECT 1 FROM notification_events e \
-               WHERE e.notification_id = n.id) LIMIT 1000)",
-            None,
-        ),
-        (
-            "DELETE FROM notifications WHERE id IN (SELECT id FROM ( \
-               SELECT id, ROW_NUMBER() OVER (PARTITION BY recipient_id \
-                 ORDER BY updated_at DESC, id DESC) AS rn FROM notifications) \
-             WHERE rn > 200 LIMIT 1000)",
-            None,
+            "SELECT id FROM notifications WHERE updated_at < ?1 LIMIT ?2",
+            "updated_at < ?2",
+            &age_cutoff,
         ),
     ];
-    let mut total = 0;
-    for (sql, bind) in statements {
+    for (select, cond, cutoff) in rules {
         loop {
-            let mut q = sqlx::query(sql);
-            if let Some(b) = bind {
-                q = q.bind(b);
-            }
-            let n = q.execute(pool).await?.rows_affected();
-            total += n;
-            if n < PRUNE_BATCH {
+            let ids: Vec<i64> = sqlx::query_scalar(select)
+                .bind(cutoff)
+                .bind(PRUNE_BATCH as i64)
+                .fetch_all(pool)
+                .await?;
+            if ids.is_empty() {
                 break;
             }
+            let n = delete_ids(pool, &ids, cond, cutoff, None).await?;
+            total += n;
+            if ids.len() < PRUNE_BATCH || n == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    // Per-recipient cap: only recipients above it, each read via
+    // idx_notifications_recipient_updated.
+    let over: Vec<String> = sqlx::query_scalar(
+        "SELECT recipient_id FROM notifications GROUP BY recipient_id HAVING COUNT(*) > ?",
+    )
+    .bind(PER_RECIPIENT_CAP)
+    .fetch_all(pool)
+    .await?;
+    for recipient in over {
+        let excess: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT id, updated_at FROM notifications WHERE recipient_id = ? \
+             ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET ?",
+        )
+        .bind(&recipient)
+        .bind(PER_RECIPIENT_CAP)
+        .fetch_all(pool)
+        .await?;
+        // Rows bumped above the first excess row since the read are kept.
+        let Some((first_id, first_at)) = excess.first().cloned() else {
+            continue;
+        };
+        let ids: Vec<i64> = excess.into_iter().map(|(id, _)| id).collect();
+        for batch in ids.chunks(PRUNE_BATCH) {
+            total += delete_ids(
+                pool,
+                batch,
+                "updated_at < ?2 OR (updated_at = ?2 AND id <= ?3)",
+                &first_at,
+                Some(first_id),
+            )
+            .await?;
+            tokio::task::yield_now().await;
         }
     }
     Ok(total)
@@ -467,7 +696,8 @@ fn b64url_decode(s: &str) -> Option<Vec<u8>> {
 
 /// Shared visibility filter (binds `?1` = recipient).
 const VISIBLE: &str = "(n.game_id IS NULL OR g.published = 1 OR g.owner_id = ?1) \
-     AND EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id)";
+     AND EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id \
+       AND e.retracted_at IS NULL)";
 
 /// `(unread, latestAt)`: visible unread notifications (capped at [`UNREAD_CAP`]).
 pub async fn unread_count(db: &SqlitePool, recipient: &str) -> sqlx::Result<(i64, Option<String>)> {
@@ -588,7 +818,7 @@ pub async fn list_page(
         "SELECT n.id, n.kind, n.game_id, n.comment_id, n.read_at, n.created_at, n.updated_at, \
            g.title, g.owner_id, g.thumbnail_ext, g.thumbnail_version, \
            EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id \
-             AND e.actor_id = g.owner_id) AS creator_heart \
+             AND e.actor_id = g.owner_id AND e.retracted_at IS NULL) AS creator_heart \
          FROM notifications n LEFT JOIN games g ON g.id = n.game_id \
          WHERE n.recipient_id = ?1 AND {VISIBLE} \
            AND (?2 = 0 OR n.read_at IS NULL) \
@@ -660,7 +890,8 @@ pub async fn list_page(
     // Counts.
     let counts: HashMap<i64, (i64, i64)> = sqlx::query_as::<_, (i64, i64, i64)>(
         "SELECT notification_id, COUNT(*), COUNT(DISTINCT actor_id) FROM notification_events \
-         WHERE notification_id IN (SELECT value FROM json_each(?1)) GROUP BY notification_id",
+         WHERE notification_id IN (SELECT value FROM json_each(?1)) AND retracted_at IS NULL \
+         GROUP BY notification_id",
     )
     .bind(&ids_json)
     .fetch_all(db)
@@ -675,6 +906,7 @@ pub async fn list_page(
            SELECT notification_id, actor_id, ROW_NUMBER() OVER (PARTITION BY notification_id \
              ORDER BY MAX(created_at) DESC, MAX(id) DESC) AS rn \
            FROM notification_events WHERE notification_id IN (SELECT value FROM json_each(?1)) \
+             AND retracted_at IS NULL \
            GROUP BY notification_id, actor_id) \
          WHERE rn <= 3 ORDER BY notification_id, rn",
     )
@@ -701,7 +933,7 @@ pub async fn list_page(
                  PARTITION BY notification_id ORDER BY created_at DESC, id DESC) AS rn \
                FROM notification_events \
                WHERE notification_id IN (SELECT value FROM json_each(?1)) \
-                 AND comment_id IS NOT NULL) \
+                 AND comment_id IS NOT NULL AND retracted_at IS NULL) \
              WHERE rn = 1",
         )
         .bind(&threaded_json)

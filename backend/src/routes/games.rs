@@ -359,6 +359,8 @@ pub async fn create_game_record(
         insert_version_row(&mut tx, &id, 1, &new.notes, &now).await?;
         if new.published {
             activity::record_game_published(&mut tx, &id, owner_id, 1).await;
+            // F007 L2: queued with the publish; fanned out in the background after commit.
+            crate::notifications::queue_game_published(&mut tx, &id, owner_id, &now).await?;
         }
         tx.commit().await?;
         Ok(())
@@ -369,10 +371,9 @@ pub async fn create_game_record(
         return Err(e);
     }
     if published {
-        // F007: published at creation is the first publish; followers are notified after the
-        // commit, before the request responds.
-        crate::notifications::fan_out_game_published(&state.db, &id, owner_id, chrono::Utc::now())
-            .await;
+        // F007 L2: published at creation is the first publish; followers are notified in the
+        // background after the commit.
+        state.fan_out.kick(&state.db);
     }
 
     if let Some((bytes, ext)) = thumbnail {
@@ -697,19 +698,20 @@ pub async fn update_game(
         .await?;
         if first.rows_affected() == 1 {
             activity::record_game_published(&mut tx, &id, &game.owner_id, game.version).await;
+            crate::notifications::queue_game_published(
+                &mut tx,
+                &id,
+                &game.owner_id,
+                &now_rfc3339(),
+            )
+            .await?;
             first_publish = true;
         }
     }
     tx.commit().await?;
     if first_publish {
-        // F007: after the commit, awaited before responding.
-        crate::notifications::fan_out_game_published(
-            &state.db,
-            &id,
-            &game.owner_id,
-            chrono::Utc::now(),
-        )
-        .await;
+        // F007 L2: in the background after the commit (resumable via notification_fanouts).
+        state.fan_out.kick(&state.db);
     }
 
     Ok(Json(build_game(&state, &id, Some(&user.id)).await?))

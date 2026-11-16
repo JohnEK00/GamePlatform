@@ -50,6 +50,8 @@ pub struct AppState {
     pub bests_rebuild: Arc<tokio::sync::Mutex<()>>,
     /// L4: count of finished background rebuild runs (tests await it instead of polling).
     pub bests_runs: Arc<tokio::sync::watch::Sender<u64>>,
+    /// F007 L2: background `gamePublished` fan-out worker (tests await `fan_out.idle()`).
+    pub fan_out: notifications::FanOut,
 }
 
 /// F013: at most this many `GET /api/games/{id}/bundle` archives are built at once.
@@ -75,6 +77,7 @@ impl AppState {
             image_slots: Arc::new(tokio::sync::Semaphore::new(IMAGE_SLOTS)),
             bests_rebuild: Arc::new(tokio::sync::Mutex::new(())),
             bests_runs: Arc::new(tokio::sync::watch::Sender::new(0)),
+            fan_out: notifications::FanOut::default(),
             config: Arc::new(config),
             storage,
         };

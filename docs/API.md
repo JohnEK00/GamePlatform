@@ -651,7 +651,7 @@ type Game = { ...F004, actions: ControlAction[]; controlsHint: string }
 - **Screenshot media caching** (L8): responses send `Cache-Control: public, max-age=3600`, no longer `immutable`, and use `Last-Modified` for revalidation. Non-2xx responses, such as the 404 after a delete, send `no-store`. A shared cache may keep serving a deleted screenshot for up to 1 hour unless it is purged.
 - **`POST …/screenshots`:**
   - New 422 message: "image is too large to process; use fewer pixels or 8-bit color", returned when the estimated decode memory exceeds 80 MiB (L3).
-  - A 503 (decode slots busy) or a 422 decode/processing failure no longer uses up the 10/hour quota (L5).
+  - A 503 (decode slots busy) or a server-side 5xx failure (decode task, file write or database) does not use up the 10/hour quota (L5). A 422 (invalid, undecodable or over-budget image) is charged (review 4, M2).
 - **Leaderboards after a `leaderboard.order` change** (L4): boards are served by a slower fallback query until a background rebuild of `score_bests` finishes (migration `0011_review3.sql`). Results are identical.
 
 
@@ -842,7 +842,7 @@ Clients must ignore notifications with an unknown `kind` (more kinds may be adde
 - **Dedupe (hearts and follows).** A user's heart on a comment, or follow of a user, notifies at most once while an earlier event of theirs for the same group is stored (read or unread).
 - **Retraction.** `DELETE /api/comments/{id}/heart` and `DELETE /api/users/{username}/follow` remove that user's event from the recipient's **unread** notification of that group. A read notification is not changed. A notification left with no events is no longer listed or counted.
 - **Settings** are checked when the notification is written. A recipient with the kind turned off gets nothing.
-- Writing notifications is best effort: a failure is logged and never changes the response of the triggering request. `gamePublished` notifications are written before the publishing request responds.
+- Writing notifications is best effort: a failure is logged and never changes the response of the triggering request. `gamePublished` notifications are written in the background after the publish commits; an interrupted fan-out resumes after a restart. Followers who follow after the publish are not notified.
 - **Deletions.** Deleting a comment (any path, including admin resolve `delete`) removes its events; deleting a thread or a hearted comment removes the whole `reply`/`heart` notification. Deleting a game removes all its notifications.
 
 ### Visibility
@@ -872,3 +872,8 @@ Pruned by the server's maintenance task (about hourly):
 
 ### Backend env
 `NOTIFICATION_POLL_SECS` (default `60`): the `pollAfterSecs` value returned by `GET /api/notifications/unread-count`. Integer 15–600; anything else is a startup error.
+
+## Review-fix additions (REVIEW-2026-11-15-4)
+- **Heart/follow toggles:** turning a heart or follow off and back on while its notification is unread no longer bumps `updatedAt` or moves the item. The unread count can still go 1→0→1. A different actor still bumps it.
+- **Empty notifications:** a notification is deleted as soon as its last event is removed or cascaded, not at the next prune (migration `0014_review4.sql`).
+- **Write robustness:** notification writes use `BEGIN IMMEDIATE` with the dedupe check folded into the upsert, so concurrent writers wait instead of losing notifications.

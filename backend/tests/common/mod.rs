@@ -112,6 +112,8 @@ impl TestApp {
         let status = res.status();
         let headers = res.headers().clone();
         let body = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+        // Review-4 L2: background `gamePublished` fan-outs finish before the test goes on.
+        self.state.fan_out.idle().await;
         Resp {
             status,
             headers,

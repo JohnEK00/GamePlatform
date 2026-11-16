@@ -577,10 +577,10 @@ fn png_header_only(w: u32, h: u32, depth: u8, ct: u8) -> Vec<u8> {
     out
 }
 
-/// L5: a 503 (decode slots busy) or a decode failure returns the screenshot token; only
-/// accepted posts (and body-level rejections) use the 10/hour quota.
+/// L5 / review-4 M2: a 503 (decode slots busy) returns the screenshot token, but a 422 decode
+/// failure is charged, so invalid images can't be posted unmetered.
 #[tokio::test]
-async fn l5_busy_and_undecodable_posts_do_not_use_quota() {
+async fn l5_busy_posts_are_refunded_but_undecodable_posts_are_charged() {
     let t = setup_with(|c| c.rate_limit = true).await;
     let (a, _) = t.register("ana").await;
     let gid = game_id(&t, &a, true).await;
@@ -595,21 +595,25 @@ async fn l5_busy_and_undecodable_posts_do_not_use_quota() {
         assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
     }
     drop(permits);
+    // 4 rejections in or after the decode: each uses a token.
     let mut broken = png(200, 200);
     broken.truncate(broken.len() / 2);
-    for img in [broken, png(32, 32), png_header_only(4096, 4096, 16, 6)] {
-        for _ in 0..4 {
-            let r = post(&t, &a, &gid, &img, None).await;
-            assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
-        }
+    for img in [
+        broken.clone(),
+        broken,
+        png(32, 32),
+        png_header_only(4096, 4096, 16, 6),
+    ] {
+        let r = post(&t, &a, &gid, &img, None).await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
     }
-    // The full quota is still there.
-    for _ in 0..10 {
+    // 10 - 4 = 6 tokens left.
+    for _ in 0..6 {
         post_ok(&t, &a, &gid, None).await;
     }
     let r = post(&t, &a, &gid, &png(64, 64), None).await;
     assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
-    // A magic-byte rejection (before decoding) still uses a token.
+    // A magic-byte rejection (before decoding) uses a token too.
     t.clock.advance(std::time::Duration::from_secs(360));
     let r = post(&t, &a, &gid, b"<!doctype html>", None).await;
     assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
