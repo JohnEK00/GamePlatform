@@ -233,6 +233,10 @@ describe('Input actions (F009)', () => {
     expect(i.actionLabel('jump')).toBe('A');
     expect(i.keyLabel('ArrowLeft')).toBe('←');
     expect(i.keyLabel('Nope')).toBe('Nope');
+    expect(i.gamepadLabel('A')).toBe('A');
+    expect(i.gamepadLabel('Left')).toBe('D-pad ←');
+    expect(i.gamepadLabel('Start')).toBe('Start');
+    expect(i.gamepadLabel('Nope')).toBe('Nope');
   });
 
   it('axis() follows movement actions when both exist', () => {

@@ -423,6 +423,10 @@ export class Input {
   keyLabel(code: string): string {
     return defaultKeyLabel(code);
   }
+  /** Default label of a gamepad button name (`Up` → "D-pad ↑", `A` → "A"); an unknown name returns the name. */
+  gamepadLabel(name: string): string {
+    return gamepadLabel(name);
+  }
 
   /** Set once getGamepads() has thrown, so a blocked Gamepad API is not retried every step. */
   private gamepadsBlocked = false;

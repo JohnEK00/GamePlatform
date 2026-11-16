@@ -1,0 +1,54 @@
+{
+  "name": "Ember Garden",
+  "entry": "main.js",
+  "width": 480,
+  "height": 270,
+  "engine": "1",
+  "description": "A lamplighter's night in a walled garden: relight the lanterns, net the moths that snuff them out, and keep the garden glowing for as long as you can.",
+  "controls": "WASD/arrows move, J/E light (hold to rekindle a dark lantern), Space/K swing the net, Shift/L dash, P pause, M mute. Menus: mouse, arrows + Enter, or gamepad D-pad + A. Remap keys with ⌨.",
+  "actions": [
+    { "id": "up", "name": "Move up", "keys": ["ArrowUp", "KeyW"], "gamepad": ["Up"] },
+    { "id": "down", "name": "Move down", "keys": ["ArrowDown", "KeyS"], "gamepad": ["Down"] },
+    { "id": "left", "name": "Move left", "keys": ["ArrowLeft", "KeyA"], "gamepad": ["Left"] },
+    { "id": "right", "name": "Move right", "keys": ["ArrowRight", "KeyD"], "gamepad": ["Right"] },
+    { "id": "light", "name": "Light lantern", "keys": ["KeyJ", "KeyE"], "gamepad": ["A"] },
+    { "id": "net", "name": "Swing net", "keys": ["Space", "KeyK"], "gamepad": ["X"] },
+    { "id": "dash", "name": "Dash", "keys": ["ShiftLeft", "KeyL"], "gamepad": ["RB", "B"] },
+    { "id": "pause", "name": "Pause", "keys": ["KeyP", "Backspace"], "gamepad": ["Start"] },
+    { "id": "confirm", "name": "Menu confirm", "keys": ["Enter", "NumpadEnter"], "gamepad": ["A"] },
+    { "id": "mute", "name": "Mute", "keys": ["KeyM"] }
+  ],
+  "leaderboard": { "order": "desc", "format": "number", "label": "Glow" },
+  "achievements": [
+    {
+      "id": "first_light",
+      "name": "First Light",
+      "description": "Rekindle a lantern that a moth snuffed out.",
+      "icon": "assets/icons/ach_first_light.png"
+    },
+    {
+      "id": "moth_catcher",
+      "name": "Moth Catcher",
+      "description": "Net 25 moths in a single night. Unlocks the azure flame.",
+      "icon": "assets/icons/ach_moth_catcher.png"
+    },
+    {
+      "id": "full_bloom",
+      "name": "Full Bloom",
+      "description": "Start wave 5 or later with every lantern still burning.",
+      "icon": "assets/icons/ach_full_bloom.png"
+    },
+    {
+      "id": "night_owl",
+      "name": "Night Owl",
+      "description": "Reach wave 8.",
+      "icon": "assets/icons/ach_night_owl.png"
+    },
+    {
+      "id": "ember_master",
+      "name": "Ember Master",
+      "description": "Score 10,000 glow in a single night.",
+      "icon": "assets/icons/ach_ember_master.png"
+    }
+  ]
+}
