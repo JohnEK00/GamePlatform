@@ -607,3 +607,11 @@ An immediate-mode helper. **Call widgets from `update`** (`game.update` or a sce
 
 ## F017 additions
 Creator comment tools (spec: `docs/features/F017-creator-comment-tools.md`). **No changes**: games can't read, pin, lock or sort comments, and there are no new messages, engine APIs or `game.json` fields.
+
+
+## Review-fix additions (REVIEW-2026-11-16-5)
+- **Cancelled releases (M2):** a release caused by window blur, engine pause/resume or `pointercancel` is a *cancelled* release. It never activates a `ui.button`; it only clears the button's active state. Games can tell a cancelled release apart with `input.wasCancelled(code)` and `input.mouse.cancelled` (`mouse.released` is still true for one step, so existing games behave as before).
+- **BMFont limits (L1, L2b):** the "≤ 1 MiB" descriptor cap is measured in UTF-8 bytes. Text-format lines may be at most 4096 characters; a longer line fails with `BMFont "<name>": line N is longer than 4096 characters`.
+- **Page paths (L2a):** page file names are percent-decoded exactly once. After decoding they must not contain `%`, `\`, `?` or `#`, and must resolve inside the bundle; otherwise loading fails.
+- **Binary BMFont (L6):** a descriptor starting with `BMF` plus a version byte fails with `BMFont "<name>": binary BMFont is not supported; export the text or JSON format`.
+- **Widgets outside a step (L2c):** widgets called outside `update` (in `render`, `load` or a timer) draw immediately and `button` returns `false` with a one-time warning, as § F012 already specifies.

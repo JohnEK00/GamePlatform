@@ -207,6 +207,7 @@ function drawSky(engine, level, cam) {
 class TitleScene {
   enter(engine) {
     this.t = 0;
+    this.focused = false;
     run.best = engine.storage.get('best', 0) || 0;
     this.cam = { x: 0 };
   }
@@ -217,6 +218,12 @@ class TitleScene {
     // F012 menu: widgets are called from update. Mouse/touch click them; arrows (or the D-pad) move
     // the focus ring and Enter/Space (or gamepad A) activate, since this game declares no `confirm`.
     const ui = engine.ui;
+    // PLAY starts focused, so Enter/Space/gamepad A start the game straight away. Set it in the step
+    // that declares the buttons (focus is dropped at the end of a step whose buttons don't include it).
+    if (!this.focused) {
+      this.focused = true;
+      ui.focus = 'play';
+    }
     if (ui.button('play', 'PLAY', W / 2 - 64, 168, 128, 22)) {
       Object.assign(run, { score: 0, lives: 3, coins: 0, level: 0 });
       engine.audio.tone({ freq: 392, freqEnd: 784, duration: 0.2, type: 'square', volume: 0.2 });

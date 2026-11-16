@@ -5,6 +5,8 @@ interface BtnState {
   down: boolean;
   pressed: boolean;
   released: boolean;
+  /** The release this step was synthetic (blur, pause, pointercancel), not made by the player. */
+  cancelled: boolean;
 }
 
 /**
@@ -18,7 +20,7 @@ export class InputState {
   private get(code: string): BtnState {
     let b = this.buttons.get(code);
     if (!b) {
-      b = { down: false, pressed: false, released: false };
+      b = { down: false, pressed: false, released: false, cancelled: false };
       this.buttons.set(code, b);
     }
     return b;
@@ -31,16 +33,21 @@ export class InputState {
       b.pressed = true;
     }
   }
-  release(code: string): void {
+  /**
+   * Release a held button. `cancel` marks the release as synthetic (window blur, pause,
+   * `pointercancel`): `wasReleased` still reports it, and `wasCancelled` tells it apart.
+   */
+  release(code: string, cancel = false): void {
     const b = this.get(code);
     if (b.down) {
       b.down = false;
       b.released = true;
+      b.cancelled = cancel;
     }
   }
-  /** Release everything (e.g. on window blur). */
+  /** Release everything as a cancellation (window blur, pause / resume). */
   releaseAll(): void {
-    for (const k of this.buttons.keys()) this.release(k);
+    for (const k of this.buttons.keys()) this.release(k, true);
   }
   isDown(code: string): boolean {
     return this.buttons.get(code)?.down ?? false;
@@ -50,6 +57,11 @@ export class InputState {
   }
   wasReleased(code: string): boolean {
     return this.buttons.get(code)?.released ?? false;
+  }
+  /** The button's release this step was a cancellation (see `release`). */
+  wasCancelled(code: string): boolean {
+    const b = this.buttons.get(code);
+    return !!b && b.released && b.cancelled;
   }
   /** Any button pressed this step (optionally filtered by prefix). */
   anyPressed(filter?: (code: string) => boolean): boolean {
@@ -61,6 +73,7 @@ export class InputState {
     for (const b of this.buttons.values()) {
       b.pressed = false;
       b.released = false;
+      b.cancelled = false;
     }
   }
 }
@@ -188,6 +201,11 @@ export interface MouseState {
   down: boolean;
   pressed: boolean;
   released: boolean;
+  /**
+   * `released` this step came from a cancellation (window blur, pause / resume, `pointercancel`)
+   * rather than the player letting go: treat it as "the press was abandoned", never as a click.
+   */
+  cancelled: boolean;
   rightDown: boolean;
   rightPressed: boolean;
   /** Wheel delta accumulated this step (+ = down). */
@@ -201,7 +219,7 @@ const PREVENT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Spa
 /** DOM-attached input. Keys use KeyboardEvent.code ("ArrowLeft", "KeyA", "Space"); mouse buttons are "Mouse0/1/2". */
 export class Input {
   readonly state = new InputState();
-  readonly mouse: MouseState = { x: 0, y: 0, down: false, pressed: false, released: false, rightDown: false, rightPressed: false, wheel: 0, inside: false };
+  readonly mouse: MouseState = { x: 0, y: 0, down: false, pressed: false, released: false, cancelled: false, rightDown: false, rightPressed: false, wheel: 0, inside: false };
   /** Active touches (game coordinates). */
   touches: TouchPoint[] = [];
   private readonly touchMap = new Map<number, TouchPoint>();
@@ -287,7 +305,7 @@ export class Input {
         this.mouse.y = p.y;
       }
     });
-    const up = (e: PointerEvent): void => {
+    const up = (e: PointerEvent, cancel: boolean): void => {
       const p = pos(e);
       const t = this.touchMap.get(e.pointerId);
       if (t) {
@@ -296,11 +314,14 @@ export class Input {
         t.released = true;
       }
       if (e.isPrimary || e.pointerType === 'mouse') {
-        this.state.release(`Mouse${e.pointerType === 'mouse' ? e.button : 0}`);
+        const code = `Mouse${e.pointerType === 'mouse' ? e.button : 0}`;
+        // pointercancel reports button -1 for mice: cancel every held mouse button then.
+        if (cancel && e.pointerType === 'mouse' && e.button < 0) for (const b of [0, 1, 2]) this.state.release(`Mouse${b}`, true);
+        else this.state.release(code, cancel);
       }
     };
-    on(window, 'pointerup', up);
-    on(window, 'pointercancel', up);
+    on(window, 'pointerup', (e: PointerEvent) => up(e, false));
+    on(window, 'pointercancel', (e: PointerEvent) => up(e, true));
     on(c, 'pointerenter', () => void (this.mouse.inside = true));
     on(c, 'pointerleave', () => void (this.mouse.inside = false));
     on(c, 'contextmenu', (e: MouseEvent) => e.preventDefault());
@@ -321,6 +342,7 @@ export class Input {
     m.down = s.isDown('Mouse0');
     m.pressed = s.wasPressed('Mouse0');
     m.released = s.wasReleased('Mouse0');
+    m.cancelled = s.wasCancelled('Mouse0');
     m.rightDown = s.isDown('Mouse2');
     m.rightPressed = s.wasPressed('Mouse2');
     m.wheel = this.wheelAcc;

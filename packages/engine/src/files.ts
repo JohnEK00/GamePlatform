@@ -19,9 +19,14 @@ export function mimeType(path: string): string {
   return (m ? MIME[m[1]!.toLowerCase()] : undefined) ?? 'application/octet-stream';
 }
 
+/** A segment that a URL parser could still turn into "." or ".." (e.g. "%2e%2e" after one decode). */
+const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+
 /**
  * Normalize a bundle-relative path: strips query/hash, leading "./" and "/", backslashes, resolves
- * "." / ".." segments. Returns null when it escapes the bundle root.
+ * "." / ".." segments. The path is percent-decoded exactly once; backslashes are treated as "/"
+ * both before and after decoding. Returns null when it escapes the bundle root, or when a segment
+ * is still an encoded dot segment after decoding (double encoding such as "%252e%252e").
  */
 export function normalizePath(path: string): string | null {
   let p = String(path).split(/[?#]/)[0]!.replace(/\\/g, '/');
@@ -30,9 +35,11 @@ export function normalizePath(path: string): string | null {
   } catch {
     /* keep as-is */
   }
+  p = p.replace(/\\/g, '/');
   const out: string[] = [];
   for (const seg of p.split('/')) {
     if (seg === '' || seg === '.') continue;
+    if (seg !== '..' && DOT_SEGMENT.test(seg)) return null;
     if (seg === '..') {
       if (!out.length) return null;
       out.pop();

@@ -40,7 +40,17 @@ type NavButton = 'Up' | 'Down' | 'Left' | 'Right' | 'A' | 'B';
 
 /** What Ui reads from `engine.input`. */
 export interface UiInput {
-  readonly mouse: { readonly x: number; readonly y: number; readonly pressed: boolean; readonly released: boolean; readonly inside: boolean };
+  readonly mouse: {
+    readonly x: number;
+    readonly y: number;
+    readonly pressed: boolean;
+    readonly released: boolean;
+    readonly inside: boolean;
+    /** Primary button held (tells "release then press" from "press then release" within one step). */
+    readonly down?: boolean;
+    /** The release was a cancellation (blur, pause, pointercancel): it never activates a button. */
+    readonly cancelled?: boolean;
+  };
   readonly actions: readonly { readonly id: string }[];
   actionPressed(id: string): boolean;
   wasPressed(code: string): boolean;
@@ -64,7 +74,7 @@ export interface UiDeps {
   warn?: (message: string) => void;
 }
 
-/** Engine-internal phase: widgets are live only in `update`. */
+/** Engine-internal phase: widgets are live only in `update`; elsewhere they draw at the call site. */
 export type UiPhase = 'update' | 'render' | 'other';
 
 type Cmd =
@@ -198,13 +208,22 @@ export class Ui {
         }
       }
     }
-    if (m.pressed) {
+    const press = (): void => {
       this._focus = null; // a pointer press hides the focus ring (:focus-visible)
       this._active = this._hot;
-    }
-    if (m.released) {
-      if (this._active !== null && this._active === this._hot) this.pointerFire = this._active;
+    };
+    const release = (): void => {
+      // A cancelled release (blur, pause/resume, pointercancel) abandons the press: no activation.
+      if (!m.cancelled && this._active !== null && this._active === this._hot) this.pointerFire = this._active;
       this._active = null;
+    };
+    // Both edges in one step: still down → the release ended an earlier press, then a new one began.
+    if (m.pressed && m.released && m.down) {
+      release();
+      press();
+    } else {
+      if (m.pressed) press();
+      if (m.released) release();
     }
 
     // Keyboard / gamepad navigation over the previous step's order.
@@ -242,6 +261,15 @@ export class Ui {
     this.phase = 'other';
   }
 
+  /**
+   * Engine-internal: the engine paused or resumed. Any press in progress is abandoned (it never
+   * activates), and the hover state is dropped until the pointer is seen again.
+   */
+  cancelPointer(): void {
+    this._active = null;
+    this._hot = null;
+  }
+
   /** Engine-internal: a new rendered frame starts (re-arms `draw()`). */
   frameStart(): void {
     this.drawnThisFrame = false;
@@ -276,6 +304,10 @@ export class Ui {
   // Widgets
   // -------------------------------------------------------------------------
 
+  /**
+   * Inside a step the command joins the step's list. Outside one (`render`, `load`, a timer outside
+   * update) it is drawn immediately at the call site, like a direct renderer call there.
+   */
   private emit(c: Cmd): void {
     if (this.phase === 'update') {
       if (this.building.length >= UI_MAX_COMMANDS) {
@@ -283,7 +315,7 @@ export class Ui {
         return;
       }
       this.building.push(c);
-    } else if (this.phase === 'render') {
+    } else {
       this.renderer.ui(() => this.exec(c));
     }
   }
@@ -304,7 +336,7 @@ export class Ui {
     const key = typeof id === 'string' ? id : String(id);
     if (this.phase !== 'update') {
       this.warnOnce(`phase:${key}`, `button "${key}" was called outside update; it is drawn but never activates (call widgets from update)`);
-      if (this.phase === 'render') this.emit({ k: 'button', id: key, label: String(label), x, y, w, h, o, valid: false });
+      this.emit({ k: 'button', id: key, label: String(label), x, y, w, h, o, valid: false });
       return false;
     }
     let valid = typeof id === 'string' && id.length >= 1 && id.length <= UI_MAX_ID;

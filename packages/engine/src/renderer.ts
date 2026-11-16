@@ -1,5 +1,5 @@
 /** Batched WebGL2 2D renderer: sprites, shapes and bitmap text in one dynamic vertex buffer. */
-import { BitmapFont, checkFontName, layoutText } from './bmfont';
+import { BitmapFont, checkFontName, LayoutCache } from './bmfont';
 import { Camera } from './camera';
 import { DrawCounter } from './debug';
 import { Color, type ColorLike } from './math';
@@ -730,8 +730,11 @@ export class Renderer {
     return f;
   }
 
+  /** F012 L8: recent bitmap-text layouts (static HUD strings are laid out once). */
+  private readonly layouts = new LayoutCache();
+
   private bitmapLayout(f: BitmapFont, text: string, x: number, y: number, o: TextOptions) {
-    const lay = layoutText(f, text, {
+    const lay = this.layouts.get(f, text, {
       size: o.size, letterSpacing: o.letterSpacing, lineHeight: o.lineHeight, align: o.align, baseline: o.baseline,
       maxWidth: o.maxWidth, x, y,
     });

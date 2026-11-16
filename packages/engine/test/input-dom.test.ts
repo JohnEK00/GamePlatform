@@ -66,3 +66,59 @@ describe('keydown default handling (F009)', () => {
     expect(i.actionDown('fire')).toBe(false);
   });
 });
+
+describe('cancelled releases (review 5 M2)', () => {
+  let input: Input | null = null;
+  let win: EventTarget;
+  afterEach(() => {
+    input?.detach();
+    input = null;
+    vi.unstubAllGlobals();
+  });
+  function setup(): { i: Input; canvas: HTMLCanvasElement } {
+    win = new EventTarget();
+    vi.stubGlobal('window', Object.assign(win, { focus() {} }));
+    const canvas = fakeCanvas();
+    input = new Input(canvas, 320, 180);
+    input.attach();
+    return { i: input, canvas };
+  }
+  const ptr = (type: string, init: Record<string, unknown> = {}): Event =>
+    Object.assign(new Event(type, { cancelable: true }), { pointerId: 1, pointerType: 'mouse', button: 0, isPrimary: true, clientX: 50, clientY: 15, ...init });
+
+  it('pointerup is a real release; pointercancel and blur are cancellations', () => {
+    const { i, canvas } = setup();
+    canvas.dispatchEvent(ptr('pointerdown'));
+    i.beginStep();
+    expect(i.mouse.pressed).toBe(true);
+    i.endStep();
+    win.dispatchEvent(ptr('pointerup'));
+    i.beginStep();
+    expect(i.mouse.released).toBe(true);
+    expect(i.mouse.cancelled).toBe(false);
+    i.endStep();
+
+    canvas.dispatchEvent(ptr('pointerdown'));
+    i.beginStep();
+    i.endStep();
+    win.dispatchEvent(ptr('pointercancel', { button: -1 })); // browsers report button -1 on cancel
+    i.beginStep();
+    expect(i.mouse.down).toBe(false);
+    expect(i.mouse.released).toBe(true);
+    expect(i.mouse.cancelled).toBe(true);
+    i.endStep();
+    i.beginStep();
+    expect(i.mouse.cancelled).toBe(false);
+    i.endStep();
+
+    canvas.dispatchEvent(ptr('pointerdown', { pointerType: 'touch' }));
+    i.beginStep();
+    i.endStep();
+    win.dispatchEvent(new Event('blur'));
+    i.beginStep();
+    expect(i.mouse.released).toBe(true);
+    expect(i.mouse.cancelled).toBe(true);
+    expect(i.wasReleased('Mouse0')).toBe(true);
+    i.endStep();
+  });
+});

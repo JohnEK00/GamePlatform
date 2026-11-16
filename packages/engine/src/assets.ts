@@ -165,9 +165,12 @@ export class Assets {
       const res = await this.fetchOk(path);
       const len = Number(res.headers?.get?.('Content-Length') ?? NaN);
       if (len > MAX_DESCRIPTOR_BYTES) throw new Error(prefix + 'the descriptor is larger than 1 MiB');
-      const text = await res.text();
-      if (text.length > MAX_DESCRIPTOR_BYTES) throw new Error(prefix + 'the descriptor is larger than 1 MiB');
-      const data = parseBMFont(text, path);
+      // The cap is in bytes (in-memory Studio files have no Content-Length): measure before decoding.
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.byteLength > MAX_DESCRIPTOR_BYTES) throw new Error(prefix + 'the descriptor is larger than 1 MiB');
+      if (bytes[0] === 0x42 && bytes[1] === 0x4d && bytes[2] === 0x46 && bytes[3] === 3)
+        throw new Error(prefix + 'binary BMFont is not supported; export the text or JSON format');
+      const data = parseBMFont(new TextDecoder().decode(bytes), path);
       const pagePaths = resolveFontPages(path, data.pages);
       const pages = await Promise.all(
         pagePaths.map((p) =>
@@ -227,10 +230,21 @@ export function resolveFontPages(descriptor: string, pages: readonly string[]): 
   const prefix = `BMFont "${descriptor}": `;
   const d = normalizePath(descriptor) ?? '';
   const dir = d.includes('/') ? d.slice(0, d.lastIndexOf('/') + 1) : '';
+  const base = 'https://bundle.invalid/b/';
   return pages.map((p, i) => {
     if (/^[a-z][a-z0-9+.-]*:/i.test(p) || /^[\\/]/.test(p)) throw new Error(prefix + `pages[${i}] "${p}" must be a relative path inside the bundle`);
+    // Decoded exactly once (normalizePath). What is left must not be decodable or special again:
+    // a remaining "%", "\", "?" or "#" would let the URL parser reinterpret it (double encoding).
     const n = normalizePath(dir + p);
     if (n === null) throw new Error(prefix + `pages[${i}] "${p}" escapes the bundle`);
+    if (/[%\\?#]/.test(n)) throw new Error(prefix + `pages[${i}] "${p}" must not contain "%", "\\", "?" or "#" after decoding`);
+    let inside = false;
+    try {
+      inside = new URL(n, base).href.startsWith(base);
+    } catch {
+      /* not a URL path */
+    }
+    if (!inside) throw new Error(prefix + `pages[${i}] "${p}" escapes the bundle`);
     if (!/\.(png|webp|gif|jpe?g)$/i.test(n)) throw new Error(prefix + `pages[${i}] "${p}" must be a png, webp, gif or jpg image`);
     return n;
   });

@@ -383,7 +383,9 @@ export class Engine {
     else this.pauseReasons.delete(reason);
     if (was !== this.paused) {
       this.audio.setSuspended(this.paused);
+      // Synthetic, cancelling releases: a press held across a pause never activates a ui.button.
       this.input.state.releaseAll();
+      (this.ui as Ui | undefined)?.cancelPointer();
       this.stepper.reset();
       this.last = -1;
     }

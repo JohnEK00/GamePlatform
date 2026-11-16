@@ -310,7 +310,8 @@ describe('Ui navigation', () => {
 
 describe('Ui phases and drawing', () => {
   it('a button called during render draws immediately, returns false and warns once', () => {
-    const { ui, rec, warnings, frame } = setup();
+    const { ui, rec, warnings, frame, step } = setup();
+    step(() => undefined);
     let r: boolean | undefined;
     const ops = frame(() => {
       r = ui.button('play', 'PLAY', 0, 0, 50, 20);
@@ -320,11 +321,21 @@ describe('Ui phases and drawing', () => {
     expect(ops.filter((o) => o.startsWith('text "PLAY"'))).toHaveLength(2);
     expect(warnings.filter((w) => w.includes('"play" was called outside update'))).toHaveLength(1);
     rec.ops.length = 0;
-    // outside a step and outside render ("other", e.g. load): nothing is drawn
+    // L2c (GAME_FORMAT § F012 Phases): outside a step and outside render ("other", e.g. load or a
+    // setTimeout callback) widgets also draw immediately at the call site and never activate.
     expect(ui.button('load', 'X', 0, 0, 1, 1)).toBe(false);
     ui.panel(0, 0, 10, 10);
-    expect(rec.ops).toEqual([]);
+    ui.label('L', 1, 2);
+    expect(rec.ops.filter((o) => o === 'ui{')).toHaveLength(3);
+    expect(rec.ops).toContain('text "X" 0.5,0.5 default undefined #ffffff');
+    expect(rec.ops).toContain('rect 0,0,10,10 #141a2e a1');
+    expect(rec.ops).toContain('text "L" 1,2 default undefined #ffffff');
     expect(warnings.filter((w) => w.includes('"load"'))).toHaveLength(1);
+    expect(warnings.filter((w) => w.includes('panel') || w.includes('label'))).toEqual([]);
+    // …and they don't leak into the next step's list.
+    rec.ops.length = 0;
+    const ops2 = frame();
+    expect(ops2.some((o) => o.includes('"X"') || o.includes('"L"'))).toBe(false);
   });
 
   it('panel and label draw at the call site in render without warnings', () => {
@@ -432,5 +443,98 @@ describe('Ui phases and drawing', () => {
     expect(ops).toContain('rect 0,0,10,10 #123456 a0.5');
     expect(ops).toContain('9s 10,10,80,20 s2 a1');
     expect(ops).toContain('text "PLAY" 50,20 pixel 16 #ff0000');
+  });
+});
+
+describe('review 5 M2: a cancelled press never activates', () => {
+  /** Ui driven by a real InputState for Mouse0, mirroring Input.beginStep / engine.step. */
+  function realMouse() {
+    const st = new InputState();
+    const mouse = { x: 50, y: 15, pressed: false, released: false, inside: true, down: false, cancelled: false };
+    const input: UiInput = { mouse, actions: [], actionPressed: () => false, wasPressed: () => false, gamepad: () => ({ wasPressed: () => false }) };
+    const { renderer } = recorder();
+    const ui = new Ui({ input, renderer, warn: () => {} });
+    const step = (): boolean => {
+      Object.assign(mouse, {
+        down: st.isDown('Mouse0'), pressed: st.wasPressed('Mouse0'), released: st.wasReleased('Mouse0'), cancelled: st.wasCancelled('Mouse0'),
+      });
+      ui.beginStep();
+      const fired = ui.button('quit', 'QUIT', 0, 0, 100, 30);
+      ui.endStep();
+      st.endStep();
+      return fired;
+    };
+    return { st, ui, step, mouse };
+  }
+
+  it('the review repro: press, hold, releaseAll (blur / pause) → never fires', () => {
+    const { st, ui, step } = realMouse();
+    step();
+    st.press('Mouse0');
+    expect(step()).toBe(false);
+    expect(ui.active).toBe('quit');
+    expect(step()).toBe(false);
+    st.releaseAll();
+    expect(step()).toBe(false);
+    expect(ui.active).toBeNull();
+    expect(step()).toBe(false);
+  });
+
+  it('pointercancel (a cancelling release) clears active without firing', () => {
+    const { st, ui, step } = realMouse();
+    step();
+    st.press('Mouse0');
+    step();
+    st.release('Mouse0', true);
+    expect(step()).toBe(false);
+    expect(ui.active).toBeNull();
+    // a real click afterwards still works
+    st.press('Mouse0');
+    step();
+    st.release('Mouse0');
+    expect(step()).toBe(true);
+  });
+
+  it('press + cancel within one step never fires; cancel then a new press starts a fresh press', () => {
+    const { st, ui, step } = realMouse();
+    step();
+    st.press('Mouse0');
+    st.releaseAll();
+    expect(step()).toBe(false);
+    expect(ui.active).toBeNull();
+    // held, then blur and a new press before the next step: the old press is dropped, the new one is active
+    st.press('Mouse0');
+    step();
+    st.releaseAll();
+    st.press('Mouse0');
+    expect(step()).toBe(false);
+    expect(ui.active).toBe('quit');
+    st.release('Mouse0');
+    expect(step()).toBe(true);
+  });
+
+  it('a real release followed by a new press in one step fires the first press and arms the second', () => {
+    const { st, ui, step } = realMouse();
+    step();
+    st.press('Mouse0');
+    step();
+    st.release('Mouse0');
+    st.press('Mouse0');
+    expect(step()).toBe(true);
+    expect(ui.active).toBe('quit');
+  });
+
+  it('cancelPointer (engine pause / resume) drops active and hot', () => {
+    const { st, ui, step } = realMouse();
+    step();
+    st.press('Mouse0');
+    step();
+    expect(ui.hot).toBe('quit');
+    ui.cancelPointer();
+    expect(ui.active).toBeNull();
+    expect(ui.hot).toBeNull();
+    // even a real release over the button afterwards does not fire (the press was abandoned)
+    st.release('Mouse0');
+    expect(step()).toBe(false);
   });
 });

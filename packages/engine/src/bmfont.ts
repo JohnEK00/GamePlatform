@@ -70,6 +70,8 @@ export function checkFontName(name: unknown): asserts name is string {
 }
 
 export const MAX_DESCRIPTOR_BYTES = 1024 * 1024;
+/** Longest accepted text-format line (real BMFont lines are under 200 characters). */
+export const MAX_LINE_LENGTH = 4096;
 const MAX_PAGES = 16;
 const MAX_CHARS = 8192;
 const MAX_KERNINGS = 65536;
@@ -107,16 +109,51 @@ function isObj(v: unknown): v is Raw {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
-/** Parse one text-format line: `tag key=value key="quoted value" …`. */
-function parseLine(line: string): { tag: string; attrs: Raw } | null {
-  const m = /^\s*([A-Za-z]+)\b/.exec(line);
-  if (!m) return null;
-  const attrs: Raw = {};
-  const re = /([A-Za-z_][\w-]*)=(?:"([^"]*)"|(\S*))/g;
-  const rest = line.slice(m[0].length);
-  let a: RegExpExecArray | null;
-  while ((a = re.exec(rest))) attrs[a[1]!] = a[2] !== undefined ? a[2] : a[3]!;
-  return { tag: m[1]!, attrs };
+const KEY = /^[A-Za-z_][\w-]*$/;
+
+function isSpace(c: number): boolean {
+  return c === 32 || (c >= 9 && c <= 13) || c === 0xa0 || c === 0xfeff;
+}
+function isAlpha(c: number): boolean {
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+}
+
+/**
+ * Parse one text-format line: `tag key=value key="quoted value" …`. One left-to-right scan with no
+ * backtracking (each character is visited a bounded number of times), so the cost is linear.
+ * Tokens without `=` are ignored; a value starting with `"` runs to the next `"` (else to whitespace).
+ */
+export function parseLine(line: string): { tag: string; attrs: Record<string, string> } | null {
+  const n = line.length;
+  let i = 0;
+  while (i < n && isSpace(line.charCodeAt(i))) i++;
+  const t0 = i;
+  while (i < n && isAlpha(line.charCodeAt(i))) i++;
+  if (i === t0) return null;
+  const after = i < n ? line.charCodeAt(i) : 32;
+  if (isAlpha(after) || (after >= 48 && after <= 57) || after === 95) return null; // the tag must end at a word boundary
+  const tag = line.slice(t0, i);
+  const attrs: Record<string, string> = {};
+  while (i < n) {
+    while (i < n && isSpace(line.charCodeAt(i))) i++;
+    const k0 = i;
+    while (i < n && line.charCodeAt(i) !== 61 /* = */ && !isSpace(line.charCodeAt(i))) i++;
+    if (i >= n || line.charCodeAt(i) !== 61) continue; // a bare word (or the end): ignored
+    const key = line.slice(k0, i);
+    i++;
+    let value: string;
+    const close = line.charCodeAt(i) === 34 /* " */ ? line.indexOf('"', i + 1) : -1;
+    if (close >= 0) {
+      value = line.slice(i + 1, close);
+      i = close + 1;
+    } else {
+      const v0 = i;
+      while (i < n && !isSpace(line.charCodeAt(i))) i++;
+      value = line.slice(v0, i);
+    }
+    if (KEY.test(key)) attrs[key] = value;
+  }
+  return { tag, attrs };
 }
 
 /** The text format → the JSON layout (values still strings; validated afterwards). */
@@ -127,7 +164,10 @@ function textToRaw(src: string): Raw {
   const chars: Raw[] = [];
   const kernings: Raw[] = [];
   let distanceField: Raw | undefined;
+  let lineNo = 0;
   for (const line of src.split(/\r\n|\r|\n/)) {
+    lineNo++;
+    if (line.length > MAX_LINE_LENGTH) throw new FontError(`line ${lineNo} is longer than ${MAX_LINE_LENGTH} characters`);
     const p = parseLine(line);
     if (!p) continue;
     switch (p.tag) {
@@ -238,6 +278,26 @@ function rawToData(raw: Raw): BitmapFontData {
   return { face, size, lineHeight, base, scaleW, scaleH, pages, chars, kernings, warnings };
 }
 
+/** UTF-8 byte length of a string (lone surrogates count as U+FFFD); stops counting past `limit`. */
+export function utf8Length(s: string, limit = Infinity): number {
+  let bytes = 0;
+  for (let i = 0; i < s.length && bytes <= limit; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      bytes += 4;
+      i++;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+/** The binary BMFont format starts with the bytes "BMF" and a format version byte (3). */
+export function isBinaryBMFont(s: string): boolean {
+  return s.startsWith('BMF') && s.length >= 4 && s.charCodeAt(3) < 32;
+}
+
 /**
  * Parse an AngelCode BMFont descriptor: the text format (`.fnt`) or the JSON format (a string starting
  * with `{`, or an already parsed object). XML is rejected. Errors start with `BMFont "{path}": `.
@@ -247,7 +307,10 @@ export function parseBMFont(source: string | object, path = 'font'): BitmapFontD
   try {
     let raw: Raw;
     if (typeof source === 'string') {
-      if (source.length > MAX_DESCRIPTOR_BYTES) throw new FontError('the descriptor is larger than 1 MiB');
+      // ≤ 1 MiB of UTF-8. Every UTF-16 unit is at least 1 byte and at most 3, so only the middle range is counted.
+      if (source.length > MAX_DESCRIPTOR_BYTES || (source.length * 3 > MAX_DESCRIPTOR_BYTES && utf8Length(source, MAX_DESCRIPTOR_BYTES) > MAX_DESCRIPTOR_BYTES))
+        throw new FontError('the descriptor is larger than 1 MiB');
+      if (isBinaryBMFont(source)) throw new FontError('binary BMFont is not supported; export the text or JSON format');
       const s = source.replace(/^﻿/, '').trimStart();
       if (s.startsWith('<')) throw new FontError('BMFont XML is not supported; export the text or JSON format');
       if (s.startsWith('{')) {
@@ -479,25 +542,52 @@ export function layoutText(font: FontMetricsSource, text: string, o: LayoutOptio
     return cps.length ? w - sp : 0;
   };
 
+  /** Running sum `widthOf` keeps before subtracting the last `sp`: append `cps[from..to)` after `prev`. */
+  const extend = (acc: number, prev: number, cps: readonly number[], from: number, to: number): number => {
+    for (let i = from; i < to; i++) {
+      const cp = cps[i]!;
+      if (prev >= 0) acc += font.kerning(prev, cp) * s;
+      acc += resolve(cp).adv + sp;
+      prev = cp;
+    }
+    return acc;
+  };
+
   let lines = splitParagraphs(String(text));
   const maxW = o.maxWidth;
   if (maxW !== undefined && maxW > 0) {
+    // Greedy wrap at spaces with a running width: each word is measured once as a candidate (and
+    // once more if it starts a new line), so a paragraph costs O(length) instead of O(words × line).
     const wrapped: number[][] = [];
+    const one = [SPACE];
     for (const para of lines) {
-      const words: number[][] = [[]];
-      for (const cp of para) {
-        if (cp === SPACE) words.push([]);
-        else words[words.length - 1]!.push(cp);
-      }
       let cur: number[] = [];
+      let acc = 0; // widthOf(cur) + sp (0 when empty)
       let started = false;
-      for (const w of words) {
-        const cand = started ? [...cur, SPACE, ...w] : w;
-        if (started && cur.length && widthOf(cand) > maxW) {
-          wrapped.push(cur);
-          cur = w;
-        } else cur = cand;
-        started = true;
+      let w0 = 0;
+      for (let j = 0; j <= para.length; j++) {
+        if (j < para.length && para[j] !== SPACE) continue;
+        // the word is para[w0..j)
+        if (!started) {
+          for (let k = w0; k < j; k++) cur.push(para[k]!);
+          acc = extend(0, -1, para, w0, j);
+          started = true;
+        } else {
+          const last = cur.length ? cur[cur.length - 1]! : -1;
+          const withSpace = extend(acc, last, one, 0, 1);
+          const cand = extend(withSpace, SPACE, para, w0, j);
+          if (cur.length && cand - sp > maxW) {
+            wrapped.push(cur);
+            cur = [];
+            for (let k = w0; k < j; k++) cur.push(para[k]!);
+            acc = extend(0, -1, para, w0, j);
+          } else {
+            cur.push(SPACE);
+            for (let k = w0; k < j; k++) cur.push(para[k]!);
+            acc = cand;
+          }
+        }
+        w0 = j + 1;
       }
       wrapped.push(cur);
     }
@@ -548,4 +638,51 @@ export function layoutText(font: FontMetricsSource, text: string, o: LayoutOptio
     out.push({ glyphs, width: lw });
   }
   return { lines: out, width, height, missing: [...missing] };
+}
+
+/**
+ * A small LRU of text layouts keyed by (font, text, options), for HUD strings drawn every frame.
+ * Layouts are shared: callers must treat them as read-only. Long texts are not cached.
+ */
+export class LayoutCache {
+  private readonly map = new Map<string, { font: FontMetricsSource; lay: TextLayout }>();
+  private readonly ids = new WeakMap<FontMetricsSource, number>();
+  private nextId = 1;
+
+  readonly capacity: number;
+  /** Texts longer than this (UTF-16 units) are laid out without caching. */
+  readonly maxText: number;
+
+  constructor(capacity = 64, maxText = 512) {
+    this.capacity = capacity;
+    this.maxText = maxText;
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  get(font: FontMetricsSource, text: string, o: LayoutOptions = {}): TextLayout {
+    if (text.length > this.maxText || this.capacity <= 0) return layoutText(font, text, o);
+    let id = this.ids.get(font);
+    if (id === undefined) {
+      id = this.nextId++;
+      this.ids.set(font, id);
+    }
+    const key = `${id}|${o.size}|${o.letterSpacing}|${o.lineHeight}|${o.align}|${o.baseline}|${o.maxWidth}|${o.x}|${o.y}|${text}`;
+    const hit = this.map.get(key);
+    if (hit && hit.font === font) {
+      this.map.delete(key); // refresh LRU position
+      this.map.set(key, hit);
+      return hit.lay;
+    }
+    const lay = layoutText(font, text, o);
+    this.map.set(key, { font, lay });
+    if (this.map.size > this.capacity) this.map.delete(this.map.keys().next().value!);
+    return lay;
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
 }
