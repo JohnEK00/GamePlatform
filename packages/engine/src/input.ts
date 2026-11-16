@@ -319,9 +319,29 @@ export class Input {
     this.typed = this.typedAcc;
     this.typedAcc = '';
     this.touches = Array.from(this.touchMap.values());
-    const nav = typeof navigator !== 'undefined' ? navigator : null;
-    const list = nav && typeof nav.getGamepads === 'function' ? nav.getGamepads() : [];
+    const list = this.readGamepads();
     for (let i = 0; i < this.pads.length; i++) this.pads[i]!.poll(list[i] ?? null);
+  }
+
+  /** Set once getGamepads() has thrown, so a blocked Gamepad API is not retried every step. */
+  private gamepadsBlocked = false;
+
+  /**
+   * navigator.getGamepads() throws a SecurityError when the document's permissions policy
+   * disallows "gamepad" (e.g. an iframe without allow="gamepad", or a non-secure origin such as
+   * http://<LAN IP>). That must never stop the game loop: fall back to "no gamepads".
+   */
+  private readGamepads(): ArrayLike<Gamepad | null> {
+    if (this.gamepadsBlocked) return [];
+    const nav = typeof navigator !== 'undefined' ? navigator : null;
+    if (!nav || typeof nav.getGamepads !== 'function') return [];
+    try {
+      return nav.getGamepads() ?? [];
+    } catch (err) {
+      this.gamepadsBlocked = true;
+      console.warn('[engine] Gamepad input unavailable:', err instanceof Error ? err.message : err);
+      return [];
+    }
   }
 
   /** Engine-internal: called after each fixed update step. */

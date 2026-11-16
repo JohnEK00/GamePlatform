@@ -24,6 +24,8 @@ export default defineConfig(({ command }) => ({
   server: {
     port: 5173,
     strictPort: true,
+    // Listen on all interfaces so other devices on the LAN can reach the dev server.
+    host: true,
     // Keep Host as localhost:5173 (changeOrigin: false) so the backend's player page references
     // {ORIGIN}=http://localhost:5173 and engine/bundle requests also flow through this proxy.
     // Only /games/{id}/files/* is proxied: /games/{id} itself is an SPA route.
