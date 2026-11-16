@@ -16,6 +16,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Moderation**: reports on games/comments, an admin queue, `ADMIN_USERNAMES`.
 - **Security/ops**: sandboxed iframes, CSP sandbox on files, rate limits, Docker, CI.
 - **Engine**: WebGL2 batching, input (keyboard/mouse/touch/gamepad), audio, scenes, tilemaps, physics, particles, tweens, in-memory files, F3 debug overlay; three example games.
+- **Ember Garden** (`examples/ember-garden`): a fourth example and showcase game, added by the user after F017.
 - **Desktop**: native menu, F11 fullscreen, native open/save dialogs, configurable server, offline banner.
 
 ## Backlog
@@ -32,9 +33,9 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F006 | Comment replies and reactions | M | shipped |
 | F007 | In-app notifications | M | shipped |
 | F012 | Engine bitmap fonts, 9-slice and UI widgets | M | shipped |
-| F017 | Creator comment tools: pin, lock and "top" sort | S | specced |
+| F017 | Creator comment tools: pin, lock and "top" sort | S | shipped |
+| F008 | Collections (curated game lists) | M | specced |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
-| F008 | Collections (curated game lists) | M | proposed |
 | F018 | Notification controls: mutes, shared polling, "pinned" notifications | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
@@ -42,6 +43,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F016 | Gamepad remapping and synced control bindings | M | proposed |
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
 | F020 | Game comment settings: turn comments off, slow mode | S | proposed |
+| F021 | Collection activity: feed items and "added to a collection" notifications | S | proposed |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
@@ -121,10 +123,16 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: followers see what their friends play, and players get a personal gallery.
 - **Areas**: backend (activity kind and CHECK rebuild, profile endpoint), frontend (feed item, profile tab). No engine changes.
 
-### F008: Collections (M, proposed)
-- **Pitch**: users create public, ordered lists of games ("Best platformers"), shown on profiles and shareable at `/c/{id}`.
-- **User value**: curation as a discovery channel, and a social signal.
-- **Areas**: backend, frontend.
+### F008: Collections (M, specced → [spec](features/F008-collections.md))
+- **Pitch**:
+  - Users create ordered lists of up to 100 games ("Best platformers") with a title, a description and a one-line note per game. A collection is public or private ("play later").
+  - **+ Collection** on every game page opens a checklist of your collections (add/remove in place, or create one with the game already in it).
+  - Public collections appear on the owner's profile, in a "Featured in collections" shelf on the pages of their games, and at a shareable `/c/{id}` with **Copy link**.
+  - Owners reorder with Move up / Move down (keyboard and screen-reader friendly, no drag-and-drop required), edit notes and remove games. Games that become unavailable are hidden from visitors and shown to the owner as removable placeholders.
+  - Collections can be reported; admins can view and delete them. `reports` is rebuilt once (no `target_type` CHECK, nullable `target_game_id`), so later report targets need no rebuild.
+- **User value**: curation becomes a discovery channel driven by people rather than algorithms, players get shareable lists and a private play-later list, and creators can group a series.
+- **Areas**: backend (migration `0016_f008.sql`: `collections`, `collection_games`, `reports` rebuild; `routes/collections.rs` with ten endpoints; `Limit::Collections`; report changes; seed collection), frontend (collection page, add dialog, cards, profile section, game shelf, admin rows, `/collections` route), desktop (View → Collections menu item, share-link verification). No engine changes.
+- **Depends on**: nothing unshipped. Follow-up: F021 (feed and notifications for collections, after F018).
 
 ### F009: Controls overlay and key remapping (M, shipped → [spec](features/F009-controls-and-remapping.md))
 - **Pitch**:
@@ -166,7 +174,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: controller players get the same accessibility as keyboard players, and bindings follow the account to the desktop app.
 - **Areas**: engine (accept `gamepad` overrides), backend (small per-user bindings table and endpoints), frontend (gamepad capture, sync toggle).
 
-### F017: Creator comment tools: pin, lock and "top" sort (S, specced → [spec](features/F017-creator-comment-tools.md))
+### F017: Creator comment tools: pin, lock and "top" sort (S, shipped → [spec](features/F017-creator-comment-tools.md))
 - **Pitch**:
   - The game owner (and admins) can pin one top-level comment, shown above all threads in every sort with a "Pinned" badge; pinning another replaces it after a confirmation.
   - Owners and admins can lock a thread: only they can still reply, hearts/delete/report keep working, and the thread says "Replies are turned off".
@@ -185,6 +193,11 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: `ui.slider` (volume, difficulty), `ui.toggle`, a single-line `ui.textField` (uses `input.typed`, for name entry), and `ui.list` (a vertical list with keyboard and gamepad scrolling), all following the F012 theme, phase and navigation rules. Left and right adjust a focused slider.
 - **User value**: settings and name-entry screens without custom code, completing the F012 menu toolkit.
 - **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.
+
+### F021: Collection activity: feed items and notifications (S, proposed; after F008, F018)
+- **Pitch**: a F002 feed kind `collectionUpdated` (games added to a public collection by someone you follow, coalesced per collection per UTC day), and a F007 notification for creators: "Mia added Space Dodge to *Cozy games*" (once per collection and game, with a `collections` setting). It needs F018's removal of the `notifications.kind` CHECK.
+- **User value**: curators reach their followers, and creators learn when players champion their games.
+- **Areas**: backend (activity kind and CHECK rebuild for `activity_events`, notification kind and setting, hooks in the add endpoint), frontend (feed item, notification text, setting). No engine or desktop changes.
 
 ### F020: Game comment settings: turn comments off, slow mode (S, proposed; after F017)
 - **Pitch**: per-game owner settings on the edit page: "Comments: on / replies only to existing threads / off" and an optional slow mode (one comment or reply per user per game every N minutes). Existing comments stay visible when comments are off.

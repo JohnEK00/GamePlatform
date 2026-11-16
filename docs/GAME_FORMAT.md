@@ -615,3 +615,7 @@ Creator comment tools (spec: `docs/features/F017-creator-comment-tools.md`). **N
 - **Page paths (L2a):** page file names are percent-decoded exactly once. After decoding they must not contain `%`, `\`, `?` or `#`, and must resolve inside the bundle; otherwise loading fails.
 - **Binary BMFont (L6):** a descriptor starting with `BMF` plus a version byte fails with `BMFont "<name>": binary BMFont is not supported; export the text or JSON format`.
 - **Widgets outside a step (L2c):** widgets called outside `update` (in `render`, `load` or a timer) draw immediately and `button` returns `false` with a one-time warning, as § F012 already specifies.
+
+
+## F008 additions
+Collections (spec: `docs/features/F008-collections.md`). **No changes** to the bundle format, game.json, the engine API or the game ↔ parent messages. Collections are a platform feature only; games can't read or change them.

@@ -985,3 +985,147 @@ type ThreadState = {
   - Any `*.map` path returns 404 with the JSON `not_found` error.
 - **Notifications (L5):** notifications whose events are all retracted don't count toward the 200-per-recipient cap. Re-toggling a heart or follow while that kind is muted restores nothing.
 - **Fan-out retries (L9):** a parked `gamePublished` fan-out is retried every 10 minutes while the server runs, not only after a restart. Pruning and fan-out retries run even when `TRENDING_TTL_SECS=0`, in a housekeeping task that ticks every 60 s.
+
+
+---
+
+## F008 additions
+
+Collections: curated, ordered game lists (spec: `docs/features/F008-collections.md`). All earlier rules apply, including the v2 report flow, F005's report fields and the v2 error shape.
+
+### Types
+```ts
+type CollectionVisibility = "public" | "private"
+
+type CollectionSummary = {
+  id: string;                     // UUID v4
+  title: string;                  // 1–60 chars, single line
+  description: string;            // 0–500 chars, may contain "\n" (at most 8 lines); "" = none
+  visibility: CollectionVisibility;
+  owner: UserRef;
+  gameCount: number;              // items whose game is visible to the viewer (GET /api/games/{id} rule)
+  coverUrls: string[];            // 0–4 thumbnailUrl values of the first visible games that have a thumbnail, in collection order
+  createdAt: string;              // RFC3339 UTC
+  updatedAt: string;              // RFC3339 UTC; bumped by every successful change (details, add, note, remove, reorder)
+  path: string;                   // "/c/{id}" (in-app route)
+}
+
+type CollectionItem = {
+  gameId: string;
+  game: GameSummary | null;       // null: the game is not visible to the viewer. Only ever returned to the collection's owner.
+  note: string;                   // 0–140 chars, single line; "" = none
+  addedAt: string;                // RFC3339 UTC
+}
+
+type Collection = CollectionSummary & {
+  items: CollectionItem[];        // collection order; all items (max 100), not paged
+  isOwner: boolean;               // 🔓 the viewer owns the collection
+  canDelete: boolean;             // 🔓 the viewer is the owner or an admin
+}
+
+type MyCollection = CollectionSummary & {
+  containsGame: boolean;          // the `gameId` query game is in this collection; false without `gameId`
+  itemCount: number;              // all items including unavailable ones (what the 100 cap counts)
+}
+
+type GameCollectionsPage = { items: CollectionSummary[]; total: number /* public collections containing the game */ }
+
+type CollectionItemResponse = {
+  added: boolean;                 // true: newly inserted; false: already present (note updated if given)
+  item: CollectionItem;           // with `game` as the owner sees it
+  gameCount: number;              // after the change, as the owner sees it
+  updatedAt: string;              // the collection's updatedAt after the change
+}
+
+type CollectionRemoveResponse = { removed: boolean; gameCount: number; updatedAt: string }
+
+type CreateCollectionRequest = { title: string; description?: string; visibility?: CollectionVisibility /* default "public" */; gameId?: string }
+type UpdateCollectionRequest = { title?: string; description?: string; visibility?: CollectionVisibility }
+type PutCollectionGameRequest = { note?: string }   // the body is optional; an absent note keeps the stored note
+type ReorderCollectionRequest = { gameIds: string[] }
+```
+- Item order is ascending stored position, then `addedAt`, then `gameId`.
+- **Visibility of a collection** ("visible to the caller"): public → anyone; private → its owner or an admin. Otherwise every endpoint below answers 404 `not_found` "Collection not found" (never 403), so private collections can't be probed.
+- **Items for a viewer**: an item is included with its `GameSummary` when its game is visible to the viewer under `GET /api/games/{id}` rules. Otherwise it is omitted, except for the collection owner, who gets it with `game: null`. Admins viewing someone else's collection get only items visible to them.
+
+### Text rules
+| Field | Rule (after trimming leading and trailing whitespace) | 422 `validation` message |
+|---|---|---|
+| `title` | 1–60 Unicode scalar values; no control characters, no bidi controls (U+202A–U+202E, U+2066–U+2069) | "title must be 1–60 characters" / "title must be a single line of plain text" |
+| `description` | `\r\n` and `\r` become `\n` first; 0–500 scalar values; at most 7 `\n` (8 lines); no other control characters, no bidi controls | "description must be at most 500 characters" / "description must be at most 8 lines" / "description must be plain text" |
+| `note` | 0–140 scalar values; no control characters (including `\n`), no bidi controls | "note must be at most 140 characters" / "note must be a single line of plain text" |
+| `visibility` | exactly `"public"` or `"private"` | "visibility must be \"public\" or \"private\"" |
+
+A field with the wrong JSON type → 422. Unknown fields are ignored. Malformed JSON → 400 as elsewhere.
+
+### Endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| POST 🔒 | /api/collections | `CreateCollectionRequest` | 201 `Collection` |
+| GET 🔓 | /api/collections/{id} | – | `Collection` |
+| PATCH 🔒 owner | /api/collections/{id} | `UpdateCollectionRequest` | `Collection` |
+| DELETE 🔒 owner/admin | /api/collections/{id} | – | 204 |
+| PUT 🔒 owner | /api/collections/{id}/games/{gameId} | `PutCollectionGameRequest` (or no body) | `CollectionItemResponse` |
+| DELETE 🔒 owner | /api/collections/{id}/games/{gameId} | – | `CollectionRemoveResponse` (idempotent; `removed: false` when absent) |
+| PUT 🔒 owner | /api/collections/{id}/order | `ReorderCollectionRequest` | `Collection` |
+| GET 🔓 | /api/users/{username}/collections | `?page=1&perPage=24` (1–100, clamped) | `Page<CollectionSummary>` |
+| GET 🔒 | /api/users/me/collections | `?gameId=` (optional) | `MyCollection[]` (all of the caller's collections, max 50) |
+| GET 🔓 | /api/games/{id}/collections | `?limit=6` (1–24, clamped) | `GameCollectionsPage` |
+
+**Check order for writes on `/api/collections/{id}…`** (PATCH, DELETE, both item endpoints, order):
+1. Auth → 401.
+2. Unknown collection, or not visible to the caller → 404 "Collection not found".
+3. The caller is not the owner (for DELETE: not the owner and not an admin) → 403 `forbidden`.
+4. `Limit::Collections` → 429.
+5. Body validation → 400/422.
+6. The endpoint's own rules below.
+
+**`POST /api/collections`**: auth → 401; `Limit::Collections` → 429; body validation → 422; `gameId` given and not visible to the caller → 404 "Game not found" (nothing is created); the caller already has **50** collections → 422 "You can have at most 50 collections". With `gameId`, that game is the first item (empty note). The cap check and insert are atomic.
+
+**`GET /api/collections/{id}`**: visibility → 404. `isOwner` and `canDelete` are false when anonymous.
+
+**`PATCH /api/collections/{id}`**: present fields are validated and applied. An empty object is valid (no change; `updatedAt` is not bumped). Admins who aren't the owner → 403.
+
+**`DELETE /api/collections/{id}`**: deletes the collection and its items, and marks every open report on it `resolved` with resolution `delete`. Games are not affected.
+
+**`PUT /api/collections/{id}/games/{gameId}`**:
+- The game is already in the collection → its note is replaced when `note` is present (kept when absent), `added: false`. This works even if the game is no longer visible, and even at the cap.
+- Otherwise: the game must be visible to the caller under `GET /api/games/{id}` rules, else 404 "Game not found"; the collection already has **100** items (unavailable ones included) → 422 "A collection can hold at most 100 games"; else the game is appended at the end with `added: true`.
+- The cap check and insert are atomic, so concurrent adds can't exceed 100.
+
+**`DELETE /api/collections/{id}/games/{gameId}`**: removes the item whether or not the game is visible. An id that isn't in the collection → 200 `removed: false` (`updatedAt` not bumped).
+
+**`PUT /api/collections/{id}/order`**:
+- `gameIds` missing, not an array of strings, longer than 100, or with duplicates → 422.
+- The set of `gameIds` is not exactly the set of the collection's current items (all of them, including unavailable ones) → 409 `conflict` "The collection has changed; reload and try again".
+- Otherwise the items take the given order. `updatedAt` is bumped only when the order changed.
+
+**`GET /api/users/{username}/collections`**: unknown user → 404. The user themself sees all their collections (public and private, including empty ones). Everyone else sees only public collections with `gameCount >= 1`. Order: `updatedAt` desc, then `id` desc. A non-integer `page`/`perPage` → 400.
+
+**`GET /api/users/me/collections`**: order `updatedAt` desc, then `id` desc. A `gameId` that is unknown or not visible makes every `containsGame` false (no error).
+
+**`GET /api/games/{id}/collections`**: the game must be visible to the viewer (else 404). Lists public collections that contain the game, `updatedAt` desc, then `id` desc, at most `limit`; `total` counts all of them. Private collections never appear, even to their owner. A non-integer `limit` → 400.
+
+### Reports (changed)
+```ts
+type ReportTargetType = "game" | "comment" | "screenshot" | "collection"
+type Report = { ...F005 and review 3, targetGameId: string | null }   // null for "collection" reports; a string for every other type
+```
+| Method | Path | Body | Response |
+|---|---|---|---|
+| POST 🔒 | /api/reports | v2 body; `targetType` may be `"collection"` | 201 `Report` |
+| POST 🔒 admin | /api/admin/reports/{id}/resolve | `{ action }` | `Report` |
+
+- **Creating**: for `"collection"`, the collection must exist and be visible to the reporter (else 404 "Collection not found"). `targetPreview` is the first 140 chars of its title at report time. `targetGameId`, `targetImageUrl` and `targetImageFullUrl` are `null`. The v2 duplicate rule (409) applies. An unknown `targetType` → 422 `targetType must be "game", "comment", "screenshot" or "collection"`.
+- **Resolving**: `delete` deletes the collection (same effects as `DELETE /api/collections/{id}`; a collection that is already gone is not an error); `dismiss` is unchanged; `unpublish` → 422 "unpublish is only valid for game reports".
+- **Clients** must accept `targetGameId: null`, and should show a row with an unknown `targetType` with Dismiss only.
+
+### Caps
+50 collections per user; 100 games per collection; titles 60, descriptions 500 (8 lines) and notes 140 characters.
+
+### Rate limits
+- `POST /api/collections`, `PATCH`/`DELETE /api/collections/{id}`, `PUT`/`DELETE …/games/{gameId}` and `PUT …/order` share **`Limit::Collections`: 120 per 10 min, per user**. Over the limit → 429 `rate_limited` with `Retry-After`.
+- `GET /api/collections/{id}` and the three list endpoints are unlimited reads (like profiles and comments). Collection reports use the existing `Limit::Report`.
+
+### Web routes
+`/c/{id}`, `/u/{username}/collections` and `/collections` are SPA routes. With `WEB_DIST` set they fall back to `index.html` with `no-cache` (review 5 M1). F008 adds no backend-served files, and `/api/*` stays uncompressed.

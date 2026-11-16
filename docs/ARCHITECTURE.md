@@ -749,3 +749,102 @@ Creator comment tools: pin, lock and "Top" sort (spec: `docs/features/F017-creat
   - A future "your comment was pinned" notification needs a new `notifications.kind` value. The 0013 CHECK can't be widened in place, and rebuilding `notifications` with foreign keys on would cascade-delete `notification_events` on `DROP TABLE` (and fire the `0014` trigger), so the rebuild must drop the trigger, copy both tables, recreate them, and restore the indexes and trigger. That work is assigned to F018 (which already changes the notification write path), together with a `pins` setting column. `routes/comments.rs` carries a `// F018:` marker at the hook point (after a pin changed a row; recipient = the comment's author when not the pinner, dedupe once per comment).
 - **UI**: `CommentSortToggle` (new), changes in `Comments`, `CommentItem`, `CommentForm`; the sort is a per-device `localStorage["webgame.comments.sort"]`. `Comments`' internal permalink flag is renamed from `pinned` to `linked` to avoid clashing with the server field.
 - **Ownership**: the migration, `routes/comments.rs` changes, `Limit::ThreadTools`, routes and `tests/f017.rs` belong to backend-dev. Types, client, `api/comments.ts`, the components, styles and UI tests belong to frontend-dev. Desktop has no code changes.
+
+
+## F008 additions
+Collections (spec: `docs/features/F008-collections.md`). Two new tables, one `reports` rebuild, one new route module. No new dependencies, no engine changes, no new served files.
+- **Model.** A collection is a row in `collections` (owner, title, description, visibility). Its games are rows in `collection_games` keyed by `(collection_id, game_id)`, with an integer `position` and a per-game `note`. Positions only need to be ordered, not dense: appends use `MAX(position) + 1`, removes leave gaps, and a reorder rewrites them as `0..n-1`. Visibility of the games inside is never stored; it is evaluated per viewer at read time with the `GET /api/games/{id}` rule (`GameRow::visible_to`), exactly like favorites.
+- **Data**: migration `backend/migrations/0016_f008.sql` runs after `0015_f017.sql`:
+  ```sql
+  -- F008: collections, and reports on collections (docs/ARCHITECTURE.md § F008 additions).
+  CREATE TABLE collections (
+      id           TEXT PRIMARY KEY NOT NULL,                          -- UUID v4
+      owner_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title        TEXT NOT NULL,                                      -- 1–60 chars (validated in Rust)
+      description  TEXT NOT NULL DEFAULT '',                           -- 0–500 chars, ≤ 8 lines (validated in Rust)
+      visibility   TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'private')),
+      created_at   TEXT NOT NULL,                                      -- RFC3339 millis Z
+      updated_at   TEXT NOT NULL                                       -- RFC3339 millis Z; list order key
+  );
+  CREATE INDEX idx_collections_owner_updated ON collections(owner_id, updated_at DESC, id DESC);
+
+  CREATE TABLE collection_games (
+      collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+      game_id       TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      position      INTEGER NOT NULL,
+      note          TEXT NOT NULL DEFAULT '',                          -- 0–140 chars, single line (validated in Rust)
+      added_at      TEXT NOT NULL,
+      PRIMARY KEY (collection_id, game_id)
+  );
+  CREATE INDEX idx_collection_games_order ON collection_games(collection_id, position, added_at);
+  CREATE INDEX idx_collection_games_game  ON collection_games(game_id);   -- game page shelf + game delete cascade
+
+  -- Rebuild reports: drop the target_type CHECK (types are validated in Rust from now on, so later
+  -- target types need no rebuild) and make target_game_id nullable (NULL for 'collection').
+  -- As in 0009: no table references reports and it has no triggers, so this is safe with foreign_keys on.
+  CREATE TABLE reports_new (
+      id              TEXT PRIMARY KEY NOT NULL,
+      target_type     TEXT NOT NULL,                                   -- 'game' | 'comment' | 'screenshot' | 'collection' (Rust TARGET_TYPES)
+      target_id       TEXT NOT NULL,
+      target_game_id  TEXT,                                            -- NULL for 'collection'
+      target_preview  TEXT NOT NULL,
+      reason          TEXT NOT NULL,
+      details         TEXT NOT NULL DEFAULT '',
+      reporter_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+      resolution      TEXT,
+      created_at      TEXT NOT NULL,
+      resolved_at     TEXT
+  );
+  INSERT INTO reports_new SELECT id, target_type, target_id, target_game_id, target_preview, reason,
+                                 details, reporter_id, status, resolution, created_at, resolved_at
+  FROM reports ORDER BY rowid;   -- keeps rowid order (the admin list's tie-break)
+  DROP TABLE reports;
+  ALTER TABLE reports_new RENAME TO reports;
+  CREATE INDEX idx_reports_status_created ON reports(status, created_at DESC);
+  CREATE INDEX idx_reports_target         ON reports(target_type, target_id, status);
+  CREATE INDEX idx_reports_reporter       ON reports(reporter_id, target_type, target_id, status);
+  ```
+  No backfill. The demo seed (`seed.rs`) creates one public collection of the example games.
+- **Read shapes** (`?v` = viewer id or NULL; "visible" = `(g.published = 1 OR g.owner_id = ?v)`):
+  - Collection page: one query over `collection_games cg JOIN games g JOIN users u` (the `GAME_SELECT` columns plus `cg.note`, `cg.added_at`) `WHERE cg.collection_id = ? ORDER BY cg.position, cg.added_at, cg.game_id`. Visibility is applied in Rust per row: visible → `game: Some`, invisible → `game: None` for the owner, dropped for everyone else.
+  - Summaries for a page of collections (profile list, my list, game shelf), **one batched query** for all of the page's ids, aggregated in Rust into `gameCount` and the first 4 `coverUrls` (thumbnail present) per collection:
+    ```sql
+    SELECT cg.collection_id, g.id, g.thumbnail_ext, g.thumbnail_version
+    FROM collection_games cg JOIN games g ON g.id = cg.game_id
+    WHERE cg.collection_id IN (…page ids…) AND (g.published = 1 OR g.owner_id = ?v)
+    ORDER BY cg.collection_id, cg.position, cg.added_at, cg.game_id
+    ```
+    At most 24 × 100 rows. `MyCollection.itemCount` is a separate `COUNT(*) … GROUP BY collection_id` without the visibility filter, and `containsGame` an `EXISTS` on the primary key.
+  - Profile list for other viewers: `WHERE c.owner_id = ? AND c.visibility = 'public' AND EXISTS (SELECT 1 FROM collection_games cg JOIN games g ON g.id = cg.game_id WHERE cg.collection_id = c.id AND (g.published = 1 OR g.owner_id = ?v)) ORDER BY c.updated_at DESC, c.id DESC LIMIT/OFFSET` (walks `idx_collections_owner_updated`; at most 50 rows per owner, so the `EXISTS` is cheap).
+  - Game shelf: `SELECT c.* FROM collection_games cg JOIN collections c ON c.id = cg.collection_id WHERE cg.game_id = ? AND c.visibility = 'public' ORDER BY c.updated_at DESC, c.id DESC LIMIT ?` (via `idx_collection_games_game`), plus a matching `COUNT(*)` for `total`.
+- **Write paths** (`backend/src/routes/collections.rs`; every write that checks a cap runs in a `BEGIN IMMEDIATE` transaction, and every successful change sets `collections.updated_at` in the same transaction):
+  - Create: `INSERT INTO collections … SELECT … WHERE (SELECT COUNT(*) FROM collections WHERE owner_id = ?) < 50`; zero rows → 422. With `gameId`, the first item is inserted in the same transaction at position 0.
+  - Add (new item):
+    ```sql
+    INSERT INTO collection_games (collection_id, game_id, position, note, added_at)
+    SELECT ?1, ?2, COALESCE((SELECT MAX(position) FROM collection_games WHERE collection_id = ?1), -1) + 1, ?3, ?4
+    WHERE (SELECT COUNT(*) FROM collection_games WHERE collection_id = ?1) < 100
+    ```
+    Zero rows → 422 cap. An existing item is detected first (primary key lookup) and only gets `UPDATE … SET note = ?` when `note` is present.
+  - Reorder: read the current id set; if it differs from the request's set → 409; else one statement:
+    ```sql
+    UPDATE collection_games
+       SET position = (SELECT CAST(j.key AS INTEGER) FROM json_each(?2) j WHERE j.value = collection_games.game_id)
+     WHERE collection_id = ?1
+    ```
+    (`?2` is the request's `gameIds` re-serialised by Rust as a JSON array.)
+  - Delete: `remove_collection(state, id)` deletes the row (items cascade) and resolves open reports `WHERE target_type = 'collection' AND target_id = ?`. Admin resolve `delete` calls the same function.
+  - Game delete (`remove_game`) needs no change: `collection_games` rows cascade through the foreign key and `idx_collection_games_game`.
+- **Reports.** `Report.target_game_id` becomes `Option<String>`. `create_report` validates `target_type` against a Rust `TARGET_TYPES` list (the DB no longer checks it). The F005 `LEFT JOIN screenshots` in `REPORT_SELECT` is unchanged; collection rows simply get NULL image fields.
+- **Feed and notifications.** F008 writes no `activity_events` and no notifications. "X added your game to a collection" and a `collectionUpdated` feed kind are proposed as F021, after F018 removes the `notifications.kind` CHECK.
+- **Share URLs.** The UI builds `/c/{id}` links with `collectionShareUrl` (spec § 2.7): the page origin on the web; `apiBaseUrl` on desktop (hash router), because a `tauri://` or `#/` link is useless outside the app. That desktop link opens the collection only when the configured server also serves the web app (`WEB_DIST`, the documented production setup); operators who split API and web origins should know that desktop-copied links point at the API origin.
+- **Caching and compression (review 5).** No new files are served. `/api/*` responses (including collection JSON) are not compressed and carry no cache headers, as before. The SPA routes fall back to `index.html` with `no-cache`, and the Vite dev proxy doesn't match them. Covers reuse thumbnail URLs (`?v=` versioned) and their existing caching.
+- **UI**:
+  - `src/collections.ts` (pure: limits, validators, `moveItem`, `collectionShareUrl`).
+  - Components `CollectionCard`/`CollectionGrid`, `CollectionFormDialog`, `AddToCollectionDialog`/`AddToCollectionButton`, `GameCollections`, `CollectionItemRow`.
+  - Pages `CollectionPage` (`/c/:id`) and `UserCollectionsPage` (`/u/:username/collections`); `/collections` redirects to the signed-in user's list inside `RequireAuth`.
+  - Changes in `ProfilePage`, `GamePage`, `AdminPage`, `Report.tsx`, `Layout` (user menu) and `WebGameApp` (routes).
+  - Reordering is button-based (Move up / Move down) and always sends the full order, so the client never computes partial positions.
+- **Desktop**: the native menu forwards a new `"collections"` id (View → Collections, `CmdOrCtrl+Shift+L`) → `/collections`. No other desktop code.
+- **Ownership**: the migration, `routes/collections.rs`, the `reports.rs` changes, `Limit::Collections`, the seed collection and `tests/f008.rs` belong to backend-dev. Types, client, `collections.ts`, the components, pages, styles and UI tests belong to frontend-dev. `menu.rs`, `nativeMenu.ts` and its test belong to desktop-dev.
