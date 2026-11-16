@@ -1060,3 +1060,8 @@ Notification controls (spec: `docs/features/F018-notification-controls.md`). One
   - backend-dev: the migration, `notifications.rs`, `routes/notifications.rs`, route registration, the `comments.rs`/`games.rs`/`models.rs` changes and `tests/f018.rs`.
   - frontend-dev: `notificationsTabs.ts`, the provider changes, types, client, `notifications.ts`, `MuteGameButton`, `MutedList`, the `CommentItem`/`NotificationItem`/`NotificationsPage`/`NotificationSettings`/`GamePage` changes, styles and tests.
   - desktop-dev: verification only.
+
+### F018 implementation notes
+- The game-mute insert carries an extra guard, `AND EXISTS (SELECT 1 FROM games WHERE id = ?2)`, so a game deleted between the visibility check and the write gives 404, not a foreign-key 500.
+- `pin`/`unpin` run in `BEGIN IMMEDIATE` transactions (read-then-write without `SQLITE_BUSY`).
+- `Game.notificationsMuted` is computed in `build_game`, so it appears on every response that returns a `Game` (not on `GameSummary`).

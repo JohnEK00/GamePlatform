@@ -123,6 +123,9 @@ pub struct Game {
     pub my_rating: Option<i64>,
     pub is_owner: bool,
     pub is_favorite: bool,
+    /// F018: the viewer muted notifications about this game (false when anonymous). Set by
+    /// `routes::games::build_game`; not part of `GameSummary`.
+    pub notifications_muted: bool,
     pub achievements: Vec<AchievementDef>,
     pub leaderboard: LeaderboardConfig,
     /// F004: the current version's history row.
@@ -208,6 +211,9 @@ pub struct Comment {
     /// F017: top-level only, the viewer is the game's current owner or an admin (false on
     /// replies and when anonymous).
     pub can_moderate: bool,
+    /// F018: top-level only, the viewer muted notifications for this thread (false on replies
+    /// and when anonymous).
+    pub thread_muted: bool,
 }
 
 /// F006: a top-level comment with the oldest (at most 3) replies.
@@ -457,6 +463,7 @@ impl GameRow {
             my_rating,
             is_owner: viewer == Some(self.owner_id.as_str()),
             is_favorite,
+            notifications_muted: false,
             achievements,
             leaderboard: self.leaderboard.clone(),
             latest_version,

@@ -10,7 +10,7 @@ use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiPath, ApiQuery};
 use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
-use crate::notifications::{self as notif, Kind, NewNotification};
+use crate::notifications::{self as notif, Dedupe, Kind, NewNotification};
 use crate::ratelimit::Limit;
 use crate::routes::comments::PageQuery;
 use crate::routes::games::{limit_user, parse_paging};
@@ -112,7 +112,8 @@ pub async fn put_follow(
                 comment_id: None,
                 actor_id: user.id.clone(),
                 event_comment_id: None,
-                dedupe_actor: true,
+                dedupe: Dedupe::Actor,
+                thread_id: None,
                 now: chrono::Utc::now(),
             };
             notif::notify_pool(&state.db, &n).await;

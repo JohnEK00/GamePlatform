@@ -25,18 +25,22 @@ pub enum Kind {
     Heart,
     Follow,
     GamePublished,
+    /// F018: a creator (or an admin) pinned the recipient's comment.
+    Pinned,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [
+    pub const ALL: [Kind; 6] = [
         Kind::Comment,
         Kind::Reply,
         Kind::Heart,
         Kind::Follow,
         Kind::GamePublished,
+        Kind::Pinned,
     ];
 
-    /// The `NotificationKind` string (also the stored `kind` column).
+    /// The `NotificationKind` string (also the stored `kind` column). Since F018 the column has
+    /// no CHECK constraint: this enum is the only list of kinds.
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Comment => "comment",
@@ -44,6 +48,7 @@ impl Kind {
             Kind::Heart => "heart",
             Kind::Follow => "follow",
             Kind::GamePublished => "gamePublished",
+            Kind::Pinned => "pinned",
         }
     }
 
@@ -56,6 +61,7 @@ impl Kind {
             Kind::Heart => "hearts",
             Kind::Follow => "follows",
             Kind::GamePublished => "new_games",
+            Kind::Pinned => "pins",
         }
     }
 
@@ -77,6 +83,11 @@ pub fn comment_group(comment_id: &str) -> String {
     format!("comment:{comment_id}")
 }
 
+/// F018: the `pinned` group of one comment.
+pub fn pin_group(comment_id: &str) -> String {
+    format!("pin:{comment_id}")
+}
+
 pub const FOLLOW_GROUP: &str = "follow";
 
 /// Recipients per `gamePublished` fan-out transaction.
@@ -95,6 +106,30 @@ pub fn stamp(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// How [`notify`] deduplicates (ARCHITECTURE § F018 "Write path").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dedupe {
+    /// Comments, replies: every event counts.
+    None,
+    /// Hearts, follows: skip when this actor already has an event in any notification of
+    /// (recipient, kind, group), read or unread; a retracted one is restored instead (L1).
+    Actor,
+    /// F018 pins: at most one notification per (recipient, kind, group) while any row for it
+    /// is stored; a withdrawn one is restored instead (retracted events of every actor).
+    Group,
+}
+
+impl Dedupe {
+    /// The `?8` bind of the write statements.
+    fn code(self) -> i64 {
+        match self {
+            Dedupe::None => 0,
+            Dedupe::Actor => 1,
+            Dedupe::Group => 2,
+        }
+    }
+}
+
 /// One notification event to record.
 #[derive(Debug, Clone)]
 pub struct NewNotification {
@@ -102,16 +137,24 @@ pub struct NewNotification {
     pub kind: Kind,
     pub group_key: String,
     pub game_id: Option<String>,
-    /// `heart`: the hearted comment; `reply`: the thread root; else `None`.
+    /// `heart`: the hearted comment; `reply`: the thread root; `pinned`: the pinned comment;
+    /// else `None`.
     pub comment_id: Option<String>,
     pub actor_id: String,
     /// `comment`/`reply`: the newly posted comment; else `None`.
     pub event_comment_id: Option<String>,
-    /// Hearts, follows: skip when this actor already has an event in any notification of
-    /// (recipient, kind, group), read or unread; a retracted one is restored instead (L1).
-    pub dedupe_actor: bool,
+    pub dedupe: Dedupe,
+    /// F018: the top-level comment of the related thread, for thread mutes (`reply`: the root;
+    /// `heart`: the hearted comment's parent, or itself when top-level; `pinned`: the comment;
+    /// else `None`).
+    pub thread_id: Option<String>,
     pub now: DateTime<Utc>,
 }
+
+/// F018 `MUTED(?1, ?5, ?9)`: a game mute of `?5`, or a mute of thread `?9` (thread mutes also
+/// store their game). `?5 IS NULL` (follow) never matches; `?9 IS NULL` matches game mutes only.
+const MUTED: &str = "EXISTS (SELECT 1 FROM notification_mutes m \
+     WHERE m.user_id = ?1 AND m.game_id = ?5 AND (m.thread_id IS NULL OR m.thread_id = ?9))";
 
 /// Record one event for one recipient (best effort; failures are logged). `conn` must not be
 /// inside a transaction: the write runs in its own `BEGIN IMMEDIATE` transaction (M1).
@@ -143,22 +186,32 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
     // `{col}` is a fixed column name from `Kind::setting_column`.
     let col = n.kind.setting_column();
-    if n.dedupe_actor {
-        // L1: the actor re-joins a group they were retracted from: restore the event and keep
-        // `updated_at`, so the item neither moves nor counts as new activity. Review 5 L5: not
-        // when the recipient has muted the kind since (the insert below is muted too).
+    let dedupe = n.dedupe.code();
+    if n.dedupe != Dedupe::None {
+        // L1: the actor re-joins a group they were retracted from (actor dedupe), or a
+        // withdrawn group comes back (group dedupe: every actor's events): restore and keep
+        // `updated_at`, so the item neither moves nor counts as new activity. Review 5 L5 and
+        // F018: not when the recipient has turned the kind off or muted the game or thread
+        // since (the insert below is suppressed too).
         let restored = sqlx::query(&format!(
             "UPDATE notification_events SET retracted_at = NULL \
-             WHERE actor_id = ?4 AND retracted_at IS NOT NULL AND notification_id IN \
+             WHERE retracted_at IS NOT NULL AND (?8 = 2 OR actor_id = ?4) \
+             AND notification_id IN \
              (SELECT id FROM notifications WHERE recipient_id = ?1 AND kind = ?2 \
               AND group_key = ?3) \
              AND NOT EXISTS (SELECT 1 FROM notification_settings s WHERE s.user_id = ?1 \
-               AND s.{col} = 0)"
+               AND s.{col} = 0) \
+             AND NOT {MUTED}"
         ))
         .bind(&n.recipient_id)
         .bind(kind)
         .bind(&n.group_key)
         .bind(&n.actor_id)
+        .bind(&n.game_id)
+        .bind(&n.comment_id)
+        .bind(&now)
+        .bind(dedupe)
+        .bind(&n.thread_id)
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -172,10 +225,14 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
          SELECT ?1, ?2, ?3, ?5, ?6, ?7, ?7 \
          WHERE NOT EXISTS (SELECT 1 FROM notification_settings s WHERE s.user_id = ?1 \
            AND s.{col} = 0) \
-         AND (?8 = 0 OR NOT EXISTS (SELECT 1 FROM notifications d \
-           JOIN notification_events e ON e.notification_id = d.id \
-           WHERE d.recipient_id = ?1 AND d.kind = ?2 AND d.group_key = ?3 \
-           AND e.actor_id = ?4)) \
+         AND NOT {MUTED} \
+         AND (?8 = 0 \
+           OR (?8 = 1 AND NOT EXISTS (SELECT 1 FROM notifications d \
+             JOIN notification_events e ON e.notification_id = d.id \
+             WHERE d.recipient_id = ?1 AND d.kind = ?2 AND d.group_key = ?3 \
+             AND e.actor_id = ?4)) \
+           OR (?8 = 2 AND NOT EXISTS (SELECT 1 FROM notifications d \
+             WHERE d.recipient_id = ?1 AND d.kind = ?2 AND d.group_key = ?3))) \
          ON CONFLICT (recipient_id, kind, group_key) WHERE read_at IS NULL \
          DO UPDATE SET updated_at = excluded.updated_at \
          RETURNING id"
@@ -187,11 +244,12 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     .bind(&n.game_id)
     .bind(&n.comment_id)
     .bind(&now)
-    .bind(i64::from(n.dedupe_actor))
+    .bind(dedupe)
+    .bind(&n.thread_id)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(id) = id else {
-        // Muted by the recipient's settings, or already seen (dedupe).
+        // Off in the recipient's settings, muted (F018), or already seen (dedupe).
         return tx.commit().await;
     };
     sqlx::query(
@@ -245,6 +303,27 @@ pub async fn retract_pool(
 ) {
     if let Some(mut conn) = crate::activity::acquire(pool).await {
         retract(&mut conn, recipient_id, kind, group_key, actor_id).await;
+    }
+}
+
+/// F018: withdraw the recipient's **unread** notification of the group (a pin removed before
+/// the author read it): every live event is tombstoned, so it is neither listed nor counted. A
+/// read notification is never changed. Best effort, autocommit.
+pub async fn withdraw_pool(pool: &SqlitePool, recipient_id: &str, kind: Kind, group_key: &str) {
+    let res = sqlx::query(
+        "UPDATE notification_events SET retracted_at = ?4 \
+         WHERE retracted_at IS NULL AND notification_id IN \
+         (SELECT id FROM notifications WHERE recipient_id = ?1 AND kind = ?2 \
+          AND group_key = ?3 AND read_at IS NULL)",
+    )
+    .bind(recipient_id)
+    .bind(kind.as_str())
+    .bind(group_key)
+    .bind(stamp(Utc::now()))
+    .execute(pool)
+    .await;
+    if let Err(e) = res {
+        tracing::warn!(kind = kind.as_str(), error = %e, "failed to withdraw notification");
     }
 }
 
@@ -431,6 +510,8 @@ async fn fan_out_chunk(db: &SqlitePool, game_id: &str, now: DateTime<Utc>) -> sq
              SELECT r.value, 'gamePublished', ?2, ?3, NULL, ?4, ?4 FROM json_each(?1) r \
              WHERE r.value <> ?5 AND NOT EXISTS (SELECT 1 FROM notification_settings s \
                WHERE s.user_id = r.value AND s.new_games = 0) \
+             AND NOT EXISTS (SELECT 1 FROM notification_mutes m \
+               WHERE m.user_id = r.value AND m.game_id = ?3 AND m.thread_id IS NULL) \
              ON CONFLICT (recipient_id, kind, group_key) WHERE read_at IS NULL \
              DO UPDATE SET updated_at = excluded.updated_at",
         )
@@ -584,6 +665,250 @@ pub async fn prune(pool: &SqlitePool, now: DateTime<Utc>) -> sqlx::Result<u64> {
 }
 
 // ---------------------------------------------------------------------------
+// F018 mutes
+// ---------------------------------------------------------------------------
+
+/// Mutes per user, games and threads together (API § F018).
+pub const MUTES_PER_USER: i64 = 500;
+
+/// The result of a mute write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MuteResult {
+    /// Muted now or already (matching unread notifications were marked read).
+    Muted,
+    /// The caller already has [`MUTES_PER_USER`] mutes (422).
+    CapReached,
+    /// The target was deleted since the route's lookup (404).
+    Gone,
+}
+
+/// `PUT …/mutes/games/{gameId}` after the route's visibility check: one `BEGIN IMMEDIATE`
+/// transaction (already muted? → insert under the cap → mark read).
+pub async fn mute_game(
+    db: &SqlitePool,
+    user_id: &str,
+    game_id: &str,
+    now: DateTime<Utc>,
+) -> sqlx::Result<MuteResult> {
+    let now = stamp(now);
+    let mut tx = db.begin_with("BEGIN IMMEDIATE").await?;
+    let muted: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM notification_mutes WHERE user_id = ?1 AND game_id = ?2 \
+         AND thread_id IS NULL",
+    )
+    .bind(user_id)
+    .bind(game_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if muted.is_none() {
+        // The `EXISTS` guard turns a game deleted since the lookup into a 404 instead of a
+        // foreign key error.
+        let inserted = sqlx::query(
+            "INSERT INTO notification_mutes (user_id, game_id, thread_id, created_at) \
+             SELECT ?1, ?2, NULL, ?3 \
+             WHERE (SELECT COUNT(*) FROM notification_mutes WHERE user_id = ?1) < ?4 \
+             AND EXISTS (SELECT 1 FROM games WHERE id = ?2)",
+        )
+        .bind(user_id)
+        .bind(game_id)
+        .bind(&now)
+        .bind(MUTES_PER_USER)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if inserted == 0 {
+            let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM games WHERE id = ?")
+                .bind(game_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+            return Ok(if exists.is_some() {
+                MuteResult::CapReached
+            } else {
+                MuteResult::Gone
+            });
+        }
+    }
+    sqlx::query(
+        "UPDATE notifications SET read_at = ?3 \
+         WHERE recipient_id = ?1 AND read_at IS NULL AND game_id = ?2",
+    )
+    .bind(user_id)
+    .bind(game_id)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(MuteResult::Muted)
+}
+
+/// `PUT …/mutes/threads/{commentId}` after the route's lookup, visibility and top-level
+/// checks: one `BEGIN IMMEDIATE` transaction (already muted? → insert under the cap → mark the
+/// thread's scope read).
+pub async fn mute_thread(
+    db: &SqlitePool,
+    user_id: &str,
+    comment_id: &str,
+    now: DateTime<Utc>,
+) -> sqlx::Result<MuteResult> {
+    let now = stamp(now);
+    let mut tx = db.begin_with("BEGIN IMMEDIATE").await?;
+    let mut game_id: Option<String> = sqlx::query_scalar(
+        "SELECT game_id FROM notification_mutes WHERE user_id = ?1 AND thread_id = ?2",
+    )
+    .bind(user_id)
+    .bind(comment_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if game_id.is_none() {
+        game_id = sqlx::query_scalar(
+            "INSERT INTO notification_mutes (user_id, game_id, thread_id, created_at) \
+             SELECT ?1, c.game_id, c.id, ?3 FROM comments c \
+             WHERE c.id = ?2 AND c.parent_id IS NULL \
+             AND (SELECT COUNT(*) FROM notification_mutes WHERE user_id = ?1) < ?4 \
+             RETURNING game_id",
+        )
+        .bind(user_id)
+        .bind(comment_id)
+        .bind(&now)
+        .bind(MUTES_PER_USER)
+        .fetch_optional(&mut *tx)
+        .await?;
+    }
+    let Some(game_id) = game_id else {
+        let exists: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM comments WHERE id = ? AND parent_id IS NULL")
+                .bind(comment_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        return Ok(if exists.is_some() {
+            MuteResult::CapReached
+        } else {
+            MuteResult::Gone
+        });
+    };
+    sqlx::query(
+        "UPDATE notifications SET read_at = ?3 \
+         WHERE recipient_id = ?1 AND read_at IS NULL AND game_id = ?4 \
+         AND ((kind IN ('reply', 'pinned') AND comment_id = ?2) \
+           OR (kind = 'heart' AND comment_id IN \
+             (SELECT ?2 UNION ALL SELECT id FROM comments WHERE parent_id = ?2)))",
+    )
+    .bind(user_id)
+    .bind(comment_id)
+    .bind(&now)
+    .bind(&game_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(MuteResult::Muted)
+}
+
+/// Remove the caller's game mute (a no-op when there is none).
+pub async fn unmute_game(db: &SqlitePool, user_id: &str, game_id: &str) -> sqlx::Result<()> {
+    sqlx::query(
+        "DELETE FROM notification_mutes WHERE user_id = ?1 AND game_id = ?2 \
+         AND thread_id IS NULL",
+    )
+    .bind(user_id)
+    .bind(game_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Remove the caller's thread mute (a no-op when there is none).
+pub async fn unmute_thread(db: &SqlitePool, user_id: &str, comment_id: &str) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM notification_mutes WHERE user_id = ?1 AND thread_id = ?2")
+        .bind(user_id)
+        .bind(comment_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// `NotificationMute` (API § F018).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationMute {
+    pub target: &'static str,
+    pub game: NotificationGame,
+    pub thread_id: Option<String>,
+    pub excerpt: Option<String>,
+    pub path: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationMuteList {
+    pub items: Vec<NotificationMute>,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MuteState {
+    pub muted: bool,
+    pub unread: i64,
+}
+
+/// Mute excerpt length in Unicode scalar values.
+pub const MUTE_EXCERPT_CHARS: i64 = 80;
+
+/// The caller's mutes whose game is visible to them, newest first.
+pub async fn list_mutes(db: &SqlitePool, user_id: &str) -> sqlx::Result<Vec<NotificationMute>> {
+    type Row = (
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+        i64,
+        Option<String>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT m.game_id, m.thread_id, m.created_at, g.title, g.thumbnail_ext, \
+           g.thumbnail_version, substr(c.body, 1, ?2) AS excerpt \
+         FROM notification_mutes m \
+         JOIN games g ON g.id = m.game_id \
+         LEFT JOIN comments c ON c.id = m.thread_id \
+         WHERE m.user_id = ?1 AND (g.published = 1 OR g.owner_id = ?1) \
+         ORDER BY m.created_at DESC, m.id DESC",
+    )
+    .bind(user_id)
+    .bind(MUTE_EXCERPT_CHARS)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(game_id, thread_id, created_at, title, thumb_ext, thumb_version, excerpt)| {
+                let path = match &thread_id {
+                    Some(t) => format!("/games/{game_id}?comment={t}"),
+                    None => format!("/games/{game_id}"),
+                };
+                NotificationMute {
+                    target: if thread_id.is_some() {
+                        "thread"
+                    } else {
+                        "game"
+                    },
+                    game: NotificationGame {
+                        thumbnail_url: thumbnail_url(&game_id, thumb_ext.as_deref(), thumb_version),
+                        id: game_id,
+                        title,
+                    },
+                    excerpt: thread_id.as_ref().and(excerpt),
+                    thread_id,
+                    path,
+                    created_at,
+                }
+            },
+        )
+        .collect())
+}
+
+// ---------------------------------------------------------------------------
 // Read path
 // ---------------------------------------------------------------------------
 
@@ -605,6 +930,9 @@ pub struct Notification {
     pub event_count: i64,
     pub game: Option<NotificationGame>,
     pub comment_id: Option<String>,
+    /// F018: `reply`: the thread root; `heart`: the hearted comment's top-level comment;
+    /// `pinned`: the pinned comment; else `None`.
+    pub thread_id: Option<String>,
     pub excerpt: Option<String>,
     pub owns_thread: bool,
     pub creator_heart: bool,
@@ -638,6 +966,8 @@ pub struct NotificationSettings {
     pub hearts: bool,
     pub follows: bool,
     pub new_games: bool,
+    /// F018: the `pinned` kind.
+    pub pins: bool,
 }
 
 impl Default for NotificationSettings {
@@ -648,6 +978,7 @@ impl Default for NotificationSettings {
             hearts: true,
             follows: true,
             new_games: true,
+            pins: true,
         }
     }
 }
@@ -768,8 +1099,8 @@ pub async fn mark_read(
 }
 
 pub async fn load_settings(db: &SqlitePool, user_id: &str) -> sqlx::Result<NotificationSettings> {
-    let row: Option<(bool, bool, bool, bool, bool)> = sqlx::query_as(
-        "SELECT comments, replies, hearts, follows, new_games FROM notification_settings \
+    let row: Option<(bool, bool, bool, bool, bool, bool)> = sqlx::query_as(
+        "SELECT comments, replies, hearts, follows, new_games, pins FROM notification_settings \
          WHERE user_id = ?",
     )
     .bind(user_id)
@@ -777,12 +1108,13 @@ pub async fn load_settings(db: &SqlitePool, user_id: &str) -> sqlx::Result<Notif
     .await?;
     Ok(match row {
         None => NotificationSettings::default(),
-        Some((comments, replies, hearts, follows, new_games)) => NotificationSettings {
+        Some((comments, replies, hearts, follows, new_games, pins)) => NotificationSettings {
             comments,
             replies,
             hearts,
             follows,
             new_games,
+            pins,
         },
     })
 }
@@ -795,6 +1127,7 @@ pub struct SettingsPatch {
     pub hearts: Option<bool>,
     pub follows: Option<bool>,
     pub new_games: Option<bool>,
+    pub pins: Option<bool>,
 }
 
 impl SettingsPatch {
@@ -804,6 +1137,7 @@ impl SettingsPatch {
             && self.hearts.is_none()
             && self.follows.is_none()
             && self.new_games.is_none()
+            && self.pins.is_none()
     }
 }
 
@@ -816,13 +1150,13 @@ pub async fn update_settings(
 ) -> sqlx::Result<()> {
     sqlx::query(
         "INSERT INTO notification_settings \
-           (user_id, comments, replies, hearts, follows, new_games, updated_at) \
+           (user_id, comments, replies, hearts, follows, new_games, pins, updated_at) \
          VALUES (?1, COALESCE(?2, 1), COALESCE(?3, 1), COALESCE(?4, 1), COALESCE(?5, 1), \
-           COALESCE(?6, 1), ?7) \
+           COALESCE(?6, 1), COALESCE(?8, 1), ?7) \
          ON CONFLICT (user_id) DO UPDATE SET \
            comments = COALESCE(?2, comments), replies = COALESCE(?3, replies), \
            hearts = COALESCE(?4, hearts), follows = COALESCE(?5, follows), \
-           new_games = COALESCE(?6, new_games), updated_at = ?7",
+           new_games = COALESCE(?6, new_games), pins = COALESCE(?8, pins), updated_at = ?7",
     )
     .bind(user_id)
     .bind(patch.comments)
@@ -831,6 +1165,7 @@ pub async fn update_settings(
     .bind(patch.follows)
     .bind(patch.new_games)
     .bind(stamp(now))
+    .bind(patch.pins)
     .execute(db)
     .await?;
     Ok(())
@@ -879,7 +1214,8 @@ pub async fn list_page(
     let mut bases = Vec::with_capacity(rows.len());
     for r in &rows {
         let kind: String = r.try_get("kind")?;
-        // The CHECK constraint keeps unknown kinds out; skip defensively anyway.
+        // Since F018 the column has no CHECK: `Kind` (the only writer's source of kinds) is the
+        // guard, and unknown stored kinds are skipped here.
         let Some(kind) = Kind::parse(&kind) else {
             continue;
         };
@@ -977,7 +1313,7 @@ pub async fn list_page(
     let target_of = |b: &Base| -> Option<String> {
         match b.kind {
             Kind::Comment | Kind::Reply => newest.get(&b.id).cloned(),
-            Kind::Heart => b.comment_id.clone(),
+            Kind::Heart | Kind::Pinned => b.comment_id.clone(),
             Kind::Follow | Kind::GamePublished => None,
         }
     };
@@ -992,12 +1328,17 @@ pub async fn list_page(
             comment_ids.insert(root.clone());
         }
     }
-    let mut comments: HashMap<String, (String, String)> = HashMap::new();
+    struct CommentInfo {
+        author: String,
+        parent_id: Option<String>,
+        excerpt: String,
+    }
+    let mut comments: HashMap<String, CommentInfo> = HashMap::new();
     if !comment_ids.is_empty() {
         let cj = serde_json::to_string(&comment_ids.iter().collect::<Vec<_>>())
             .unwrap_or_else(|_| "[]".into());
-        comments = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT id, user_id, substr(body, 1, ?2) FROM comments \
+        comments = sqlx::query_as::<_, (String, String, Option<String>, String)>(
+            "SELECT id, user_id, parent_id, substr(body, 1, ?2) FROM comments \
              WHERE id IN (SELECT value FROM json_each(?1))",
         )
         .bind(&cj)
@@ -1005,7 +1346,16 @@ pub async fn list_page(
         .fetch_all(db)
         .await?
         .into_iter()
-        .map(|(id, user, body)| (id, (user, body)))
+        .map(|(id, author, parent_id, excerpt)| {
+            (
+                id,
+                CommentInfo {
+                    author,
+                    parent_id,
+                    excerpt,
+                },
+            )
+        })
         .collect();
     }
 
@@ -1054,15 +1404,24 @@ pub async fn list_page(
         let excerpt = comment_id
             .as_ref()
             .and_then(|c| comments.get(c))
-            .map(|(_, body)| body.clone());
+            .map(|c| c.excerpt.clone());
         let owns_thread = b.kind == Kind::Reply
             && b.comment_id
                 .as_ref()
                 .and_then(|root| comments.get(root))
-                .is_some_and(|(author, _)| author == recipient);
+                .is_some_and(|c| c.author == recipient);
+        let thread_id = match b.kind {
+            Kind::Reply | Kind::Pinned => b.comment_id.clone(),
+            Kind::Heart => b.comment_id.as_ref().and_then(|c| {
+                comments
+                    .get(c)
+                    .map(|info| info.parent_id.clone().unwrap_or_else(|| c.clone()))
+            }),
+            Kind::Comment | Kind::Follow | Kind::GamePublished => None,
+        };
         let gid = b.game_id.as_deref().unwrap_or("");
         let path = match b.kind {
-            Kind::Comment | Kind::Reply | Kind::Heart => match &comment_id {
+            Kind::Comment | Kind::Reply | Kind::Heart | Kind::Pinned => match &comment_id {
                 Some(c) => format!("/games/{gid}?comment={c}"),
                 None => format!("/games/{gid}"),
             },
@@ -1081,6 +1440,7 @@ pub async fn list_page(
             event_count,
             game,
             comment_id,
+            thread_id,
             excerpt,
             owns_thread,
             creator_heart: b.kind == Kind::Heart && b.creator_heart,
@@ -1134,6 +1494,9 @@ mod tests {
             assert_eq!(Kind::parse(k.as_str()), Some(k));
         }
         assert_eq!(Kind::GamePublished.setting_column(), "new_games");
+        assert_eq!(Kind::Pinned.as_str(), "pinned");
+        assert_eq!(Kind::Pinned.setting_column(), "pins");
+        assert_eq!(pin_group("c1"), "pin:c1");
         assert_eq!(Kind::parse("x"), None);
     }
 

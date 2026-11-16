@@ -118,9 +118,30 @@ pub async fn build_game(state: &AppState, id: &str, viewer: Option<&str>) -> App
     let row = fetch_visible_game(state, id, viewer).await?;
     let rating = my_rating(state, id, viewer).await?;
     let fav = is_favorite(state, id, viewer).await?;
+    let muted = notifications_muted(state, id, viewer).await?;
     let achievements = achievement_defs(state, id).await?;
     let latest = latest_version(state, &row).await?;
-    Ok(row.game(rating, viewer, fav, achievements, latest))
+    let mut game = row.game(rating, viewer, fav, achievements, latest);
+    game.notifications_muted = muted;
+    Ok(game)
+}
+
+/// F018 `Game.notificationsMuted`: the viewer has a game mute (false when anonymous).
+async fn notifications_muted(
+    state: &AppState,
+    game_id: &str,
+    viewer: Option<&str>,
+) -> AppResult<bool> {
+    let Some(uid) = viewer else { return Ok(false) };
+    let r: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM notification_mutes WHERE user_id = ? AND game_id = ? \
+         AND thread_id IS NULL",
+    )
+    .bind(uid)
+    .bind(game_id)
+    .fetch_optional(&state.db)
+    .await?;
+    Ok(r.is_some())
 }
 
 /// F004: the current version's `game_versions` row (synthesised if missing).

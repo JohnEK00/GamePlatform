@@ -98,6 +98,16 @@ pub fn api_router() -> Router<AppState> {
             "/notifications/settings",
             get(notifications::get_settings).put(notifications::put_settings),
         )
+        // F018 mutes
+        .route("/notifications/mutes", get(notifications::list_mutes))
+        .route(
+            "/notifications/mutes/games/{gameId}",
+            put(notifications::mute_game).delete(notifications::unmute_game),
+        )
+        .route(
+            "/notifications/mutes/threads/{commentId}",
+            put(notifications::mute_thread).delete(notifications::unmute_thread),
+        )
         // games
         .route(
             "/games",

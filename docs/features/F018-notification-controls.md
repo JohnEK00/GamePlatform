@@ -219,3 +219,7 @@ backend-dev and frontend-dev can work in parallel against API § F018. frontend-
   - only the leader calls `osNotifications.show`.
 - Component tests: `MuteGameButton` (hidden without the field or when anonymous; optimistic toggle, revert on error, Undo); `CommentItem` mute (top-level only); `NotificationsPage` item mute (label per kind, refetch after success); `NotificationSettings` (`pins` switch hidden on older servers; `MutedList` empty state, rows, unmute, 404 hides the section).
 - `ApiClient.f018.test.ts`: paths and methods of the five calls, `pins` in settings.
+
+### F018 implementation notes (backend)
+- **Upgrade test, item 3 (corrected):** older migrations legitimately contain `_new` index names (`idx_games_pub_new`, `idx_games_owner_pub_new`, `idx_games_owner_new` from 0004). The test therefore asserts that the set of `_new` names is unchanged by 0017 and that no schema object mentions `notifications_new` or `notification_events_new`.
+- **Re-pinned after "mark all read":** "Mark all read" (`upTo`) and mark-read-on-mute also mark withdrawn (invisible) pinned rows as read. A comment re-pinned later restores that notification as read, consistent with "a read pinned notification is never changed".

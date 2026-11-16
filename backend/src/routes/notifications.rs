@@ -1,4 +1,4 @@
-//! F007: `/api/notifications` (list, unread count, mark read, settings).
+//! F007: `/api/notifications` (list, unread count, mark read, settings); F018: mutes.
 //!
 //! Order in every handler: auth (401) → `Limit::Notifications` (429) → parse/validate
 //! (400/422) → work. Query strings and bodies are therefore parsed inside the handlers, after
@@ -15,11 +15,13 @@ use serde_json::Value;
 use crate::AppState;
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
+use crate::extract::ApiPath;
 use crate::notifications::{
-    self as notif, Cursor, NotificationPage, NotificationSettings, SettingsPatch, UnreadCount,
+    self as notif, Cursor, MuteResult, MuteState, NotificationMuteList, NotificationPage,
+    NotificationSettings, SettingsPatch, UnreadCount,
 };
 use crate::ratelimit::Limit;
-use crate::routes::games::limit_user;
+use crate::routes::games::{fetch_visible_game, limit_user};
 
 pub const DEFAULT_LIMIT: i64 = 20;
 pub const MAX_LIMIT: i64 = 50;
@@ -183,9 +185,113 @@ pub async fn put_settings(
         hearts: field("hearts")?,
         follows: field("follows")?,
         new_games: field("newGames")?,
+        pins: field("pins")?,
     };
     if !patch.is_empty() {
         notif::update_settings(&state.db, &user.id, patch, Utc::now()).await?;
     }
     Ok(Json(notif::load_settings(&state.db, &user.id).await?))
+}
+
+// ---------------------------------------------------------------------------
+// F018 mutes (API § F018): auth → `Limit::Notifications` → lookup/validation → work
+// ---------------------------------------------------------------------------
+
+/// Path ids longer than this read as unknown (404) without touching the database.
+pub const MAX_ID_BYTES: usize = 64;
+
+const CAP_MESSAGE: &str = "You can mute at most 500 games and threads; unmute some in Settings";
+
+async fn mute_state(state: &AppState, user: &AuthUser, muted: bool) -> AppResult<Json<MuteState>> {
+    let (unread, _) = notif::unread_count(&state.db, &user.id).await?;
+    Ok(Json(MuteState { muted, unread }))
+}
+
+/// `GET /api/notifications/mutes`
+pub async fn list_mutes(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<NotificationMuteList>> {
+    limit(&state, &user)?;
+    let items = notif::list_mutes(&state.db, &user.id).await?;
+    Ok(Json(NotificationMuteList {
+        total: items.len() as i64,
+        items,
+    }))
+}
+
+/// `PUT /api/notifications/mutes/games/{gameId}` (idempotent; body ignored).
+pub async fn mute_game(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(game_id): ApiPath<String>,
+) -> AppResult<Json<MuteState>> {
+    limit(&state, &user)?;
+    if game_id.len() > MAX_ID_BYTES {
+        return Err(AppError::not_found("Game"));
+    }
+    fetch_visible_game(&state, &game_id, Some(&user.id)).await?;
+    match notif::mute_game(&state.db, &user.id, &game_id, Utc::now()).await? {
+        MuteResult::Muted => mute_state(&state, &user, true).await,
+        MuteResult::CapReached => Err(AppError::validation(CAP_MESSAGE)),
+        MuteResult::Gone => Err(AppError::not_found("Game")),
+    }
+}
+
+/// `DELETE /api/notifications/mutes/games/{gameId}` (idempotent; never 404).
+pub async fn unmute_game(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(game_id): ApiPath<String>,
+) -> AppResult<Json<MuteState>> {
+    limit(&state, &user)?;
+    if game_id.len() <= MAX_ID_BYTES {
+        notif::unmute_game(&state.db, &user.id, &game_id).await?;
+    }
+    mute_state(&state, &user, false).await
+}
+
+/// `PUT /api/notifications/mutes/threads/{commentId}` (idempotent; body ignored).
+pub async fn mute_thread(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(comment_id): ApiPath<String>,
+) -> AppResult<Json<MuteState>> {
+    limit(&state, &user)?;
+    if comment_id.len() > MAX_ID_BYTES {
+        return Err(AppError::not_found("Comment"));
+    }
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT game_id, parent_id FROM comments WHERE id = ?")
+            .bind(&comment_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (game_id, parent_id) = row.ok_or_else(|| AppError::not_found("Comment"))?;
+    fetch_visible_game(&state, &game_id, Some(&user.id))
+        .await
+        .map_err(|e| match e {
+            AppError::NotFound(_) => AppError::not_found("Comment"),
+            other => other,
+        })?;
+    if parent_id.is_some() {
+        return Err(AppError::validation("Only whole threads can be muted"));
+    }
+    match notif::mute_thread(&state.db, &user.id, &comment_id, Utc::now()).await? {
+        MuteResult::Muted => mute_state(&state, &user, true).await,
+        MuteResult::CapReached => Err(AppError::validation(CAP_MESSAGE)),
+        MuteResult::Gone => Err(AppError::not_found("Comment")),
+    }
+}
+
+/// `DELETE /api/notifications/mutes/threads/{commentId}` (idempotent; never 404).
+pub async fn unmute_thread(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(comment_id): ApiPath<String>,
+) -> AppResult<Json<MuteState>> {
+    limit(&state, &user)?;
+    if comment_id.len() <= MAX_ID_BYTES {
+        notif::unmute_thread(&state.db, &user.id, &comment_id).await?;
+    }
+    mute_state(&state, &user, false).await
 }

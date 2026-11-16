@@ -17,7 +17,7 @@ use crate::models::{
     Comment, CommentContext, CommentListPage, CommentThread, HeartResponse, Page, ThreadState,
     now_rfc3339, user_ref_from_row,
 };
-use crate::notifications::{self as notif, Kind, NewNotification};
+use crate::notifications::{self as notif, Dedupe, Kind, NewNotification};
 use crate::ratelimit::Limit;
 use crate::routes::games::{fetch_visible_game, limit_user, parse_paging};
 use crate::routes::screenshots::is_admin;
@@ -31,7 +31,7 @@ pub const REPLY_PREVIEW: i64 = 3;
 const THREAD_LOCKED: &str = "This thread is locked";
 
 /// F006 read shape (docs/ARCHITECTURE.md § F006, plus the F017 `pinned`, `locked` and
-/// `can_moderate` columns). Binds: `?1` = viewer id or NULL, `?2` = 1
+/// `can_moderate` columns and the F018 `thread_muted` column). Binds: `?1` = viewer id or NULL, `?2` = 1
 /// when the viewer is an admin. Callers continue numbering at `?3`.
 fn comment_select() -> &'static str {
     "SELECT c.id, c.game_id, c.parent_id, c.body, c.created_at, \
@@ -48,7 +48,9 @@ fn comment_select() -> &'static str {
      (?1 IS NOT NULL AND (?2 = 1 OR c.user_id = ?1 OR g.owner_id = ?1)) AS can_delete, \
      (c.pinned_at IS NOT NULL) AS pinned, \
      (c.parent_id IS NULL AND c.locked_at IS NOT NULL) AS locked, \
-     (?1 IS NOT NULL AND c.parent_id IS NULL AND (?2 = 1 OR g.owner_id = ?1)) AS can_moderate \
+     (?1 IS NOT NULL AND c.parent_id IS NULL AND (?2 = 1 OR g.owner_id = ?1)) AS can_moderate, \
+     (?1 IS NOT NULL AND c.parent_id IS NULL AND EXISTS (SELECT 1 FROM notification_mutes m \
+       WHERE m.user_id = ?1 AND m.game_id = c.game_id AND m.thread_id = c.id)) AS thread_muted \
      FROM comments c \
      JOIN users u ON u.id = c.user_id \
      JOIN games g ON g.id = c.game_id \
@@ -95,6 +97,7 @@ fn comment_from_row(row: &SqliteRow) -> Result<Comment, sqlx::Error> {
         pinned: row.try_get("pinned")?,
         locked: row.try_get("locked")?,
         can_moderate: row.try_get("can_moderate")?,
+        thread_muted: row.try_get("thread_muted")?,
     })
 }
 
@@ -464,7 +467,8 @@ async fn notify_new_comment(
             comment_id: None,
             actor_id: poster.to_string(),
             event_comment_id: Some(comment_id.to_string()),
-            dedupe_actor: false,
+            dedupe: Dedupe::None,
+            thread_id: None,
             now,
         };
         notif::notify_pool(&state.db, &n).await;
@@ -497,7 +501,8 @@ async fn notify_new_comment(
             comment_id: Some(root.to_string()),
             actor_id: poster.to_string(),
             event_comment_id: Some(comment_id.to_string()),
-            dedupe_actor: false,
+            dedupe: Dedupe::None,
+            thread_id: Some(root.to_string()),
             now,
         };
         notif::notify_pool(&state.db, &n).await;
@@ -662,7 +667,8 @@ pub async fn heart(
             comment_id: Some(id.clone()),
             actor_id: user.id.clone(),
             event_comment_id: None,
-            dedupe_actor: true,
+            dedupe: Dedupe::Actor,
+            thread_id: Some(meta.parent_id.clone().unwrap_or_else(|| id.clone())),
             now: chrono::Utc::now(),
         };
         notif::notify_pool(&state.db, &n).await;
@@ -762,11 +768,17 @@ pub async fn pin(
     ApiPath(id): ApiPath<String>,
 ) -> AppResult<Json<ThreadState>> {
     let meta = thread_tool_target(&state, &user, &id, Tool::Pin).await?;
-    // The first statement writes, so the deferred transaction takes the write lock at once.
-    let mut tx = state.db.begin().await?;
-    let unpinned_id: Option<String> = sqlx::query_scalar(
+    // F018 reads before it writes, so the transaction takes the write lock up front.
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    // F018: the state before this request (an idempotent re-PUT never notifies or restores).
+    let before: Option<(bool, String)> =
+        sqlx::query_as("SELECT pinned_at IS NOT NULL, user_id FROM comments WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let unpinned: Option<(String, String)> = sqlx::query_as(
         "UPDATE comments SET pinned_at = NULL \
-         WHERE game_id = ?1 AND pinned_at IS NOT NULL AND id <> ?2 RETURNING id",
+         WHERE game_id = ?1 AND pinned_at IS NOT NULL AND id <> ?2 RETURNING id, user_id",
     )
     .bind(&meta.game_id)
     .bind(&id)
@@ -786,13 +798,32 @@ pub async fn pin(
     .await?
     .ok_or_else(|| AppError::not_found("Comment"))?;
     tx.commit().await?;
-    // F018: pinned notification (recipient = the comment's author when not the pinner; dedupe
-    // once per comment). F017 writes none (docs/ARCHITECTURE.md § F017 additions).
+    // F018, after the commit and best effort: notify the author when this request pinned the
+    // comment (once per comment: group dedupe; never the pinner), then withdraw the replaced
+    // pin's unread notification.
+    if let Some((false, author)) = &before {
+        let n = NewNotification {
+            recipient_id: author.clone(),
+            kind: Kind::Pinned,
+            group_key: notif::pin_group(&id),
+            game_id: Some(meta.game_id.clone()),
+            comment_id: Some(id.clone()),
+            actor_id: user.id.clone(),
+            event_comment_id: None,
+            dedupe: Dedupe::Group,
+            thread_id: Some(id.clone()),
+            now: chrono::Utc::now(),
+        };
+        notif::notify_pool(&state.db, &n).await;
+    }
+    if let Some((old, author)) = &unpinned {
+        notif::withdraw_pool(&state.db, author, Kind::Pinned, &notif::pin_group(old)).await;
+    }
     Ok(Json(ThreadState {
         id,
         pinned,
         locked,
-        unpinned_id,
+        unpinned_id: unpinned.map(|(old, _)| old),
     }))
 }
 
@@ -803,15 +834,32 @@ pub async fn unpin(
     ApiPath(id): ApiPath<String>,
 ) -> AppResult<Json<ThreadState>> {
     thread_tool_target(&state, &user, &id, Tool::Pin).await?;
-    let st = update_thread_state(
-        &state,
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    // F018: whether this request changes the row from pinned to unpinned.
+    let before: Option<(bool, String)> =
+        sqlx::query_as("SELECT pinned_at IS NOT NULL, user_id FROM comments WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let (pinned, locked): (bool, bool) = sqlx::query_as(
         "UPDATE comments SET pinned_at = NULL WHERE id = ?1 AND parent_id IS NULL \
          RETURNING pinned_at IS NOT NULL, locked_at IS NOT NULL",
-        &id,
-        None,
     )
-    .await?;
-    Ok(Json(st))
+    .bind(&id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::not_found("Comment"))?;
+    tx.commit().await?;
+    // F018, after the commit and best effort: withdraw the author's unread pin notification.
+    if let Some((true, author)) = &before {
+        notif::withdraw_pool(&state.db, author, Kind::Pinned, &notif::pin_group(&id)).await;
+    }
+    Ok(Json(ThreadState {
+        id,
+        pinned,
+        locked,
+        unpinned_id: None,
+    }))
 }
 
 /// `PUT /api/comments/{id}/lock` (idempotent).
