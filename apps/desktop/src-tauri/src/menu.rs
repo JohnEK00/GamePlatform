@@ -1,7 +1,8 @@
 //! Native application menu. Window actions (reload, fullscreen, devtools, about, quit) run in Rust;
 //! navigation items are forwarded to the webview as a `MENU_EVENT` event whose payload is the item id
-//! (`"upload"`, `"open-folder"`, `"settings"`, `"feed"`, `"notifications"`, `"docs"`, `"screenshot"`, `"controls"`),
-//! handled in src/nativeMenu.ts. `"notifications"` is View → Notifications (`CmdOrCtrl+Shift+N`, F007).
+//! (`"upload"`, `"open-folder"`, `"settings"`, `"feed"`, `"notifications"`, `"collections"`, `"docs"`, `"screenshot"`,
+//! `"controls"`), handled in src/nativeMenu.ts. `"notifications"` is View → Notifications (`CmdOrCtrl+Shift+N`, F007);
+//! `"collections"` is View → Collections (`CmdOrCtrl+Shift+L`, F008), which opens the user's collections.
 //! `"screenshot"` (View → Take Screenshot, `CmdOrCtrl+Shift+S`) is a native accelerator, so it fires even while
 //! the sandboxed game iframe has focus; the webview turns it into `PLAYER_SCREENSHOT_EVENT`. Likewise
 //! `"controls"` (View → Controls, `CmdOrCtrl+Shift+K`) becomes `PLAYER_CONTROLS_EVENT` (opens the controls panel).
@@ -22,6 +23,7 @@ const FORWARDED: &[&str] = &[
     "settings",
     "feed",
     "notifications",
+    "collections",
     "docs",
     "screenshot",
     "controls",
@@ -85,6 +87,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(
             &MenuItemBuilder::with_id("notifications", "&Notifications")
                 .accelerator("CmdOrCtrl+Shift+N")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("collections", "Co&llections")
+                .accelerator("CmdOrCtrl+Shift+L")
                 .build(app)?,
         )
         .item(
@@ -200,5 +207,6 @@ mod tests {
         assert!(FORWARDED.contains(&"screenshot"));
         assert!(FORWARDED.contains(&"controls"));
         assert!(FORWARDED.contains(&"notifications"));
+        assert!(FORWARDED.contains(&"collections"));
     }
 }

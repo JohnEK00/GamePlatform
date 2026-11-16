@@ -71,11 +71,20 @@ describe("native menu events", () => {
       ["settings", "/settings"],
       ["feed", "/feed"],
       ["notifications", "/notifications"],
+      ["collections", "/collections"],
       ["docs", "/docs"],
     ]) {
       m.handler!({ payload: id });
       expect(window.location.hash).toBe(`#${route}`);
     }
+  });
+
+  it("collections navigates to #/collections from any route", async () => {
+    cleanup = installNativeIntegrations();
+    await flush();
+    window.location.hash = "#/play/abc";
+    m.handler!({ payload: "collections" });
+    expect(window.location.hash).toBe("#/collections");
   });
 
   it("dispatches screenshot and controls events without navigating", async () => {

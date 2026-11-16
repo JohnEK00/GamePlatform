@@ -1,6 +1,8 @@
 /**
  * Webview side of the native menu (src-tauri/src/menu.rs) and the F11 shortcut.
  * Rust handles window actions itself; navigation items arrive as the `app-menu` event with the item id.
+ * `"collections"` (View → Collections, F008) navigates to `/collections`, which the UI redirects to the user's
+ * collections page (or to login when signed out).
  * `"screenshot"` (View → Take Screenshot) dispatches `PLAYER_SCREENSHOT_EVENT` for the mounted player or Studio
  * preview and does not navigate; with neither mounted it does nothing. `"controls"` (View → Controls) likewise
  * dispatches `PLAYER_CONTROLS_EVENT` to open the controls panel, without navigating.
@@ -17,6 +19,7 @@ const ROUTES: Record<string, string> = {
   settings: "/settings",
   feed: "/feed",
   notifications: "/notifications",
+  collections: "/collections",
   docs: "/docs",
   "open-folder": "/studio",
 };
