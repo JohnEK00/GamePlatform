@@ -34,16 +34,16 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F007 | In-app notifications | M | shipped |
 | F012 | Engine bitmap fonts, 9-slice and UI widgets | M | shipped |
 | F017 | Creator comment tools: pin, lock and "top" sort | S | shipped |
-| F008 | Collections (curated game lists) | M | specced |
+| F008 | Collections (curated game lists) | M | shipped |
+| F018 | Notification controls: mutes, shared polling, "pinned" notifications | M | specced |
+| F021 | Collection activity: feed items and "added to a collection" notifications | S | proposed |
+| F020 | Game comment settings: turn comments off, slow mode | S | proposed |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
-| F018 | Notification controls: mutes, shared polling, "pinned" notifications | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
+| F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
+| F016 | Gamepad remapping and synced control bindings | M | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
-| F016 | Gamepad remapping and synced control bindings | M | proposed |
-| F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
-| F020 | Game comment settings: turn comments off, slow mode | S | proposed |
-| F021 | Collection activity: feed items and "added to a collection" notifications | S | proposed |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
@@ -123,7 +123,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: followers see what their friends play, and players get a personal gallery.
 - **Areas**: backend (activity kind and CHECK rebuild, profile endpoint), frontend (feed item, profile tab). No engine changes.
 
-### F008: Collections (M, specced → [spec](features/F008-collections.md))
+### F008: Collections (M, shipped → [spec](features/F008-collections.md))
 - **Pitch**:
   - Users create ordered lists of up to 100 games ("Best platformers") with a title, a description and a one-line note per game. A collection is public or private ("play later").
   - **+ Collection** on every game page opens a checklist of your collections (add/remove in place, or create one with the game already in it).
@@ -184,17 +184,22 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0015_f017.sql`: `comments.pinned_at`, `comments.locked_at`, one partial unique index; `sort=top`; four pin/lock endpoints; `Limit::ThreadTools`; lock check in the guarded reply insert), frontend (sort toggle, pinned slot, Pin/Lock buttons, locked-thread UI), desktop (verification only). No engine changes.
 - **Depends on**: F006 and F007 (shipped).
 
-### F018: Notification controls: mutes, shared polling and "pinned" notifications (S, proposed; after F007, F017)
-- **Pitch**: "Mute notifications for this game" (owners of busy games) and "Mute this thread" (players in long threads), stored per user and checked in the F007 upsert. A `BroadcastChannel` leader tab, so only one tab per browser polls `unread-count` and the others receive the result. A new `pinned` kind ("Mia pinned your comment on Space Dodge", from F017's `// F018:` hook, once per comment) with a `pins` setting; this needs the one-time `notifications` CHECK rebuild described in ARCHITECTURE § F017, which should also drop the kind CHECK in favour of Rust validation so later kinds need no rebuild.
-- **User value**: creators of popular games keep the bell useful, heavy users with many tabs make fewer requests, and players learn when a creator featured their comment.
-- **Areas**: backend (`notification_mutes` table, two endpoints, a `NOT EXISTS` in the upsert, the notification table rebuild, `pinned` kind), frontend (mute actions on the game page and threads, tab leader election in `NotificationsProvider`, the `pinned` item text and setting). No engine or desktop changes.
+### F018: Notification controls: mutes, shared polling and "pinned" notifications (M, specced → [spec](features/F018-notification-controls.md))
+- **Pitch**:
+  - "Mute notifications" for a game (game page) and "Mute thread" (top-level comments and `/notifications` items), stored server-side in `notification_mutes` and checked in the F007 write path next to the per-kind settings. Muting marks existing unread notifications in scope as read. A "Muted" list with Unmute in Settings (cap 500).
+  - One polling tab per browser: tabs of the same user and server elect a leader with the Web Locks API, and only the leader polls `unread-count`, sharing results over `BroadcastChannel`. Without those APIs every tab polls as before.
+  - A `pinned` kind ("Mia pinned your comment on Space Dodge") from F017's hook: once per comment, withdrawn if unpinned while unread, with a `pins` setting.
+  - Migration `0017_f018.sql` rebuilds `notifications` and `notification_events` once, FK- and trigger-safe, without the `kind` CHECK, so later kinds (F021) need no rebuild.
+- **User value**: creators of popular games keep the bell useful, players leave long threads behind, heavy users with many tabs make far fewer requests, and players learn when a creator featured their comment.
+- **Areas**: backend (migration, five mute endpoints, write-path mute check and group dedupe, `pinned` kind, `threadId`, `Game.notificationsMuted`, `Comment.threadMuted`), frontend (tab coordinator, mute buttons, item mute action, Muted list, `pins` switch, `pinned` text), desktop (verification only). No engine changes.
+- **Depends on**: F007 and F017 (shipped). Unblocks F021.
 
 ### F019: Engine UI widgets 2 (S, proposed; after F012)
 - **Pitch**: `ui.slider` (volume, difficulty), `ui.toggle`, a single-line `ui.textField` (uses `input.typed`, for name entry), and `ui.list` (a vertical list with keyboard and gamepad scrolling), all following the F012 theme, phase and navigation rules. Left and right adjust a focused slider.
 - **User value**: settings and name-entry screens without custom code, completing the F012 menu toolkit.
 - **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.
 
-### F021: Collection activity: feed items and notifications (S, proposed; after F008, F018)
+### F021: Collection activity: feed items and notifications (S, proposed; after F008 (shipped), F018)
 - **Pitch**: a F002 feed kind `collectionUpdated` (games added to a public collection by someone you follow, coalesced per collection per UTC day), and a F007 notification for creators: "Mia added Space Dodge to *Cozy games*" (once per collection and game, with a `collections` setting). It needs F018's removal of the `notifications.kind` CHECK.
 - **User value**: curators reach their followers, and creators learn when players champion their games.
 - **Areas**: backend (activity kind and CHECK rebuild for `activity_events`, notification kind and setting, hooks in the add endpoint), frontend (feed item, notification text, setting). No engine or desktop changes.

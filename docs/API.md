@@ -1129,3 +1129,114 @@ type Report = { ...F005 and review 3, targetGameId: string | null }   // null fo
 
 ### Web routes
 `/c/{id}`, `/u/{username}/collections` and `/collections` are SPA routes. With `WEB_DIST` set they fall back to `index.html` with `no-cache` (review 5 M1). F008 adds no backend-served files, and `/api/*` stays uncompressed.
+
+
+---
+
+## F018 additions
+
+Notification controls: mutes, shared polling and `pinned` notifications (spec: `docs/features/F018-notification-controls.md`). All earlier rules apply, including F007 (notifications), F017 (pins) and the v2 error shape.
+
+### Types
+```ts
+type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished" | "pinned"
+
+type Notification = {
+  ...F007,
+  threadId: string | null;        // reply: the thread's top-level comment; heart: the top-level comment of the hearted comment's thread
+                                  // (the hearted comment itself when it is top-level); pinned: the pinned comment; else null
+}
+
+type NotificationSettings = {
+  ...F007,
+  pins: boolean;                  // "pinned" kind; default true
+}
+
+type Game = { ...earlier, notificationsMuted: boolean }      // GET /api/games/{id} only: the viewer muted this game; false when anonymous
+type Comment = { ...F017, threadMuted: boolean }              // top-level only: the viewer muted this thread; false on replies and when anonymous
+
+type MuteTarget = "game" | "thread"
+
+type NotificationMute = {
+  target: MuteTarget;
+  game: NotificationGame;         // the game (for threads: the thread's game)
+  threadId: string | null;        // thread: the top-level comment id; game: null
+  excerpt: string | null;         // thread: first 80 chars (Unicode scalar values) of the top-level comment's current body; game: null
+  path: string;                   // game: "/games/{gameId}"; thread: "/games/{gameId}?comment={threadId}"
+  createdAt: string;              // RFC3339 millis Z, when it was muted
+}
+
+type NotificationMuteList = {
+  items: NotificationMute[];      // createdAt desc, then insertion order desc; only mutes whose game is visible to the caller
+  total: number;                  // items.length (all listed mutes; there is no paging)
+}
+
+type MuteState = {
+  muted: boolean;                 // the state after the request
+  unread: number;                 // UnreadCount.unread after the request (mutes mark matching notifications read)
+}
+```
+- Clients must treat a missing `threadId` as `null`, a missing `pins` as "setting not supported" (hide the switch), and a missing `notificationsMuted`/`threadMuted` as "muting not supported" (hide the buttons).
+- Clients must still ignore notifications with an unknown `kind` (F007).
+
+### Endpoints
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET 🔒 | /api/notifications/mutes | – | `NotificationMuteList` |
+| PUT 🔒 | /api/notifications/mutes/games/{gameId} | – | `MuteState` `{ muted: true }` (idempotent) |
+| DELETE 🔒 | /api/notifications/mutes/games/{gameId} | – | `MuteState` `{ muted: false }` (idempotent) |
+| PUT 🔒 | /api/notifications/mutes/threads/{commentId} | – | `MuteState` `{ muted: true }` (idempotent) |
+| DELETE 🔒 | /api/notifications/mutes/threads/{commentId} | – | `MuteState` `{ muted: false }` (idempotent) |
+| PUT 🔒 | /api/notifications/settings | `Partial<NotificationSettings>` (now including `pins`) | `NotificationSettings` |
+
+- Request bodies are ignored on the four mute writes.
+- **`PUT …/mutes/games/{gameId}`**, checked in this order:
+  1. Auth → 401.
+  2. `Limit::Notifications` → 429.
+  3. `gameId` longer than 64 bytes, unknown, or not visible to the caller under `GET /api/games/{id}` rules → 404 `not_found` "Game not found".
+  4. Already muted → 200 (no cap check; `createdAt` unchanged; step 6 still runs).
+  5. The caller already has **500** mutes (games and threads together) → 422 `validation` "You can mute at most 500 games and threads; unmute some in Settings".
+  6. Mute, and mark every **unread** notification of the caller with `game.id = gameId` as read (any kind). Returns `{ muted: true, unread }`.
+- **`PUT …/mutes/threads/{commentId}`**, checked in this order:
+  1. Auth → 401.
+  2. `Limit::Notifications` → 429.
+  3. `commentId` longer than 64 bytes, unknown, or its game not visible to the caller → 404 `not_found` "Comment not found".
+  4. The comment is a reply → 422 `validation` "Only whole threads can be muted".
+  5. Already muted → 200 (as above).
+  6. 500 mutes → 422 (as above).
+  7. Mute, and mark the caller's **unread** notifications in the thread's scope (below) as read. Returns `{ muted: true, unread }`.
+  - A comment deleted between step 3 and the write → 404.
+- **`DELETE …`** (both): auth → 401; `Limit::Notifications` → 429; then remove the caller's mute of that target if any. Never 404 (unknown, deleted, invisible and never-muted targets all return `{ muted: false, unread }`). Unmuting marks nothing unread and restores nothing.
+- **`GET /api/notifications/mutes`**: auth → 401; `Limit::Notifications` → 429. Mutes whose game is not visible to the caller are kept but not listed.
+
+### Mute scopes (server side; checked when a notification is written)
+| Mute | Suppresses, for the muting user only |
+|---|---|
+| game `G` | every kind whose notification has `game.id = G`: `comment`, `reply`, `heart`, `pinned`, `gamePublished` |
+| thread `T` (a top-level comment of game `G`) | `reply` in thread `T`; `heart` on `T` or on any reply in `T`; `pinned` of `T` |
+
+- `follow` is never muted by these. A `comment` notification (new top-level comments on your game) is muted by a game mute only.
+- Mutes and the per-kind settings both apply: a notification is written only when the kind is on **and** no mute matches.
+- Mutes stop **new** events, including joining an existing unread group, and heart re-toggles while muted restore nothing (review 5 L5 rule).
+- Mutes don't expire. They are removed by unmuting, or when the game, the thread's top-level comment or the user is deleted.
+
+### Pinned notifications (server side; no new client calls)
+| Kind | Written when | Recipient | Group | Joins an unread group? |
+|---|---|---|---|---|
+| `pinned` | `PUT /api/comments/{id}/pin` changes the comment from unpinned to pinned | the comment's author, unless they are the pinner | per comment | n/a (once per recipient and comment while any notification for it is stored) |
+
+- Fields: `actors` = the pinner(s); `game`; `commentId` = the pinned comment; `excerpt` of it; `threadId` = the comment; `ownsThread` and `creatorHeart` false; `eventCount` = `actorCount`; `path` = `/games/{gameId}?comment={commentId}`.
+- **Withdrawal.** When the comment is unpinned (`DELETE /api/comments/{id}/pin`, or replaced by another pin, i.e. it is the response's `unpinnedId`) and the author's `pinned` notification for it is still **unread**, it stops being listed and counted. Pinning it again while that withdrawn notification is stored restores it without changing its `updatedAt`. A read `pinned` notification is never changed.
+- Lock and unlock still never notify (F017).
+- Settings switch: `pins`.
+
+### Retention and privacy
+- F007 retention applies to `pinned` notifications unchanged.
+- Mutes are private: no endpoint reveals who muted a game or thread.
+
+### Rate limits
+- The five new endpoints share **`Limit::Notifications`: 120/min, per user** with the F007 endpoints. Over the limit → 429 `rate_limited` with `Retry-After`.
+- Pin notifications are written by the pin endpoints and don't use this bucket (they keep `Limit::ThreadTools`).
+
+### Polling (client behaviour, informative)
+Web clients coordinate tabs (spec § 2.6): in browsers with the Web Locks API and `BroadcastChannel`, one tab per user and server polls `GET /api/notifications/unread-count` and shares the result. The endpoint and its `pollAfterSecs` are unchanged.

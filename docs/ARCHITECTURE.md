@@ -848,3 +848,215 @@ Collections (spec: `docs/features/F008-collections.md`). Two new tables, one `re
   - Reordering is button-based (Move up / Move down) and always sends the full order, so the client never computes partial positions.
 - **Desktop**: the native menu forwards a new `"collections"` id (View → Collections, `CmdOrCtrl+Shift+L`) → `/collections`. No other desktop code.
 - **Ownership**: the migration, `routes/collections.rs`, the `reports.rs` changes, `Limit::Collections`, the seed collection and `tests/f008.rs` belong to backend-dev. Types, client, `collections.ts`, the components, pages, styles and UI tests belong to frontend-dev. `menu.rs`, `nativeMenu.ts` and its test belong to desktop-dev.
+
+
+## F018 additions
+Notification controls (spec: `docs/features/F018-notification-controls.md`). One new table, one new settings column, a one-time rebuild of `notifications` and `notification_events`, five endpoints in `routes/notifications.rs`, and a client-side tab coordinator. No new dependencies (Rust or JS), no engine or desktop code.
+- **Model.**
+  - A mute is a row in `notification_mutes`: (user, game, optional thread). A game mute has `thread_id NULL`. A thread mute stores the thread's top-level comment **and** its game, so every write-path check is one probe of the `(user_id, game_id, …)` index prefix.
+  - Mutes are checked **on write**, in the same statement that checks the per-kind settings, like F007 settings. Reads don't filter by mutes. Notifications written before a mute are marked read at mute time instead, so the list and the count need no extra join.
+  - `pinned` is a normal F007 kind (group `pin:{commentId}`, `comment_id` = the pinned comment). It adds a third dedupe mode, **group dedupe**: at most one notification per recipient and group while any row for it is stored. It also adds a **withdraw** operation that tombstones every live event of the recipient's unread group (the F007 L1 `retracted_at` mechanism, for all actors).
+  - `notifications.kind` loses its CHECK. `notifications::Kind` is the only list of kinds, as `TARGET_TYPES` is for `reports` since F008. F021 and later kinds need no rebuild.
+- **Data**: migration `backend/migrations/0017_f018.sql` runs after `0016_f008.sql`. Normative, in this order:
+  ```sql
+  -- F018: notification controls (docs/ARCHITECTURE.md § F018 additions).
+
+  -- 1. Mutes.
+  CREATE TABLE notification_mutes (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,                    -- list tie-break only; not exposed
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      game_id    TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE, -- the muted game, or the muted thread's game
+      thread_id  TEXT REFERENCES comments(id) ON DELETE CASCADE,       -- NULL = game mute; else a top-level comment of game_id
+      created_at TEXT NOT NULL                                         -- RFC3339 millis Z
+  );
+  -- One row per target; its (user_id, game_id) prefix serves the write-path mute check.
+  CREATE UNIQUE INDEX idx_notification_mutes_target ON notification_mutes(user_id, game_id, IFNULL(thread_id, ''));
+  CREATE INDEX idx_notification_mutes_user_created  ON notification_mutes(user_id, created_at DESC, id DESC);     -- the list
+  CREATE INDEX idx_notification_mutes_game          ON notification_mutes(game_id);                               -- game delete cascade
+  CREATE INDEX idx_notification_mutes_thread        ON notification_mutes(thread_id) WHERE thread_id IS NOT NULL; -- comment delete cascade, thread unmute
+
+  -- 2. The "pinned" kind's setting.
+  ALTER TABLE notification_settings ADD COLUMN pins INTEGER NOT NULL DEFAULT 1 CHECK (pins IN (0, 1));
+
+  -- 3. Rebuild notifications without the kind CHECK (kinds are validated in Rust: notifications::Kind).
+  --    This runs inside sqlx's migration transaction with foreign_keys = ON, which can't be switched off
+  --    inside a transaction. With FKs on, DROP TABLE runs an implicit DELETE that fires ON DELETE CASCADE
+  --    actions, so the old parent must never be dropped while a child table references it:
+  --      a. drop the 0014 trigger first (no step below may fire it; it is recreated in step 4);
+  --      b. copy the parent, then copy the child into a new child that references the NEW parent;
+  --      c. drop the old child, then the old parent (nothing references it any more, so nothing cascades);
+  --      d. rename. SQLite >= 3.26 (legacy_alter_table OFF; sqlx 0.8 bundles a newer SQLite) rewrites
+  --         notification_events_new's REFERENCES notifications_new(id) to notifications(id) and renames
+  --         the sqlite_sequence rows.
+  DROP TRIGGER notification_events_last_gone;
+
+  CREATE TABLE notifications_new (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,      -- Notification.id; stable
+      recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind         TEXT NOT NULL,                          -- notifications::Kind::as_str (validated in Rust; no CHECK)
+      group_key    TEXT NOT NULL,
+      game_id      TEXT REFERENCES games(id) ON DELETE CASCADE,      -- NULL only for 'follow'
+      comment_id   TEXT REFERENCES comments(id) ON DELETE CASCADE,   -- 'heart': hearted comment; 'reply': thread root; 'pinned': pinned comment; else NULL
+      read_at      TEXT,                                   -- NULL = unread; RFC3339 millis Z
+      created_at   TEXT NOT NULL,                          -- first event
+      updated_at   TEXT NOT NULL                           -- latest event (ordering key)
+  );
+  INSERT INTO notifications_new (id, recipient_id, kind, group_key, game_id, comment_id, read_at, created_at, updated_at)
+  SELECT id, recipient_id, kind, group_key, game_id, comment_id, read_at, created_at, updated_at
+  FROM notifications ORDER BY id;
+
+  CREATE TABLE notification_events_new (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      notification_id INTEGER NOT NULL REFERENCES notifications_new(id) ON DELETE CASCADE,
+      actor_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      comment_id      TEXT REFERENCES comments(id) ON DELETE CASCADE,   -- 'comment'/'reply': the new comment; else NULL
+      created_at      TEXT NOT NULL,
+      retracted_at    TEXT                                              -- NULL = live; RFC3339 millis Z (0014 L1)
+  );
+  INSERT INTO notification_events_new (id, notification_id, actor_id, comment_id, created_at, retracted_at)
+  SELECT id, notification_id, actor_id, comment_id, created_at, retracted_at
+  FROM notification_events ORDER BY id;
+
+  -- Carry the AUTOINCREMENT high-water marks over, so ids of deleted rows are never reused
+  -- (clients dedupe notifications by id). The copies above only set the new sequences to MAX(id).
+  DELETE FROM sqlite_sequence WHERE name IN ('notifications_new', 'notification_events_new');
+  INSERT INTO sqlite_sequence (name, seq)
+  SELECT name || '_new', seq FROM sqlite_sequence WHERE name IN ('notifications', 'notification_events');
+
+  DROP TABLE notification_events;   -- the old child: nothing references it and its trigger is gone
+  DROP TABLE notifications;         -- the old parent: no table references it any more, so no cascade runs
+  ALTER TABLE notifications_new RENAME TO notifications;
+  ALTER TABLE notification_events_new RENAME TO notification_events;
+
+  -- 4. Indexes (identical to 0013) and the 0014 trigger.
+  CREATE UNIQUE INDEX idx_notifications_open_group ON notifications(recipient_id, kind, group_key) WHERE read_at IS NULL;
+  CREATE INDEX idx_notifications_group             ON notifications(recipient_id, kind, group_key);
+  CREATE INDEX idx_notifications_recipient_updated ON notifications(recipient_id, updated_at DESC, id DESC);
+  CREATE INDEX idx_notifications_game     ON notifications(game_id)    WHERE game_id IS NOT NULL;
+  CREATE INDEX idx_notifications_comment  ON notifications(comment_id) WHERE comment_id IS NOT NULL;
+  CREATE INDEX idx_notifications_read_at  ON notifications(read_at)    WHERE read_at IS NOT NULL;
+  CREATE INDEX idx_notifications_updated  ON notifications(updated_at);
+
+  CREATE UNIQUE INDEX idx_notification_events_dedupe  ON notification_events(notification_id, actor_id, IFNULL(comment_id, ''));
+  CREATE INDEX idx_notification_events_actor          ON notification_events(actor_id);
+  CREATE INDEX idx_notification_events_comment        ON notification_events(comment_id) WHERE comment_id IS NOT NULL;
+
+  CREATE TRIGGER notification_events_last_gone AFTER DELETE ON notification_events
+  WHEN NOT EXISTS (SELECT 1 FROM notification_events WHERE notification_id = OLD.notification_id)
+  BEGIN
+      DELETE FROM notifications WHERE id = OLD.notification_id;
+  END;
+  ```
+  - `notification_fanouts` and `notification_settings` don't reference the rebuilt tables and are untouched, apart from the new `pins` column. No other table references `notifications` or `notification_events` (checked against `0001`–`0016`).
+  - The copy holds the write lock for the duration of the migration. With the F007 cap of 200 notifications per user, that is at most a few hundred thousand rows per thousand users, which is acceptable at startup.
+  - The `sqlite_stat1` rows of the dropped tables are dropped with them. The startup `PRAGMA optimize = 0x10002` (N1) re-analyses the new tables.
+  - The upgrade test in the spec § 6 is required. It checks that rows and ids are preserved, `foreign_key_check` is empty, the FK target is rewritten, there are no `_new` leftovers, the indexes and trigger exist and work, and the sequence is preserved.
+- **Write path** (`backend/src/notifications.rs`; `try_notify` keeps its single `BEGIN IMMEDIATE` transaction).
+  - Binds: `?1` recipient, `?2` kind, `?3` group, `?4` actor, `?5` game id, `?6` comment id, `?7` now, `?8` dedupe mode (0 none, 1 actor, 2 group), `?9` thread id.
+  - `{col}` is the kind's settings column, from the fixed Rust `match` (`Kind::Pinned` → `pins`).
+  - The shared mute predicate:
+  ```sql
+  -- MUTED(?1, ?5, ?9): a game mute of ?5, or a mute of thread ?9 (thread mutes also store their game).
+  EXISTS (SELECT 1 FROM notification_mutes m
+          WHERE m.user_id = ?1 AND m.game_id = ?5 AND (m.thread_id IS NULL OR m.thread_id = ?9))
+  ```
+  `?5 IS NULL` (follow) never matches. `?9 IS NULL` matches game mutes only.
+  ```sql
+  -- 1. restore (dedupe modes 1 and 2): un-tombstone; mode 2 restores every actor's events
+  UPDATE notification_events SET retracted_at = NULL
+  WHERE retracted_at IS NOT NULL AND (?8 = 2 OR actor_id = ?4)
+    AND notification_id IN (SELECT id FROM notifications WHERE recipient_id = ?1 AND kind = ?2 AND group_key = ?3)
+    AND NOT EXISTS (SELECT 1 FROM notification_settings s WHERE s.user_id = ?1 AND s.{col} = 0)
+    AND NOT MUTED(?1, ?5, ?9);
+  -- rows > 0 → commit and stop (no bump)
+
+  -- 2. join or open the unread group
+  INSERT INTO notifications (recipient_id, kind, group_key, game_id, comment_id, created_at, updated_at)
+  SELECT ?1, ?2, ?3, ?5, ?6, ?7, ?7
+  WHERE NOT EXISTS (SELECT 1 FROM notification_settings s WHERE s.user_id = ?1 AND s.{col} = 0)
+    AND NOT MUTED(?1, ?5, ?9)
+    AND (?8 = 0
+         OR (?8 = 1 AND NOT EXISTS (SELECT 1 FROM notifications d JOIN notification_events e ON e.notification_id = d.id
+                                    WHERE d.recipient_id = ?1 AND d.kind = ?2 AND d.group_key = ?3 AND e.actor_id = ?4))
+         OR (?8 = 2 AND NOT EXISTS (SELECT 1 FROM notifications d
+                                    WHERE d.recipient_id = ?1 AND d.kind = ?2 AND d.group_key = ?3)))
+  ON CONFLICT (recipient_id, kind, group_key) WHERE read_at IS NULL
+  DO UPDATE SET updated_at = excluded.updated_at
+  RETURNING id;
+
+  -- 3. the event: unchanged (INSERT OR IGNORE INTO notification_events …)
+  ```
+  - **Withdraw** (`withdraw_pool(pool, recipient, kind, group)`, best effort, autocommit; `?4` = now):
+    ```sql
+    UPDATE notification_events SET retracted_at = ?4
+    WHERE retracted_at IS NULL
+      AND notification_id IN (SELECT id FROM notifications
+                              WHERE recipient_id = ?1 AND kind = ?2 AND group_key = ?3 AND read_at IS NULL)
+    ```
+  - **Fan-out** (`fan_out_chunk`, the `gamePublished` insert) gains `AND NOT EXISTS (SELECT 1 FROM notification_mutes m WHERE m.user_id = r.value AND m.game_id = ?3 AND m.thread_id IS NULL)`.
+  - **Hooks** (`routes/comments.rs`):
+    - Thread ids: for a reply, `thread_id = Some(root)`; for a heart, `thread_id = Some(meta.parent_id.unwrap_or(id))`; for comments and follows, `None`. `gamePublished` doesn't apply (fan-out).
+    - `pin`: inside the existing transaction, first read `pinned_at IS NOT NULL, user_id` of the comment (so an idempotent re-`PUT` never notifies or restores), and change the unpin statement to `RETURNING id, user_id`. After `tx.commit()`:
+      - if the row went from unpinned to pinned and its author is not the caller, `notify` with `Kind::Pinned`, group `pin:{id}`, `game_id`, `comment_id = id`, `event_comment_id = None`, `Dedupe::Group` and `thread_id = id`;
+      - if a previous pin was removed (`unpinned_id = a`, author `u`), `withdraw_pool(u, Pinned, "pin:{a}")`.
+    - `unpin`: in one transaction, read `pinned_at IS NOT NULL, user_id`, then run the F017 `UPDATE`. After the commit, if the comment was pinned, `withdraw_pool(author, Pinned, "pin:{id}")`.
+- **Mute statements** (`notifications.rs`; each `PUT` is one `BEGIN IMMEDIATE` transaction; `?1` user, `?2` target id, `?3` now):
+  ```sql
+  -- game: already muted?
+  SELECT 1 FROM notification_mutes WHERE user_id = ?1 AND game_id = ?2 AND thread_id IS NULL;
+  -- if not: insert under the cap (0 rows → 422)
+  INSERT INTO notification_mutes (user_id, game_id, thread_id, created_at)
+  SELECT ?1, ?2, NULL, ?3 WHERE (SELECT COUNT(*) FROM notification_mutes WHERE user_id = ?1) < 500;
+  -- always: mark read
+  UPDATE notifications SET read_at = ?3 WHERE recipient_id = ?1 AND read_at IS NULL AND game_id = ?2;
+
+  -- thread (?2 = top-level comment id): already muted?
+  SELECT 1 FROM notification_mutes WHERE user_id = ?1 AND thread_id = ?2;
+  -- if not: insert under the cap; 0 rows → re-check the comment (gone → 404) else 422
+  INSERT INTO notification_mutes (user_id, game_id, thread_id, created_at)
+  SELECT ?1, c.game_id, c.id, ?3 FROM comments c
+  WHERE c.id = ?2 AND c.parent_id IS NULL
+    AND (SELECT COUNT(*) FROM notification_mutes WHERE user_id = ?1) < 500;
+  -- always: mark read in the thread's scope (?4 = the thread's game id)
+  UPDATE notifications SET read_at = ?3
+  WHERE recipient_id = ?1 AND read_at IS NULL AND game_id = ?4
+    AND ((kind IN ('reply', 'pinned') AND comment_id = ?2)
+         OR (kind = 'heart' AND comment_id IN (SELECT ?2 UNION ALL SELECT id FROM comments WHERE parent_id = ?2)));
+
+  -- unmute
+  DELETE FROM notification_mutes WHERE user_id = ?1 AND game_id = ?2 AND thread_id IS NULL;   -- game
+  DELETE FROM notification_mutes WHERE user_id = ?1 AND thread_id = ?2;                         -- thread
+
+  -- list
+  SELECT m.game_id, m.thread_id, m.created_at, g.title, g.thumbnail_ext, g.thumbnail_version,
+         substr(c.body, 1, 80) AS excerpt
+  FROM notification_mutes m
+  JOIN games g ON g.id = m.game_id
+  LEFT JOIN comments c ON c.id = m.thread_id
+  WHERE m.user_id = ?1 AND (g.published = 1 OR g.owner_id = ?1)
+  ORDER BY m.created_at DESC, m.id DESC;
+  ```
+  `MuteState.unread` is `unread_count(db, user)`, read after the commit.
+- **Read path**:
+  - `comment_select()` gains a column (same binds as F017; `?1` = viewer or NULL):
+    ```sql
+    (?1 IS NOT NULL AND c.parent_id IS NULL AND EXISTS (SELECT 1 FROM notification_mutes m
+        WHERE m.user_id = ?1 AND m.game_id = c.game_id AND m.thread_id = c.id)) AS thread_muted
+    ```
+  - Game detail: `notifications_muted` = `EXISTS (SELECT 1 FROM notification_mutes WHERE user_id = ? AND game_id = ? AND thread_id IS NULL)`, or `false` for anonymous viewers. It is computed next to `is_favorite` and is not added to `GAME_SELECT`, so cards and lists are unchanged.
+  - `list_page`:
+    - The excerpt query becomes `SELECT id, user_id, parent_id, substr(body, 1, ?2) FROM comments WHERE id IN (…)`.
+    - `threadId`: for reply, `n.comment_id`; for heart, the hearted comment's `parent_id`, else its own id (null when the comment row is missing); for pinned, `n.comment_id`; otherwise null.
+    - `Kind::Pinned`: the target comment is `n.comment_id`, `event_count` = `actor_count`, and the path is the permalink.
+  - The unread count, list visibility, mark-read and pruning queries are unchanged, because they never named kinds.
+- **Tab coordination (UI).** In `packages/ui/src/notificationsTabs.ts` (pure) and `context/notifications.tsx`:
+  - **Why Web Locks for the election.** An election over `BroadcastChannel` alone needs heartbeats, timeouts and tie-breaking, and it can briefly have two leaders or none. `navigator.locks.request` gives exactly one holder per origin and name, queues the other tabs, and hands the lock over when the holder's document closes or is discarded. `BroadcastChannel` is only used to share results. Both APIs are same-origin, exist in every browser and Tauri webview this app targets, and need no dependency. Without either one, each tab polls as in F007.
+  - The scope is the API base URL plus the user id, so desktop server switches and account switches never share counts.
+  - The leader's visibility input is "this tab, or any follower that pinged within 75 s", so a background leader keeps polling for a visible follower. A `visible` ping also wakes a leader whose loop was paused.
+  - Every tab applies counts through one function, whether the count came from its own poll or from a message. Announcements, `lastChange` and `arrivals` therefore behave the same in all tabs. Only the leader runs the OS-notification step, so the desktop never shows duplicates.
+  - Writes (mark read, mutes) stay in the tab that made them, and that tab broadcasts the resulting `unread`.
+  - Expected load: one count request per cadence per browser profile and user, instead of one per visible tab.
+- **Ownership**:
+  - backend-dev: the migration, `notifications.rs`, `routes/notifications.rs`, route registration, the `comments.rs`/`games.rs`/`models.rs` changes and `tests/f018.rs`.
+  - frontend-dev: `notificationsTabs.ts`, the provider changes, types, client, `notifications.ts`, `MuteGameButton`, `MutedList`, the `CommentItem`/`NotificationItem`/`NotificationsPage`/`NotificationSettings`/`GamePage` changes, styles and tests.
+  - desktop-dev: verification only.

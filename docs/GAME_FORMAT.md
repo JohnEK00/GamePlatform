@@ -619,3 +619,7 @@ Creator comment tools (spec: `docs/features/F017-creator-comment-tools.md`). **N
 
 ## F008 additions
 Collections (spec: `docs/features/F008-collections.md`). **No changes** to the bundle format, game.json, the engine API or the game ↔ parent messages. Collections are a platform feature only; games can't read or change them.
+
+
+## F018 additions
+Notification controls (spec: `docs/features/F018-notification-controls.md`). **No changes**: games can't read or change mutes or notifications, and there are no new messages, engine APIs or `game.json` fields.
