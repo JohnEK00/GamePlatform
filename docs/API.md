@@ -877,3 +877,19 @@ Pruned by the server's maintenance task (about hourly):
 - **Heart/follow toggles:** turning a heart or follow off and back on while its notification is unread no longer bumps `updatedAt` or moves the item. The unread count can still go 1→0→1. A different actor still bumps it.
 - **Empty notifications:** a notification is deleted as soon as its last event is removed or cascaded, not at the next prune (migration `0014_review4.sql`).
 - **Write robustness:** notification writes use `BEGIN IMMEDIATE` with the dedupe check folded into the upsert, so concurrent writers wait instead of losing notifications.
+
+
+## F012 additions
+
+Bitmap fonts, 9-slice and UI widgets (spec: `docs/features/F012-bitmap-fonts-and-ui-widgets.md`). All earlier rules apply. **No new types, endpoints, migrations or rate limits.** The engine API is in GAME_FORMAT.md § F012 additions.
+
+### Changed behaviour
+| Method | Path | Change |
+|---|---|---|
+| POST 🔒 | /api/games | `fnt` is an allowed bundle file extension. The 422 `validation` message for a disallowed extension lists it. |
+| PUT 🔒 | /api/games/{id}/bundle | Same allowlist. |
+| GET | /games/{id}/files/{path} | `*.fnt` → `Content-Type: text/plain; charset=utf-8`, with the existing `X-Content-Type-Options: nosniff`, CSP sandbox and `Access-Control-Allow-Origin: *`. |
+
+- The full allowlist is now: `png jpg jpeg webp gif svg json txt wav mp3 ogg js css woff2 ttf fnt`. Extension matching is unchanged.
+- The backend does **not** parse or validate `.fnt` contents. A broken descriptor fails in the engine at load time, inside the game's sandbox.
+- `GET /api/games/{id}/bundle` (F013) is unchanged; `.fnt` entries are deflated like other text files.

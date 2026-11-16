@@ -660,3 +660,39 @@ In-app notifications (spec: `docs/features/F007-in-app-notifications.md`).
   - OS notification clicks use the platform default (focus or open the app). The plugin has no desktop click callback, so there is no deep link.
   - The native menu forwards a new `"notifications"` id (View → Notifications, `CmdOrCtrl+Shift+N`) → `/notifications`.
 - **Ownership**: the migration, `notifications.rs`, `routes/notifications.rs`, the hooks, `Limit::Notifications`, `NOTIFICATION_POLL_SECS` and pruning belong to backend-dev. `notifications.ts`, `context/notifications.tsx`, `NotificationBell`, `NotificationItem`, `NotificationsPage`, the settings fieldset, the `OsNotifications` type and styles belong to frontend-dev. `notify.rs`, the Cargo feature, `OsNotificationSetting.tsx`, the `platform.ts` implementation and the menu item belong to desktop-dev.
+
+
+## F012 additions
+Bitmap fonts, 9-slice and UI widgets (spec: `docs/features/F012-bitmap-fonts-and-ui-widgets.md`). The work is almost all engine. There is **no migration, no new endpoint and no new dependency** (Rust or JS).
+- **Engine modules** (engine-dev, `packages/engine/src/`):
+  - `bmfont.ts`: pure. Contains `parseBMFont`, `BitmapFont` (with `BitmapFont.grid`) and `layoutText`.
+  - `pixelfont.ts`: the built-in `pixel` glyph table; the texture is built lazily from `ImageData`.
+  - `nineslice.ts`: pure. Contains `NineSlice` and `nineSliceQuads`.
+  - `ui.ts`: `Ui`, with its input and renderer passed in so it can be tested in node.
+  - Changes in `renderer.ts` (the font registry, `drawNineSlice`), `assets.ts` (`loadBitmapFont`, `gridFont`, `loadNineSlice`), `engine.ts` (the `ui` and `NineSlice` members, step and render hooks) and `files.ts` (the `.fnt` MIME).
+  - The pure modules carry the logic, so `drawText`/`measureText` and the widget rules are covered by node tests without WebGL.
+- **Font registry.** `Renderer` keeps one `Map<string, FontSource>`, where a `FontSource` is either the canvas `FontAtlas` (existing) or a `BitmapFont`.
+  - `drawText`/`measureText` dispatch on the kind. The canvas path is unchanged.
+  - `default`, `mono` and `pixel` are reserved, so the engine's own overlays (loading bar, F3 debug, PAUSED) can never be broken by a game. `setFont("default" | "mono")` remains allowed for compatibility.
+  - Bitmap pages are ordinary `Texture`s: nearest-filtered pages are atlas-packed and batch with sprites and shapes, and smooth pages get their own GL texture.
+- **Frame order** (`Engine.render`):
+  ```
+  beginFrame (clear) → game.render → scenes.render → UI layer (engine.ui committed list, screen space)
+      → flush → F005 capture point → F3 debug overlay → host PAUSED overlay → endFrame
+  ```
+  The UI layer is game content, so screenshots include it. It is drawn from the list built by the **last fixed step** (`ui.beginStep`/`endStep` wrap each step, inside `input.beginStep`/`endStep`), so widget logic follows the same per-step input edges as the rest of the game. Frames without a step redraw the previous list.
+- **Menu navigation reuses F009.** `engine.ui` reads the game's declared `up`/`down`/`left`/`right`/`confirm` actions when present (so ⌨ remaps apply to menus), with fixed key fallbacks otherwise. It checks `input.actions` before calling `actionPressed`, so F009's unknown-id warning never fires. No new message and no host involvement.
+- **Five copies of the bundle extension allowlist**, all gaining `fnt`, which must stay in sync:
+  - `backend/src/bundle.rs` `ALLOWED_EXTS` (authoritative, enforced on upload and replace);
+  - `backend/src/routes/files.rs` `mime_for` (Content-Type);
+  - `packages/ui/src/studio/project.ts` `ALLOWED_EXTENSIONS` and `TEXT_EXTENSIONS`;
+  - `apps/desktop/src-tauri/src/project.rs` `ALLOWED_EXTS` and `TEXT_EXTS`;
+  - `packages/engine/src/files.ts` `MIME` and the dev harness map in `packages/engine/vite.config.ts`.
+  GAME_FORMAT § F012 "Bundle" is the normative list. Each area's tests assert `fnt` is present.
+- **Security posture unchanged.** Font descriptors are parsed only inside the sandboxed, opaque-origin game iframe, with hard limits (GAME_FORMAT § F012). Page paths go through `normalizePath` and can't leave the bundle. The engine never uses `DOMParser` on bundle content. `.fnt` is served like `.txt` (`text/plain`, `nosniff`, CSP sandbox).
+- **Studio**: the `menu-hud` template uses only procedural textures (templates ship no assets). `.fnt` is a text type in the Studio editor, the zip reader and writer, and the desktop folder opener.
+- **Ownership**:
+  - The engine modules, README, the `pixel` table, `scripts/gen-bitmap-font.mjs` and the Pixel Peaks assets and code belong to engine-dev.
+  - The allowlist and MIME entries and `tests/f012.rs` belong to backend-dev.
+  - `project.ts`, the template and the docs page belong to frontend-dev.
+  - The desktop `project.rs` lists belong to desktop-dev.

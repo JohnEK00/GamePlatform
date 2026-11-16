@@ -29,17 +29,18 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F013 | Studio: publish updates to an existing game | M | shipped |
 | F005 | Screenshot capture and share | M | shipped |
 | F009 | Controls overlay and key remapping | M | shipped |
-| F006 | Comment replies and reactions | M | specced |
-| F007 | In-app notifications | M | specced |
+| F006 | Comment replies and reactions | M | shipped |
+| F007 | In-app notifications | M | shipped |
+| F012 | Engine bitmap fonts, 9-slice and UI widgets | M | specced |
 | F017 | Creator comment tools: pin, lock and "top" sort | S | proposed |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
-| F012 | Engine bitmap fonts and 9-slice UI widgets | M | proposed |
 | F008 | Collections (curated game lists) | M | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
 | F016 | Gamepad remapping and synced control bindings | M | proposed |
 | F018 | Notification controls: mute a game or thread, shared polling across tabs | S | proposed |
+| F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
@@ -92,7 +93,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: engine (`capture.ts`, messages, examples), backend (migration `0009_f005.sql`: `screenshots` + `reports` CHECK rebuild; `image` crate; `Limit::Screenshot`), frontend (tray, dialogs, gallery, admin), desktop (View → Take Screenshot, Pictures default in `save_file`).
 - **Depends on**: nothing unshipped. It reuses `validate_image`, the N5 `Limit::Image` pattern, the F001 request/reply pattern, `useModal` and `platform.saveFile`.
 
-### F006: Comment replies and reactions (M, specced → [spec](features/F006-comment-replies-and-reactions.md))
+### F006: Comment replies and reactions (M, shipped → [spec](features/F006-comment-replies-and-reactions.md))
 - **Pitch**:
   - One level of replies under each top-level comment, oldest first, with a 3-reply preview and "Show N more replies". Replying to a reply stays in the thread and records "Replying to @name".
   - A heart on any comment or reply (not your own), with a public count and a "♥ Creator" mark when the game owner hearts it. A "Creator" badge on the owner's comments.
@@ -102,7 +103,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0012_f006.sql`: `comments.parent_id`, `comments.reply_to_user_id`, `comment_hearts`; replies/heart/context endpoints; `Limit::Heart`; delete cascade + report resolution), frontend (threaded `Comments` split into `CommentItem`/`CommentForm`/`HeartButton`, permalinks, admin link, accessibility), desktop (verification only). No engine changes.
 - **Depends on**: nothing unshipped. Writes no F002 activity events; F007 consumes its hook points.
 
-### F007: In-app notifications (M, specced → [spec](features/F007-in-app-notifications.md))
+### F007: In-app notifications (M, shipped → [spec](features/F007-in-app-notifications.md))
 - **Pitch**:
   - A header bell with an unread count and a panel of the latest 10, plus a `/notifications` page (All/Unread, paging, "Mark all as read").
   - Five kinds: comments on your games, replies in your threads or to you, hearts on your comments, new followers, and first publishes by creators you follow. Items link to F006 permalinks, the followers list or the game.
@@ -144,10 +145,15 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: creators can make art without leaving the browser.
 - **Areas**: frontend only.
 
-### F012: Engine bitmap fonts and 9-slice UI widgets (M, proposed)
-- **Pitch**: `assets.loadBitmapFont` (BMFont JSON), `renderer.drawNineSlice`, and a tiny immediate-mode `ui.button/label/panel` helper.
-- **User value**: good-looking menus and HUDs without hand-rolled code.
-- **Areas**: engine, examples, frontend (Studio template update).
+### F012: Engine bitmap fonts, 9-slice and UI widgets (M, specced → [spec](features/F012-bitmap-fonts-and-ui-widgets.md))
+- **Pitch**:
+  - Bitmap fonts through the existing `drawText`/`measureText`: `assets.loadBitmapFont` (AngelCode BMFont text `.fnt` or JSON, with kerning), `assets.gridFont` for fixed-cell glyph sheets, and a built-in crisp 5×7 `pixel` font that needs no asset.
+  - `NineSlice` + `renderer.drawNineSlice` (with a pixel-art `scale` and a shrink rule) and `assets.loadNineSlice`.
+  - `engine.ui`: an immediate-mode `panel`/`label`/`button` helper with a theme. It takes mouse, touch, keyboard and gamepad input; menu navigation follows the game's F009 `up`/`down`/`confirm` actions, so remaps apply. Widgets are drawn before the F005 capture point.
+  - `.fnt` becomes an allowed bundle extension (text). There is a "Menu & HUD" Studio template, a docs section, and Pixel Peaks gets a crisp HUD, a kerned title font, a 9-slice message box and a navigable title menu.
+- **User value**: pixel-art games get sharp text at native resolution. Creators can use fonts from any BMFont exporter and get menus that work with mouse, touch, keys and controllers without hand-rolled code.
+- **Areas**: engine (`bmfont.ts`, `pixelfont.ts`, `nineslice.ts`, `ui.ts`, renderer/assets/engine hooks, Pixel Peaks), frontend (`.fnt` as a Studio text type, template, docs page), backend (allowlist + MIME + tests only), desktop (folder opener allowlist). No migration, no endpoints, no new dependencies.
+- **Depends on**: nothing unshipped (reuses F009 actions and the F005 capture point).
 
 ### F014: Desktop Studio: save to local folder and watch for changes (S, proposed; after F013)
 - **Pitch**: for a project opened from a local folder (F013 `localFolder`), "Save to folder" writes Studio edits back to disk through a Rust command limited to the registered folder, and an optional file watcher auto-reloads on external changes.
@@ -168,3 +174,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: "Mute notifications for this game" (owners of busy games) and "Mute this thread" (players in long threads), stored per user and checked in the F007 upsert. Plus a `BroadcastChannel` leader tab, so only one tab per browser polls `unread-count` and the others receive the result.
 - **User value**: creators of popular games keep the bell useful, and heavy users with many tabs make fewer requests.
 - **Areas**: backend (`notification_mutes` table, two endpoints, a `NOT EXISTS` in the upsert), frontend (mute actions on the game page and threads, tab leader election in `NotificationsProvider`). No engine or desktop changes.
+
+### F019: Engine UI widgets 2 (S, proposed; after F012)
+- **Pitch**: `ui.slider` (volume, difficulty), `ui.toggle`, a single-line `ui.textField` (uses `input.typed`, for name entry), and `ui.list` (a vertical list with keyboard and gamepad scrolling), all following the F012 theme, phase and navigation rules. Left and right adjust a focused slider.
+- **User value**: settings and name-entry screens without custom code, completing the F012 menu toolkit.
+- **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.
