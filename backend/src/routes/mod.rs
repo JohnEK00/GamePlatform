@@ -135,6 +135,15 @@ pub fn api_router() -> Router<AppState> {
             "/comments/{id}/heart",
             put(comments::heart).delete(comments::unheart),
         )
+        // F017 creator thread tools
+        .route(
+            "/comments/{id}/pin",
+            put(comments::pin).delete(comments::unpin),
+        )
+        .route(
+            "/comments/{id}/lock",
+            put(comments::lock).delete(comments::unlock),
+        )
         // F005 screenshots
         .route(
             "/games/{id}/screenshots",

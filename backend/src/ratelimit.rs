@@ -55,6 +55,9 @@ pub enum Limit {
     /// F007 notification endpoints (list, unread count, mark read, settings GET/PUT, shared):
     /// 120/min, per user
     Notifications,
+    /// F017 creator thread tools (`PUT`/`DELETE …/pin` + `…/lock`, shared): 60 per 10 min,
+    /// per user
+    ThreadTools,
 }
 
 impl Limit {
@@ -78,6 +81,7 @@ impl Limit {
             Limit::Screenshot => (10, Duration::from_secs(3600)),
             Limit::Heart => (120, Duration::from_secs(600)),
             Limit::Notifications => (120, Duration::from_secs(60)),
+            Limit::ThreadTools => (60, Duration::from_secs(600)),
         }
     }
 }

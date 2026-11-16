@@ -201,6 +201,13 @@ pub struct Comment {
     pub creator_heart: bool,
     /// F006: the viewer is the author, the game owner or an admin (false when anonymous).
     pub can_delete: bool,
+    /// F017: top-level only, the game's pinned comment (always false on replies).
+    pub pinned: bool,
+    /// F017: top-level only, the thread is locked against new replies (always false on replies).
+    pub locked: bool,
+    /// F017: top-level only, the viewer is the game's current owner or an admin (false on
+    /// replies and when anonymous).
+    pub can_moderate: bool,
 }
 
 /// F006: a top-level comment with the oldest (at most 3) replies.
@@ -222,6 +229,20 @@ pub struct CommentListPage {
     pub page: i64,
     pub per_page: i64,
     pub total_all: i64,
+    /// F017: the game's pinned thread on every page (`null` when none; excluded from `items`
+    /// and `total`).
+    pub pinned: Option<CommentThread>,
+}
+
+/// F017: `PUT`/`DELETE /api/comments/{id}/pin|lock`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadState {
+    pub id: String,
+    pub pinned: bool,
+    pub locked: bool,
+    /// `PUT …/pin` only: the previously pinned comment that is now unpinned.
+    pub unpinned_id: Option<String>,
 }
 
 /// F006: `GET /api/comments/{id}`.

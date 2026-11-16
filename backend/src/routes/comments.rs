@@ -14,8 +14,8 @@ use crate::auth::{AuthUser, MaybeAuthUser};
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::models::{
-    Comment, CommentContext, CommentListPage, CommentThread, HeartResponse, Page, now_rfc3339,
-    user_ref_from_row,
+    Comment, CommentContext, CommentListPage, CommentThread, HeartResponse, Page, ThreadState,
+    now_rfc3339, user_ref_from_row,
 };
 use crate::notifications::{self as notif, Kind, NewNotification};
 use crate::ratelimit::Limit;
@@ -27,8 +27,11 @@ pub const COMMENT_MAX: usize = 2000;
 pub const REPLY_CAP: i64 = 200;
 /// F006: replies previewed under each thread in the list and in `CommentContext`.
 pub const REPLY_PREVIEW: i64 = 3;
+/// F017: a reply to a locked thread by someone who isn't the game owner or an admin.
+const THREAD_LOCKED: &str = "This thread is locked";
 
-/// F006 read shape (docs/ARCHITECTURE.md § F006). Binds: `?1` = viewer id or NULL, `?2` = 1
+/// F006 read shape (docs/ARCHITECTURE.md § F006, plus the F017 `pinned`, `locked` and
+/// `can_moderate` columns). Binds: `?1` = viewer id or NULL, `?2` = 1
 /// when the viewer is an admin. Callers continue numbering at `?3`.
 fn comment_select() -> &'static str {
     "SELECT c.id, c.game_id, c.parent_id, c.body, c.created_at, \
@@ -42,7 +45,10 @@ fn comment_select() -> &'static str {
        AS my_heart, \
      EXISTS (SELECT 1 FROM comment_hearts h WHERE h.comment_id = c.id \
        AND h.user_id = g.owner_id) AS creator_heart, \
-     (?1 IS NOT NULL AND (?2 = 1 OR c.user_id = ?1 OR g.owner_id = ?1)) AS can_delete \
+     (?1 IS NOT NULL AND (?2 = 1 OR c.user_id = ?1 OR g.owner_id = ?1)) AS can_delete, \
+     (c.pinned_at IS NOT NULL) AS pinned, \
+     (c.parent_id IS NULL AND c.locked_at IS NOT NULL) AS locked, \
+     (?1 IS NOT NULL AND c.parent_id IS NULL AND (?2 = 1 OR g.owner_id = ?1)) AS can_moderate \
      FROM comments c \
      JOIN users u ON u.id = c.user_id \
      JOIN games g ON g.id = c.game_id \
@@ -86,6 +92,9 @@ fn comment_from_row(row: &SqliteRow) -> Result<Comment, sqlx::Error> {
         my_heart: row.try_get("my_heart")?,
         creator_heart: row.try_get("creator_heart")?,
         can_delete: row.try_get("can_delete")?,
+        pinned: row.try_get("pinned")?,
+        locked: row.try_get("locked")?,
+        can_moderate: row.try_get("can_moderate")?,
     })
 }
 
@@ -196,25 +205,65 @@ pub struct PageQuery {
     pub per_page: Option<String>,
 }
 
+/// F017: `GET /api/games/{id}/comments` query (`PageQuery` + `sort`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListCommentsQuery {
+    pub page: Option<String>,
+    pub per_page: Option<String>,
+    pub sort: Option<String>,
+}
+
+/// F017 thread order.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommentSort {
+    New,
+    Top,
+}
+
+impl CommentSort {
+    /// Absent, empty or `new` → newest; `top` → top; anything else → 400.
+    fn parse(raw: Option<&str>) -> AppResult<Self> {
+        match raw {
+            None | Some("") | Some("new") => Ok(Self::New),
+            Some("top") => Ok(Self::Top),
+            Some(other) => Err(AppError::BadRequest(format!(
+                "Unknown sort '{}' (expected new or top)",
+                other.chars().take(40).collect::<String>()
+            ))),
+        }
+    }
+
+    fn order_by(self) -> &'static str {
+        match self {
+            Self::New => "c.created_at DESC, c.rowid DESC",
+            Self::Top => "hearts DESC, c.created_at DESC, c.rowid DESC",
+        }
+    }
+}
+
 pub async fn list_comments(
     State(state): State<AppState>,
     viewer: MaybeAuthUser,
     ApiPath(game_id): ApiPath<String>,
-    ApiQuery(query): ApiQuery<PageQuery>,
+    ApiQuery(query): ApiQuery<ListCommentsQuery>,
 ) -> AppResult<Json<CommentListPage>> {
     fetch_visible_game(&state, &game_id, viewer.id()).await?;
+    let sort = CommentSort::parse(query.sort.as_deref())?;
     let (page, per_page) = parse_paging(query.page.as_deref(), query.per_page.as_deref(), 20)?;
     let viewer = Viewer::load(&state, viewer.id()).await?;
     let (total, total_all): (i64, i64) = sqlx::query_as(
-        "SELECT COALESCE(SUM(parent_id IS NULL), 0), COUNT(*) FROM comments WHERE game_id = ?",
+        "SELECT COALESCE(SUM(parent_id IS NULL AND pinned_at IS NULL), 0), COUNT(*) \
+         FROM comments WHERE game_id = ?",
     )
     .bind(&game_id)
     .fetch_one(&state.db)
     .await?;
     let rows = sqlx::query(&format!(
-        "{} WHERE c.game_id = ?3 AND c.parent_id IS NULL \
-         ORDER BY c.created_at DESC, c.rowid DESC LIMIT ?4 OFFSET ?5",
-        comment_select()
+        "{} WHERE c.game_id = ?3 AND c.parent_id IS NULL AND c.pinned_at IS NULL \
+         ORDER BY {} LIMIT ?4 OFFSET ?5",
+        comment_select(),
+        sort.order_by()
     ))
     .bind(&viewer.id)
     .bind(viewer.admin_flag())
@@ -223,13 +272,36 @@ pub async fn list_comments(
     .bind((page - 1) * per_page)
     .fetch_all(&state.db)
     .await?;
-    let items = into_threads(&state, &viewer, comments_from_rows(&rows)?).await?;
+    let pinned_row = sqlx::query(&format!(
+        "{} WHERE c.game_id = ?3 AND c.pinned_at IS NOT NULL",
+        comment_select()
+    ))
+    .bind(&viewer.id)
+    .bind(viewer.admin_flag())
+    .bind(&game_id)
+    .fetch_optional(&state.db)
+    .await?;
+    // One `into_threads` call for the pinned root and the page (one preview query, one count
+    // query), then split the pinned thread off the front.
+    let has_pinned = pinned_row.is_some();
+    let mut roots = Vec::with_capacity(rows.len() + 1);
+    if let Some(row) = &pinned_row {
+        roots.push(comment_from_row(row)?);
+    }
+    roots.extend(comments_from_rows(&rows)?);
+    let mut items = into_threads(&state, &viewer, roots).await?;
+    let pinned = if has_pinned && !items.is_empty() {
+        Some(items.remove(0))
+    } else {
+        None
+    };
     Ok(Json(CommentListPage {
         items,
         total,
         page,
         per_page,
         total_all,
+        pinned,
     }))
 }
 
@@ -265,26 +337,38 @@ pub async fn create_comment(
     }
 
     // Reply target: normalise to its root; `replyTo` only when answering someone else's reply.
-    let (root, reply_to) = match parent_ref {
-        None => (None, None),
+    // F017: `root_locked` is the root's lock state at lookup time.
+    let (root, reply_to, root_locked) = match parent_ref {
+        None => (None, None, false),
         Some(pid) => {
-            let row: Option<(String, Option<String>, String)> =
-                sqlx::query_as("SELECT game_id, parent_id, user_id FROM comments WHERE id = ?")
-                    .bind(&pid)
-                    .fetch_optional(&state.db)
-                    .await?;
-            let (_, p_parent, p_author) = row
-                .filter(|(g, _, _)| *g == game_id)
+            let row: Option<(String, Option<String>, String, bool)> = sqlx::query_as(
+                "SELECT c.game_id, c.parent_id, c.user_id, \
+                 (CASE WHEN c.parent_id IS NULL THEN c.locked_at ELSE r.locked_at END) \
+                   IS NOT NULL \
+                 FROM comments c LEFT JOIN comments r ON r.id = c.parent_id WHERE c.id = ?",
+            )
+            .bind(&pid)
+            .fetch_optional(&state.db)
+            .await?;
+            let (_, p_parent, p_author, locked) = row
+                .filter(|(g, _, _, _)| *g == game_id)
                 .ok_or_else(|| AppError::not_found("Comment"))?;
             match p_parent {
-                None => (Some(pid), None),
+                None => (Some(pid), None, locked),
                 Some(root) => {
                     let to = (p_author != user.id).then_some(p_author);
-                    (Some(root), to)
+                    (Some(root), to, locked)
                 }
             }
         }
     };
+    // F017: the game owner and admins bypass thread locks. `is_admin` is loaded only for a
+    // reply by someone other than the owner.
+    let moderator =
+        root.is_some() && (user.id == game.owner_id || is_admin(&state, Some(&user.id)).await?);
+    if root_locked && !moderator {
+        return Err(AppError::validation(THREAD_LOCKED));
+    }
 
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_rfc3339();
@@ -303,12 +387,14 @@ pub async fn create_comment(
             .await?;
         }
         Some(root) => {
-            // Guarded for the cap (and for a root deleted since the lookup), so concurrent
-            // posts can't exceed it or orphan a reply.
+            // Guarded for the cap, the F017 lock (closes the race with a lock) and a root
+            // deleted since the lookup, so concurrent posts can't exceed the cap, slip into a
+            // locked thread or orphan a reply.
             let done = sqlx::query(
                 "INSERT INTO comments (id, game_id, user_id, body, created_at, parent_id, \
                  reply_to_user_id) SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 \
                  WHERE EXISTS (SELECT 1 FROM comments WHERE id = ?6) \
+                 AND (?9 = 1 OR (SELECT locked_at FROM comments WHERE id = ?6) IS NULL) \
                  AND (SELECT COUNT(*) FROM comments WHERE parent_id = ?6) < ?8",
             )
             .bind(&id)
@@ -319,16 +405,19 @@ pub async fn create_comment(
             .bind(root)
             .bind(&reply_to)
             .bind(REPLY_CAP)
+            .bind(i64::from(moderator))
             .execute(&state.db)
             .await?
             .rows_affected();
             if done == 0 {
-                let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM comments WHERE id = ?")
-                    .bind(root)
-                    .fetch_optional(&state.db)
-                    .await?;
-                return Err(match exists {
+                let locked: Option<bool> =
+                    sqlx::query_scalar("SELECT locked_at IS NOT NULL FROM comments WHERE id = ?")
+                        .bind(root)
+                        .fetch_optional(&state.db)
+                        .await?;
+                return Err(match locked {
                     None => AppError::not_found("Comment"),
+                    Some(true) if !moderator => AppError::validation(THREAD_LOCKED),
                     Some(_) => {
                         AppError::validation(format!("This thread has reached {REPLY_CAP} replies"))
                     }
@@ -606,4 +695,159 @@ pub async fn unheart(
         .await;
     }
     Ok(Json(heart_response(&state, &id, false).await?))
+}
+
+/// F017: which thread tool a request uses (only for the reply error message).
+#[derive(Clone, Copy)]
+enum Tool {
+    Pin,
+    Lock,
+}
+
+/// Checks shared by the four F017 thread-tool handlers, in the API § F017 order: comment exists
+/// and its game is visible (404) → caller is the game's current owner or an admin (403) →
+/// `Limit::ThreadTools` (429) → top-level comment (422). Auth (401) is the `AuthUser`
+/// extractor.
+async fn thread_tool_target(
+    state: &AppState,
+    user: &AuthUser,
+    id: &str,
+    tool: Tool,
+) -> AppResult<CommentMeta> {
+    let meta = comment_meta(state, id).await?;
+    ensure_visible(state, &meta.game_id, Some(&user.id)).await?;
+    if user.id != meta.owner_id && !is_admin(state, Some(&user.id)).await? {
+        return Err(AppError::forbidden());
+    }
+    limit_user(state, Limit::ThreadTools, &user.id)?;
+    if meta.parent_id.is_some() {
+        return Err(AppError::validation(match tool {
+            Tool::Pin => "Only top-level comments can be pinned",
+            Tool::Lock => "Only top-level comments can be locked",
+        }));
+    }
+    Ok(meta)
+}
+
+/// Run a single-row update on a top-level comment that `RETURNING`s
+/// `(pinned_at IS NOT NULL, locked_at IS NOT NULL)`; no row (deleted meanwhile) → 404.
+async fn update_thread_state(
+    state: &AppState,
+    sql: &str,
+    id: &str,
+    now: Option<&str>,
+) -> AppResult<ThreadState> {
+    let mut q = sqlx::query_as::<_, (bool, bool)>(sql);
+    if let Some(now) = now {
+        q = q.bind(now);
+    }
+    let (pinned, locked) = q
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::not_found("Comment"))?;
+    Ok(ThreadState {
+        id: id.to_string(),
+        pinned,
+        locked,
+        unpinned_id: None,
+    })
+}
+
+/// `PUT /api/comments/{id}/pin` (idempotent). Unpins the game's other pinned comment, if any,
+/// in the same transaction and reports it in `unpinnedId`.
+pub async fn pin(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Json<ThreadState>> {
+    let meta = thread_tool_target(&state, &user, &id, Tool::Pin).await?;
+    // The first statement writes, so the deferred transaction takes the write lock at once.
+    let mut tx = state.db.begin().await?;
+    let unpinned_id: Option<String> = sqlx::query_scalar(
+        "UPDATE comments SET pinned_at = NULL \
+         WHERE game_id = ?1 AND pinned_at IS NOT NULL AND id <> ?2 RETURNING id",
+    )
+    .bind(&meta.game_id)
+    .bind(&id)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .next();
+    // Dropping `tx` on the 404 path rolls the unpin back.
+    let (pinned, locked): (bool, bool) = sqlx::query_as(
+        "UPDATE comments SET pinned_at = COALESCE(pinned_at, ?1) \
+         WHERE id = ?2 AND parent_id IS NULL \
+         RETURNING pinned_at IS NOT NULL, locked_at IS NOT NULL",
+    )
+    .bind(now_rfc3339())
+    .bind(&id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::not_found("Comment"))?;
+    tx.commit().await?;
+    // F018: pinned notification (recipient = the comment's author when not the pinner; dedupe
+    // once per comment). F017 writes none (docs/ARCHITECTURE.md § F017 additions).
+    Ok(Json(ThreadState {
+        id,
+        pinned,
+        locked,
+        unpinned_id,
+    }))
+}
+
+/// `DELETE /api/comments/{id}/pin` (idempotent; 200 even if not pinned).
+pub async fn unpin(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Json<ThreadState>> {
+    thread_tool_target(&state, &user, &id, Tool::Pin).await?;
+    let st = update_thread_state(
+        &state,
+        "UPDATE comments SET pinned_at = NULL WHERE id = ?1 AND parent_id IS NULL \
+         RETURNING pinned_at IS NOT NULL, locked_at IS NOT NULL",
+        &id,
+        None,
+    )
+    .await?;
+    Ok(Json(st))
+}
+
+/// `PUT /api/comments/{id}/lock` (idempotent).
+pub async fn lock(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Json<ThreadState>> {
+    thread_tool_target(&state, &user, &id, Tool::Lock).await?;
+    let now = now_rfc3339();
+    let st = update_thread_state(
+        &state,
+        "UPDATE comments SET locked_at = COALESCE(locked_at, ?1) \
+         WHERE id = ?2 AND parent_id IS NULL \
+         RETURNING pinned_at IS NOT NULL, locked_at IS NOT NULL",
+        &id,
+        Some(&now),
+    )
+    .await?;
+    Ok(Json(st))
+}
+
+/// `DELETE /api/comments/{id}/lock` (idempotent; 200 even if not locked).
+pub async fn unlock(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Json<ThreadState>> {
+    thread_tool_target(&state, &user, &id, Tool::Lock).await?;
+    let st = update_thread_state(
+        &state,
+        "UPDATE comments SET locked_at = NULL WHERE id = ?1 AND parent_id IS NULL \
+         RETURNING pinned_at IS NOT NULL, locked_at IS NOT NULL",
+        &id,
+        None,
+    )
+    .await?;
+    Ok(Json(st))
 }
