@@ -623,3 +623,7 @@ Collections (spec: `docs/features/F008-collections.md`). **No changes** to the b
 
 ## F018 additions
 Notification controls (spec: `docs/features/F018-notification-controls.md`). **No changes**: games can't read or change mutes or notifications, and there are no new messages, engine APIs or `game.json` fields.
+
+
+## F021 additions
+Collection activity (spec: `docs/features/F021-collection-activity.md`). **No changes**: games can't read or write the feed, notifications or collections, and there are no new messages, engine APIs or `game.json` fields.

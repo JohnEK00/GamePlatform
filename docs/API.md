@@ -1240,3 +1240,100 @@ type MuteState = {
 
 ### Polling (client behaviour, informative)
 Web clients coordinate tabs (spec § 2.6): in browsers with the Web Locks API and `BroadcastChannel`, one tab per user and server polls `GET /api/notifications/unread-count` and shares the result. The endpoint and its `pollAfterSecs` are unchanged.
+
+
+---
+
+## F021 additions
+
+Collection activity: a `collectionUpdated` feed kind and an `addedToCollection` notification kind (spec: `docs/features/F021-collection-activity.md`). All earlier rules apply, including F002 (feed), F007 (notifications), F008 (collections) and F018 (mutes, group dedupe, withdrawal). **No new endpoints and no new rate limits.**
+
+### Types
+```ts
+type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked" | "collectionUpdated"
+
+type FeedCollectionGame = {
+  game: GameSummary;
+  note: string;                   // the curator's current note for this game (F008 rules: 0–140 chars, single line); "" = none
+}
+
+type FeedCollection = {
+  id: string;                     // collection id (UUID v4)
+  title: string;                  // the collection's CURRENT title
+  path: string;                   // "/c/{id}"
+  games: FeedCollectionGame[];    // 1–4 entries, newest added first (see "Games of an item")
+  gameCount: number;              // all games of the item (>= games.length >= 1)
+}
+
+type FeedItem = {
+  ...F002 and F004,
+  collection: FeedCollection | null;   // collectionUpdated only; null for every other kind
+}
+// For collectionUpdated: actor = the collection owner (the curator); game = collection.games[0].game;
+// reason = "following"; version, score, achievement and update are null.
+
+type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished" | "pinned" | "addedToCollection"
+
+type NotificationCollection = {
+  id: string;
+  title: string;                  // the collection's CURRENT title
+  path: string;                   // "/c/{id}"
+}
+
+type Notification = {
+  ...F007 and F018,
+  collection: NotificationCollection | null;   // addedToCollection only; null for every other kind
+}
+
+type NotificationSettings = {
+  ...F007 and F018,
+  collections: boolean;           // "addedToCollection" kind; default true
+}
+```
+- Clients must still ignore feed items and notifications with an unknown `kind` (F002, F007).
+- Clients must treat a missing `collection` as `null` and a missing `collections` setting as "not supported" (hide the switch).
+
+### Feed: event production
+| Kind | Written when | Coalescing |
+|---|---|---|
+| `collectionUpdated` | `PUT /api/collections/{id}/games/{gameId}` returns `added: true`, or `POST /api/collections` creates a collection with `gameId`, **and** at that moment the collection is `public` and the game is published | one per collection per UTC day; each add replaces the day's row (new, higher `id`, so the item moves to the top) and puts the game first in its game list |
+
+- Nothing is written for adds to private collections, for adds of unpublished games, for note changes (`added: false`), reorders, details changes, visibility changes or deletes. Changing a collection from private to public announces nothing.
+- The check of the collection's visibility and the item insert are atomic (one transaction).
+- Writing an event is best effort, as for F002 kinds. A request refused with 4xx (including 429) writes nothing.
+
+### Feed: sources and visibility
+A `collectionUpdated` event is included in `GET /api/feed` when **all** apply:
+1. Its actor (the curator) is a user the viewer follows. (Favorites never add this kind.)
+2. The actor is not the viewer.
+3. The collection still exists, is `public`, and is still owned by the actor.
+4. At least one game of the item exists (below).
+
+**Games of an item** (evaluated at read time): the games announced by the item's adds that are (a) still in the collection, (b) whose current `addedAt` falls on the item's UTC day, and (c) published. Ordered newest add first. `games` holds the first 4 of them, `gameCount` all of them. A game added while the collection was private is never part of any item. A game removed and re-added on a later day belongs to the later day's item only.
+
+- `kinds` accepts `"collectionUpdated"`; unknown values still → 400.
+- Paging is unchanged (`id` cursor). An event that fails rule 4 at read time is skipped without affecting `nextCursor`.
+
+### Notifications: trigger and recipient
+| Kind | Written when | Recipient | Group | Joins an unread group? |
+|---|---|---|---|---|
+| `addedToCollection` | the same adds that write a `collectionUpdated` event (public collection, published game, `added: true`) | the game's owner, unless they are the curator | per (collection, game) | n/a (once per recipient, collection and game while any notification for it is stored) |
+
+- Fields: `actors` = the curator; `actorCount` = `eventCount` = 1; `game` = the added game; `collection` = `{ id, title, path }`; `commentId`, `excerpt` and `threadId` null; `ownsThread` and `creatorHeart` false; `path` = `/c/{collectionId}`.
+- **Withdrawal.** When the game is removed from the collection (`DELETE /api/collections/{id}/games/{gameId}` with `removed: true`) and the owner's notification for it is still **unread**, it stops being listed and counted. Adding it again while that withdrawn notification is stored (and the collection is public) restores it without changing its `updatedAt`. A read `addedToCollection` notification is never changed.
+- **Settings:** `collections` (default true). `PUT /api/notifications/settings` accepts it; a non-boolean → 422.
+- **Mutes (F018):** a game mute of the added game suppresses it (it has `game.id`), and muting the game marks an unread one read. Thread mutes never apply.
+- **Visibility** (extends F007 "Visibility"): an `addedToCollection` notification is listed and counted only while its collection exists and is `public`, in addition to the F007 rules. Making the collection private hides it; making it public again shows it again unless it was pruned.
+- **Deletions:** deleting the collection or the game deletes the notification. Retention (F007) is unchanged.
+
+### Paths
+| Kind | `path` |
+|---|---|
+| `addedToCollection` | `/c/{collectionId}` |
+
+### Privacy
+- No feed item or notification is ever produced by, or shown for, a private collection.
+- OS notifications (desktop) for `addedToCollection` don't include the collection title (client rule, spec § 2.3).
+
+### Rate limits
+Unchanged. Events and notifications are written by the F008 collection endpoints, which keep `Limit::Collections`. Feed reads keep `Limit::Feed`; notification reads keep `Limit::Notifications`.

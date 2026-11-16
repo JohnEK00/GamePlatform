@@ -1065,3 +1065,120 @@ Notification controls (spec: `docs/features/F018-notification-controls.md`). One
 - The game-mute insert carries an extra guard, `AND EXISTS (SELECT 1 FROM games WHERE id = ?2)`, so a game deleted between the visibility check and the write gives 404, not a foreign-key 500.
 - `pin`/`unpin` run in `BEGIN IMMEDIATE` transactions (read-then-write without `SQLITE_BUSY`).
 - `Game.notificationsMuted` is computed in `build_game`, so it appears on every response that returns a `Game` (not on `GameSummary`).
+
+
+## F021 additions
+Collection activity (spec: `docs/features/F021-collection-activity.md`). One migration (an `activity_events` rebuild plus two added columns), one activity writer, a third feed branch, one notification kind. No new endpoints, dependencies, engine or desktop code.
+- **Model.**
+  - A `collectionUpdated` event is an `activity_events` row with `game_id NULL`, `collection_id` set and `game_ids` = a JSON array of the game ids announced that day (newest first, at most 100). The row is keyed by (collection, UTC day); each announced add replaces it (delete + insert, so it gets a new, higher id and moves to the top, like `personalBest`).
+  - The event stores **which** games were announced, so games added while the collection was private are never shown, even after it turns public. Everything else (still in the collection, added on that day, published, the collection public, its title, the notes) is evaluated at read time.
+  - `addedToCollection` is a normal F007 kind with F018 group dedupe and withdrawal (the `pinned` pattern). The notification row carries `collection_id`, so it cascades with the collection and the read path can hide it while the collection is private.
+  - `activity_events.kind` loses its CHECK. `activity::KINDS` is the only list of feed kinds, as `notifications::Kind` and `TARGET_TYPES` are for their tables. F015 and later feed kinds need no rebuild.
+- **Data**: migration `backend/migrations/0018_f021.sql` runs after `0017_f018.sql`. Normative, in this order:
+  ```sql
+  -- F021: collection activity (docs/ARCHITECTURE.md § F021 additions).
+
+  -- 1. Rebuild activity_events: no kind CHECK (validated in Rust: activity::KINDS), nullable game_id,
+  --    and the collection columns. No table references activity_events and it has no triggers
+  --    (checked against 0001–0017), so dropping the old table cascades nothing with foreign_keys ON.
+  --    Columns keep their 0005/0007 order; the new ones are appended.
+  CREATE TABLE activity_events_new (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,      -- feed cursor
+      actor_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind          TEXT NOT NULL,                          -- activity::KINDS (validated in Rust; no CHECK)
+      game_id       TEXT REFERENCES games(id) ON DELETE CASCADE,          -- NULL only for collectionUpdated
+      version       INTEGER,                                -- gamePublished / gameUpdated
+      score         INTEGER,                                -- personalBest
+      first_score   INTEGER NOT NULL DEFAULT 0,             -- personalBest: 1 = actor's first score on the game
+      ach_id        TEXT,                                   -- achievementUnlocked (latest)
+      ach_count     INTEGER NOT NULL DEFAULT 0,             -- achievementUnlocked: unlocks that day
+      day           TEXT NOT NULL,                          -- YYYY-MM-DD UTC of created_at (coalescing key)
+      created_at    TEXT NOT NULL,                          -- RFC3339 millis Z
+      from_version  INTEGER,                                -- gameUpdated (F004)
+      collection_id TEXT REFERENCES collections(id) ON DELETE CASCADE,    -- collectionUpdated
+      game_ids      TEXT,                                   -- collectionUpdated: JSON array of game ids, newest first, <= 100
+      CHECK (game_id IS NOT NULL OR collection_id IS NOT NULL)
+  );
+  INSERT INTO activity_events_new (id, actor_id, kind, game_id, version, score, first_score, ach_id,
+                                   ach_count, day, created_at, from_version)
+  SELECT id, actor_id, kind, game_id, version, score, first_score, ach_id,
+         ach_count, day, created_at, from_version
+  FROM activity_events ORDER BY id;
+
+  -- Carry the AUTOINCREMENT high-water mark over (feed cursors are ids; coalescing deletes rows,
+  -- so MAX(id) can be below the sequence).
+  DELETE FROM sqlite_sequence WHERE name = 'activity_events_new';
+  INSERT INTO sqlite_sequence (name, seq)
+  SELECT 'activity_events_new', seq FROM sqlite_sequence WHERE name = 'activity_events';
+
+  DROP TABLE activity_events;       -- also removes its sqlite_sequence row
+  ALTER TABLE activity_events_new RENAME TO activity_events;   -- renames the sqlite_sequence row too
+
+  CREATE INDEX idx_activity_actor_id   ON activity_events(actor_id, id DESC);
+  CREATE INDEX idx_activity_game_kind  ON activity_events(game_id, kind, id DESC);
+  CREATE INDEX idx_activity_coalesce   ON activity_events(actor_id, game_id, kind, day);
+  -- collectionUpdated coalescing + the collection delete cascade.
+  CREATE INDEX idx_activity_collection ON activity_events(collection_id, kind, day) WHERE collection_id IS NOT NULL;
+
+  -- 2. Notifications: the collection of an addedToCollection notification (NULL for every other kind).
+  --    ADD COLUMN with REFERENCES is allowed because the default is NULL.
+  ALTER TABLE notifications ADD COLUMN collection_id TEXT REFERENCES collections(id) ON DELETE CASCADE;
+  CREATE INDEX idx_notifications_collection ON notifications(collection_id) WHERE collection_id IS NOT NULL;
+
+  -- 3. The addedToCollection kind's setting.
+  ALTER TABLE notification_settings ADD COLUMN collections INTEGER NOT NULL DEFAULT 1 CHECK (collections IN (0, 1));
+  ```
+  - The copy holds the write lock for the migration's duration; `activity_events` is bounded by the coalescing rules, so this is acceptable at startup. `sqlite_stat1` rows of the old table go with it; the startup `PRAGMA optimize` (N1) re-analyses.
+  - `PRAGMA foreign_key_check` must be empty after the migration (spec § 6 upgrade test).
+- **Writer** (`activity::record_collection_added(conn, actor_id, collection_id, game_id, now)`; nested transaction like the other writers; `?2` day = `now[..10]`, where `now` is the exact `added_at` just written):
+  ```sql
+  DELETE FROM activity_events
+  WHERE collection_id = ?1 AND kind = 'collectionUpdated' AND day = ?2
+  RETURNING game_ids;
+  -- Rust: merged = [game_id] followed by the ids of every returned array in order, without game_id
+  -- and without duplicates, truncated to COLLECTION_EVENT_GAMES_MAX (100). Unparseable arrays count as [].
+  INSERT INTO activity_events (actor_id, kind, game_id, collection_id, game_ids, day, created_at)
+  VALUES (?3, 'collectionUpdated', NULL, ?1, ?4, ?2, ?5);   -- ?3 actor, ?4 merged JSON, ?5 now
+  ```
+  - Called inside the add transaction of `put_collection_game` (new item) and `create_collection` (with `gameId`), after the guarded insert, only when this query (same transaction) returns `visibility = 'public'` and `published = 1`:
+    ```sql
+    SELECT c.visibility, g.published, g.owner_id FROM collections c, games g WHERE c.id = ?1 AND g.id = ?2
+    ```
+    The same row decides the notification after the commit (`g.owner_id <> caller`).
+- **Feed query** (`FEED_SQL`). Branches (a) followed creators and (b) favorited games stay exactly as they are: branch (a)'s `CROSS JOIN games g … g.id = e.game_id` already drops rows with `game_id NULL`. A third branch is added to the `picked` union:
+  ```sql
+  UNION
+  SELECT id FROM (
+    SELECT e.id FROM follows f
+    CROSS JOIN activity_events e INDEXED BY idx_activity_actor_id
+    CROSS JOIN collections c
+    WHERE f.follower_id = ?1 AND e.actor_id = f.followee_id
+      AND e.id < COALESCE(?2, 9223372036854775807)
+      AND e.actor_id <> ?1
+      AND e.kind = 'collectionUpdated'
+      AND e.kind IN (SELECT value FROM json_each(?4))
+      AND c.id = e.collection_id AND c.visibility = 'public' AND c.owner_id = e.actor_id
+      AND EXISTS (SELECT 1 FROM json_each(e.game_ids) j
+                  JOIN collection_games cg ON cg.collection_id = e.collection_id AND cg.game_id = j.value
+                  JOIN games g2 ON g2.id = cg.game_id
+                  WHERE substr(cg.added_at, 1, 10) = e.day AND g2.published = 1)
+    ORDER BY e.id DESC LIMIT ?3)
+  ```
+  The outer `SELECT` adds `e.collection_id, e.game_ids, e.day`. Its `LEFT JOIN achievements` matches nothing for these rows. The extended `tests/review2.rs` N1 test asserts the plan still uses `idx_activity_actor_id (actor_id=? AND id<?)` and `idx_activity_game_kind (…)`, and scans none of `activity_events`, `games`, `collections` and `collection_games`.
+- **Feed assembly** (`get_feed`, batched per page, never per row):
+  1. `SELECT id, title FROM collections WHERE id IN (SELECT value FROM json_each(?)) AND visibility = 'public'` for the page's collection ids.
+  2. `SELECT collection_id, game_id, note, added_at FROM collection_games WHERE collection_id IN (SELECT value FROM json_each(?))` (at most 20 × 100 rows).
+  3. The game ids from every parsed `game_ids` array are added to the page's existing `GAME_SELECT … json_each` query.
+  4. Per `collectionUpdated` row: keep, in array order, the ids that have an item row with `added_at[..10] == day` and a loaded game with `published`; `gameCount` = their number; `games` = the first 4 as `{ game: summary, note }`; `game` = the first. Skip the row when nothing is kept or its collection is missing from step 1 (a race with a delete or a PATCH to private).
+- **Notification write.** `NewNotification` gains `collection_id`; `try_notify`'s insert becomes `INSERT INTO notifications (recipient_id, kind, group_key, game_id, comment_id, collection_id, created_at, updated_at) SELECT ?1, ?2, ?3, ?5, ?6, ?10, ?7, ?7 WHERE …` (F018 settings, mute and dedupe predicates unchanged). For this kind: recipient = the game owner, group `coll:{collectionId}:{gameId}`, `game_id` = the game, `comment_id` NULL, `Dedupe::Group`, `thread_id` NULL (so only game mutes match), `collection_id` = the collection, `{col}` = `collections`. Removal: `withdraw_pool(owner, Kind::AddedToCollection, group)` after the remove commits.
+- **Notification read path.** The shared `VISIBLE` filter gains one predicate (alias `vc` so it can't clash with the list's join):
+  ```sql
+  AND (n.collection_id IS NULL OR EXISTS (SELECT 1 FROM collections vc
+                                          WHERE vc.id = n.collection_id AND vc.visibility = 'public'))
+  ```
+  `list_page` adds `LEFT JOIN collections col ON col.id = n.collection_id` and selects `n.collection_id, col.title AS col_title`. Mark-read, mute mark-read and pruning are unchanged (they never named kinds; game mutes already match on `game_id`).
+- **UI.** `FeedItem` renders the new kind with a compact game list; `FeedPage` gains a Collections tab (`kinds=collectionUpdated`); `notifications.ts` adds the summary, the game mute action and `osNotificationText` (no collection title in OS notifications); `NotificationSettings` gains the `collections` switch.
+- **Ownership**:
+  - backend-dev: the migration, `activity.rs`, `routes/feed.rs`, `routes/collections.rs`, `notifications.rs`, `models.rs`, `tests/f021.rs` and the `review2.rs` extension.
+  - frontend-dev: types, `notifications.ts`, `FeedItem`, `FeedPage`, `NotificationItem`, `NotificationSettings`, styles and tests.
+  - desktop-dev: verification only.

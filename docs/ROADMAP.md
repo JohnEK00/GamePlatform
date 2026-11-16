@@ -35,10 +35,11 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F012 | Engine bitmap fonts, 9-slice and UI widgets | M | shipped |
 | F017 | Creator comment tools: pin, lock and "top" sort | S | shipped |
 | F008 | Collections (curated game lists) | M | shipped |
-| F018 | Notification controls: mutes, shared polling, "pinned" notifications | M | specced |
-| F021 | Collection activity: feed items and "added to a collection" notifications | S | proposed |
+| F018 | Notification controls: mutes, shared polling, "pinned" notifications | M | shipped |
+| F021 | Collection activity: feed items and "added to a collection" notifications | M | specced |
 | F020 | Game comment settings: turn comments off, slow mode | S | proposed |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
+| F022 | Announce a collection when it goes public | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
 | F016 | Gamepad remapping and synced control bindings | M | proposed |
@@ -121,7 +122,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 ### F015: Screenshots in the feed and on profiles (S, proposed; after F005)
 - **Pitch**: a new F002 feed kind `screenshotPosted` (coalesced per author, game and UTC day), and a "Screenshots" tab on profiles (`GET /api/users/{username}/screenshots`), with published games only.
 - **User value**: followers see what their friends play, and players get a personal gallery.
-- **Areas**: backend (activity kind and CHECK rebuild, profile endpoint), frontend (feed item, profile tab). No engine changes.
+- **Areas**: backend (activity kind, no CHECK rebuild needed since F021; profile endpoint), frontend (feed item, profile tab). No engine changes.
 
 ### F008: Collections (M, shipped → [spec](features/F008-collections.md))
 - **Pitch**:
@@ -184,7 +185,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0015_f017.sql`: `comments.pinned_at`, `comments.locked_at`, one partial unique index; `sort=top`; four pin/lock endpoints; `Limit::ThreadTools`; lock check in the guarded reply insert), frontend (sort toggle, pinned slot, Pin/Lock buttons, locked-thread UI), desktop (verification only). No engine changes.
 - **Depends on**: F006 and F007 (shipped).
 
-### F018: Notification controls: mutes, shared polling and "pinned" notifications (M, specced → [spec](features/F018-notification-controls.md))
+### F018: Notification controls: mutes, shared polling and "pinned" notifications (M, shipped → [spec](features/F018-notification-controls.md))
 - **Pitch**:
   - "Mute notifications" for a game (game page) and "Mute thread" (top-level comments and `/notifications` items), stored server-side in `notification_mutes` and checked in the F007 write path next to the per-kind settings. Muting marks existing unread notifications in scope as read. A "Muted" list with Unmute in Settings (cap 500).
   - One polling tab per browser: tabs of the same user and server elect a leader with the Web Locks API, and only the leader polls `unread-count`, sharing results over `BroadcastChannel`. Without those APIs every tab polls as before.
@@ -199,12 +200,22 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: settings and name-entry screens without custom code, completing the F012 menu toolkit.
 - **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.
 
-### F021: Collection activity: feed items and notifications (S, proposed; after F008 (shipped), F018)
-- **Pitch**: a F002 feed kind `collectionUpdated` (games added to a public collection by someone you follow, coalesced per collection per UTC day), and a F007 notification for creators: "Mia added Space Dodge to *Cozy games*" (once per collection and game, with a `collections` setting). It needs F018's removal of the `notifications.kind` CHECK.
-- **User value**: curators reach their followers, and creators learn when players champion their games.
-- **Areas**: backend (activity kind and CHECK rebuild for `activity_events`, notification kind and setting, hooks in the add endpoint), frontend (feed item, notification text, setting). No engine or desktop changes.
+### F021: Collection activity: feed items and notifications (M, specced → [spec](features/F021-collection-activity.md))
+- **Pitch**:
+  - A F002 feed kind `collectionUpdated`: "Mia added 3 games to *Cozy games*", with up to 4 of the added games and the curator's notes. One item per collection per UTC day, for followers of the curator, plus a **Collections** tab on `/feed`.
+  - A F007 notification kind `addedToCollection` for creators: "Mia added Space Dodge to *Cozy games*", linking to `/c/{id}`. Once per collection and game (F018 group dedupe), withdrawn if the game is removed while unread, with a `collections` setting; F018 game mutes apply.
+  - Private collections never produce activity: adds to them write nothing, and making a collection private hides its items and notifications at read time. Events store the announced game ids, so games added while private never surface later.
+  - Migration `0018_f021.sql` rebuilds `activity_events` once without the `kind` CHECK (nullable `game_id`, new `collection_id`/`game_ids`), so F015 and later feed kinds need no rebuild; `notifications` gains `collection_id`.
+- **User value**: curators reach their followers, creators learn when players champion their games, and the feed gets people-driven discovery.
+- **Areas**: backend (migration, `record_collection_added`, a third feed branch, notification kind, read-time collection filter, hooks in the add/remove endpoints), frontend (feed item and tab, notification text, OS text without the title, setting), desktop (verification only). No engine changes.
+- **Depends on**: F002, F007, F008, F018 (all shipped).
 
 ### F020: Game comment settings: turn comments off, slow mode (S, proposed; after F017)
 - **Pitch**: per-game owner settings on the edit page: "Comments: on / replies only to existing threads / off" and an optional slow mode (one comment or reply per user per game every N minutes). Existing comments stay visible when comments are off.
 - **User value**: creators of small or controversial games can pause discussion without deleting it, and busy games get calmer threads.
 - **Areas**: backend (`games` columns, checks in `create_comment`, `Game` fields), frontend (edit page fieldset, comment form states). No engine changes.
+
+### F022: Announce a collection when it goes public (S, proposed; after F021)
+- **Pitch**: when a collection changes from private to public with at least one published game, followers get one `collectionShared` feed item ("Mia shared *Cozy games*: 8 games") instead of nothing, and creators of the games in it get the F021 `addedToCollection` notification (deduped per collection and game, so re-toggling never re-notifies).
+- **User value**: the common "curate privately, then publish" flow reaches followers, which F021 deliberately skips.
+- **Areas**: backend (one more activity kind, no rebuild; hook in `PATCH /api/collections/{id}`; a once-per-collection guard), frontend (feed item). No engine or desktop changes.
