@@ -474,3 +474,87 @@ impl GameRow {
         self.published || viewer == Some(self.owner_id.as_str())
     }
 }
+
+// ---------------------------------------------------------------------------
+// F008 collections (docs/API.md § F008 additions)
+// ---------------------------------------------------------------------------
+
+/// `CollectionSummary`: counts and covers are evaluated for the viewer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionSummary {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    /// `"public"` or `"private"`.
+    pub visibility: String,
+    pub owner: UserRef,
+    /// Items whose game is visible to the viewer.
+    pub game_count: i64,
+    /// Up to 4 thumbnail URLs of the first visible games that have one, in collection order.
+    pub cover_urls: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    /// `"/c/{id}"` (in-app route).
+    pub path: String,
+}
+
+/// `CollectionItem`: `game` is `null` (never skipped) when the game is not visible to the
+/// viewer; only the collection's owner ever receives such items.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionItem {
+    pub game_id: String,
+    pub game: Option<GameSummary>,
+    pub note: String,
+    pub added_at: String,
+}
+
+/// `Collection`: a summary plus all items (max 100) and the viewer's permissions.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Collection {
+    #[serde(flatten)]
+    pub summary: CollectionSummary,
+    pub items: Vec<CollectionItem>,
+    pub is_owner: bool,
+    pub can_delete: bool,
+}
+
+/// `MyCollection` (`GET /api/users/me/collections`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyCollection {
+    #[serde(flatten)]
+    pub summary: CollectionSummary,
+    pub contains_game: bool,
+    /// All items including unavailable ones (what the 100 cap counts).
+    pub item_count: i64,
+}
+
+/// `GameCollectionsPage` (`GET /api/games/{id}/collections`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameCollectionsPage {
+    pub items: Vec<CollectionSummary>,
+    pub total: i64,
+}
+
+/// `CollectionItemResponse` (`PUT /api/collections/{id}/games/{gameId}`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionItemResponse {
+    pub added: bool,
+    pub item: CollectionItem,
+    pub game_count: i64,
+    pub updated_at: String,
+}
+
+/// `CollectionRemoveResponse` (`DELETE /api/collections/{id}/games/{gameId}`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionRemoveResponse {
+    pub removed: bool,
+    pub game_count: i64,
+    pub updated_at: String,
+}

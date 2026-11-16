@@ -13,14 +13,19 @@ use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
 use crate::ratelimit::Limit;
+use crate::routes::collections::{load_collection, remove_collection};
 use crate::routes::comments::remove_comment;
 use crate::routes::games::{fetch_visible_game, limit_user, parse_paging, remove_game};
-use crate::routes::screenshots::remove_screenshot;
+use crate::routes::screenshots::{is_admin, remove_screenshot};
 use crate::screenshots::{image_url, thumb_url};
 
 pub const REPORT_DETAILS_MAX: usize = 1000;
 pub const PREVIEW_MAX: usize = 140;
 pub const REASONS: &[&str] = &["spam", "offensive", "broken", "copyright", "other"];
+/// F008: the report target types. Since migration 0016 the database no longer has a CHECK on
+/// `reports.target_type`; this list (enforced in [`create_report`]) is the only check, so a
+/// later target type needs no table rebuild.
+pub const TARGET_TYPES: &[&str] = &["game", "comment", "screenshot", "collection"];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,7 +34,8 @@ pub struct Report {
     pub target_type: String,
     pub target_id: String,
     pub target_preview: String,
-    pub target_game_id: String,
+    /// F008: `None` for `"collection"` reports; a game id for every other type.
+    pub target_game_id: Option<String>,
     pub reason: String,
     pub details: String,
     pub reporter: UserRef,
@@ -84,6 +90,12 @@ async fn load_report(state: &AppState, id: &str) -> AppResult<Report> {
     Ok(report_from_row(&row)?)
 }
 
+fn unknown_target_type() -> AppError {
+    AppError::validation(
+        "targetType must be \"game\", \"comment\", \"screenshot\" or \"collection\"",
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateReportBody {
@@ -111,10 +123,13 @@ pub async fn create_report(
             "details must be at most {REPORT_DETAILS_MAX} characters"
         )));
     }
-    let (game_id, preview) = match body.target_type.as_str() {
+    if !TARGET_TYPES.contains(&body.target_type.as_str()) {
+        return Err(unknown_target_type());
+    }
+    let (game_id, preview): (Option<String>, String) = match body.target_type.as_str() {
         "game" => {
             let g = fetch_visible_game(&state, &body.target_id, Some(&user.id)).await?;
-            (g.id, g.title)
+            (Some(g.id), g.title)
         }
         "comment" => {
             let row: Option<(String, String)> =
@@ -127,7 +142,7 @@ pub async fn create_report(
             fetch_visible_game(&state, &game_id, Some(&user.id))
                 .await
                 .map_err(|_| AppError::not_found("Comment"))?;
-            (game_id, text.chars().take(PREVIEW_MAX).collect())
+            (Some(game_id), text.chars().take(PREVIEW_MAX).collect())
         }
         "screenshot" => {
             let row = sqlx::query(
@@ -154,13 +169,15 @@ pub async fn create_report(
             } else {
                 caption.chars().take(PREVIEW_MAX).collect()
             };
-            (game_id, preview)
+            (Some(game_id), preview)
         }
-        _ => {
-            return Err(AppError::validation(
-                "targetType must be \"game\", \"comment\" or \"screenshot\"",
-            ));
+        // F008: the collection must be visible to the reporter (private → owner/admin only).
+        "collection" => {
+            let admin = is_admin(&state, Some(&user.id)).await?;
+            let c = load_collection(&state, &body.target_id, Some(&user.id), admin).await?;
+            (None, c.title.chars().take(PREVIEW_MAX).collect())
         }
+        _ => return Err(unknown_target_type()),
     };
 
     let existing: Option<(String,)> = sqlx::query_as(
@@ -298,6 +315,9 @@ pub async fn admin_resolve_report(
         // F006: same effects as `DELETE /api/comments/{id}` (replies cascade, open reports on
         // every deleted comment are resolved).
         ("delete", "comment") => remove_comment(&state, &report.target_id).await?,
+        // F008: same effects as `DELETE /api/collections/{id}` (items cascade, open reports
+        // on it resolved); a collection that is already gone is a no-op.
+        ("delete", "collection") => remove_collection(&state, &report.target_id).await?,
         _ => {}
     }
 

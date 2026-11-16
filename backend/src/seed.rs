@@ -86,5 +86,83 @@ pub async fn run(state: &AppState, zips: &[PathBuf]) -> anyhow::Result<()> {
             Err(e) => return Err(anyhow::anyhow!("seeding {}: {e}", zip.display())),
         }
     }
+    seed_collection(state, &owner).await?;
     Ok(())
+}
+
+/// F008: the demo collection's title, description and games (example title, note), in order.
+pub const DEMO_COLLECTION_TITLE: &str = "Arcade starter pack";
+pub const DEMO_COLLECTION_DESCRIPTION: &str = "Four short games to try first.";
+pub const DEMO_COLLECTION_GAMES: &[(&str, &str)] = &[
+    ("Space Dodge", "A two-minute warm-up: dodge, shoot, repeat."),
+    ("Brick Breaker", "Six levels of classic paddle action."),
+    (
+        "Pixel Peaks",
+        "A short platformer climb with three achievements.",
+    ),
+    (
+        "Ember Garden",
+        "Light lanterns and catch moths at your own pace.",
+    ),
+];
+
+/// F008: one public collection of the demo user's example games. Idempotent: skipped when the
+/// demo user already has a collection with this title, or owns none of the example games.
+/// Returns the new collection's id.
+pub async fn seed_collection(state: &AppState, owner: &str) -> anyhow::Result<Option<String>> {
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM collections WHERE owner_id = ? AND title = ?")
+            .bind(owner)
+            .bind(DEMO_COLLECTION_TITLE)
+            .fetch_optional(&state.db)
+            .await?;
+    if exists.is_some() {
+        return Ok(None);
+    }
+    let mut games: Vec<(String, &str)> = Vec::new();
+    for (title, note) in DEMO_COLLECTION_GAMES {
+        // The newest copy when the example was seeded more than once.
+        let id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM games WHERE owner_id = ? AND title = ?              ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        )
+        .bind(owner)
+        .bind(title)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some(id) = id {
+            games.push((id, note));
+        }
+    }
+    if games.is_empty() {
+        return Ok(None);
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = crate::models::now_rfc3339();
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        "INSERT INTO collections (id, owner_id, title, description, visibility, created_at,          updated_at) VALUES (?, ?, ?, ?, 'public', ?, ?)",
+    )
+    .bind(&id)
+    .bind(owner)
+    .bind(DEMO_COLLECTION_TITLE)
+    .bind(DEMO_COLLECTION_DESCRIPTION)
+    .bind(&now)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await?;
+    for (pos, (gid, note)) in games.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO collection_games (collection_id, game_id, position, note, added_at)              VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(gid)
+        .bind(pos as i64)
+        .bind(note)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    println!("seeded collection \"{DEMO_COLLECTION_TITLE}\" -> /c/{id}");
+    Ok(Some(id))
 }

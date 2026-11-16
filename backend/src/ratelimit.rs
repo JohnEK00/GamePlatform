@@ -58,6 +58,10 @@ pub enum Limit {
     /// F017 creator thread tools (`PUT`/`DELETE …/pin` + `…/lock`, shared): 60 per 10 min,
     /// per user
     ThreadTools,
+    /// F008 collection writes, shared by the seven write endpoints: `POST /api/collections`,
+    /// `PATCH`/`DELETE /api/collections/{id}`, `PUT`/`DELETE /api/collections/{id}/games/{gameId}`
+    /// and `PUT /api/collections/{id}/order`: 120 per 10 min, per user. Reads are unlimited.
+    Collections,
 }
 
 impl Limit {
@@ -82,6 +86,7 @@ impl Limit {
             Limit::Heart => (120, Duration::from_secs(600)),
             Limit::Notifications => (120, Duration::from_secs(60)),
             Limit::ThreadTools => (60, Duration::from_secs(600)),
+            Limit::Collections => (120, Duration::from_secs(600)),
         }
     }
 }

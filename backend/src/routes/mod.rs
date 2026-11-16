@@ -2,6 +2,7 @@
 
 pub mod achievements;
 pub mod auth;
+pub mod collections;
 pub mod comments;
 pub mod favorites;
 pub mod feed;
@@ -61,8 +62,18 @@ pub fn api_router() -> Router<AppState> {
             put(users::upload_avatar).layer(image_limit),
         )
         .route("/users/me/favorites", get(favorites::my_favorites))
+        // F008: static, so it wins over `/users/{username}/collections` ("me" is not a valid
+        // username).
+        .route(
+            "/users/me/collections",
+            get(collections::list_my_collections),
+        )
         .route("/users/me/stats", get(stats::my_stats))
         .route("/users/{username}", get(users::get_user))
+        .route(
+            "/users/{username}/collections",
+            get(collections::list_user_collections),
+        )
         .route(
             "/users/{username}/achievements",
             get(achievements::list_user_achievements),
@@ -176,6 +187,26 @@ pub fn api_router() -> Router<AppState> {
                 .delete(saves::delete_save),
         )
         .route("/games/{id}/stats", get(stats::game_stats))
+        // F008 collections
+        .route("/collections", post(collections::create_collection))
+        .route(
+            "/collections/{id}",
+            get(collections::get_collection)
+                .patch(collections::update_collection)
+                .delete(collections::delete_collection),
+        )
+        .route(
+            "/collections/{id}/games/{game_id}",
+            put(collections::put_collection_game).delete(collections::delete_collection_game),
+        )
+        .route(
+            "/collections/{id}/order",
+            put(collections::put_collection_order),
+        )
+        .route(
+            "/games/{id}/collections",
+            get(collections::list_game_collections),
+        )
         .route("/reports", post(reports::create_report))
         .route("/admin/reports", get(reports::admin_list_reports))
         .route(
