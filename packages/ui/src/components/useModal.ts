@@ -60,6 +60,7 @@ export function useModal<T extends HTMLElement = HTMLElement>(open: boolean, onC
     const token = {};
     stack.push(token);
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const root0 = ref.current;
     const isTop = () => stack[stack.length - 1] === token;
 
     const focusInitial = () => {
@@ -116,6 +117,11 @@ export function useModal<T extends HTMLElement = HTMLElement>(open: boolean, onC
       document.removeEventListener("focusin", onFocusIn);
       const i = stack.indexOf(token);
       if (i >= 0) stack.splice(i, 1);
+      // Nested dialogs closing in one commit (e.g. a confirm inside a lightbox): if another dialog's cleanup has
+      // already put focus on a live element outside this one, leave it there (review 4, L8).
+      const active = document.activeElement;
+      const settled = active instanceof HTMLElement && active !== document.body && active.isConnected && !(root0 && root0.contains(active));
+      if (settled && (!root0 || !root0.isConnected) && stack.length === 0) return;
       if (opener && opener.isConnected && opener !== document.body) opener.focus();
       else {
         const fallback = latest.current.opts.returnFocus?.();

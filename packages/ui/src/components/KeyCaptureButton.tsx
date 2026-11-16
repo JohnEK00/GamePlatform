@@ -20,6 +20,8 @@ export type KeyCaptureButtonProps = {
   disabled?: boolean;
   /** Marks the slot as invalid (e.g. a non-bindable code in a hand-written game.json). */
   invalid?: boolean;
+  /** Extra `aria-describedby` id(s) for the key button (e.g. the row's conflict warning). */
+  describedBy?: string;
 };
 
 /**
@@ -27,7 +29,7 @@ export type KeyCaptureButtonProps = {
  * sees it) is assigned. Escape cancels; a non-bindable key keeps capture mode and says so; blur, a click elsewhere
  * or 10 s end capture without a change. Mouse buttons can't be captured.
  */
-export function KeyCaptureButton({ code, actionName, slot, onAssign, onClear, layout, disabled, invalid }: KeyCaptureButtonProps) {
+export function KeyCaptureButton({ code, actionName, slot, onAssign, onClear, layout, disabled, invalid, describedBy }: KeyCaptureButtonProps) {
   const [capturing, setCapturing] = useState(false);
   const [rejected, setRejected] = useState<string | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -76,6 +78,7 @@ export function KeyCaptureButton({ code, actionName, slot, onAssign, onClear, la
 
   const label = code ? keyLabel(code, layout) : null;
   const name = `${actionName}, key ${slot + 1}: ${capturing ? "press a key" : (label ?? "none")}`;
+  const describedByIds = [capturing ? `${uid}-live` : null, describedBy || null].filter(Boolean).join(" ") || undefined;
 
   return (
     <span className={`pf-keycap${capturing ? " is-capturing" : ""}${code ? " is-filled" : ""}${invalid ? " is-invalid" : ""}`}>
@@ -84,7 +87,7 @@ export function KeyCaptureButton({ code, actionName, slot, onAssign, onClear, la
         type="button"
         className="pf-keycap__btn"
         aria-label={name}
-        aria-describedby={capturing ? `${uid}-live` : undefined}
+        aria-describedby={describedByIds}
         aria-invalid={invalid || undefined}
         disabled={disabled}
         onClick={() => setCapturing((c) => !c)}
@@ -93,7 +96,18 @@ export function KeyCaptureButton({ code, actionName, slot, onAssign, onClear, la
         {capturing ? "Press a key…" : (label ?? "—")}
       </button>
       {code && onClear && !capturing && (
-        <button type="button" className="pf-keycap__clear" aria-label={`Clear ${label} from ${actionName}`} title="Clear" disabled={disabled} onClick={onClear}>
+        <button
+          type="button"
+          className="pf-keycap__clear"
+          aria-label={`Clear ${label} from ${actionName}`}
+          title="Clear"
+          disabled={disabled}
+          onClick={() => {
+            // The × unmounts once the slot is empty: keep focus on this slot's key button (review 4, L6).
+            btnRef.current?.focus();
+            onClear();
+          }}
+        >
           ×
         </button>
       )}

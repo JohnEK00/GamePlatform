@@ -20,7 +20,7 @@ export function NotificationItem({ item, onActivate, variant = "panel" }: Notifi
   const unread = !item.read;
   const actors = item.actors.slice(0, 2);
   return (
-    <li className={`pf-notif pf-notif--${variant}${unread ? " pf-notif--unread" : ""}`}>
+    <li className={`pf-notif pf-notif--${variant}${unread ? " pf-notif--unread" : ""}`} data-notif-id={item.id}>
       <Link to={safeNotificationPath(item.path)} className="pf-notif__link" onClick={(e) => onActivate?.(item, e)}>
         <span className={`pf-notif__avatars${actors.length > 1 ? " pf-notif__avatars--stack" : ""}`} aria-hidden="true">
           {actors.map((a) => (

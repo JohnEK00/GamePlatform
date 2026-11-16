@@ -48,7 +48,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="pf-toasts" role="region" aria-label="Notifications" aria-live="polite">
+      <div className="pf-toasts" role="region" aria-label="Status messages" aria-live="polite">
         {items.map((t) => (
           <Toast key={t.id} item={t} onDismiss={() => dismiss(t.id)} />
         ))}

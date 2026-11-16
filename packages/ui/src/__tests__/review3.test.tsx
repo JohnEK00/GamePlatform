@@ -177,8 +177,9 @@ describe("L2: gallery paging after a delete", () => {
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
     fireEvent.click(within(screen.getAllByRole("dialog").at(-1)!).getByRole("button", { name: /Delete/ }));
     await waitFor(() => expect(grid()).toHaveLength(11));
-    // L1c: focus lands on the item that took the deleted one's place.
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Screenshot: Caption 4" }));
+    // L1c: focus lands on the item that took the deleted one's place. The delete resolves outside act(), so the
+    // dialogs' effect cleanups (which restore focus) may run after the DOM update: wait for them (review 4, L8).
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Screenshot: Caption 4" })));
 
     list.mockClear();
     fireEvent.click(screen.getByRole("button", { name: /Load more/ }));
@@ -202,7 +203,8 @@ describe("L2: gallery paging after a delete", () => {
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
     fireEvent.click(within(screen.getAllByRole("dialog").at(-1)!).getByRole("button", { name: /Delete/ }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(document.activeElement).toBe(screen.getByRole("heading", { name: /Screenshots/ }));
+    // Focus is restored in the nested dialogs' effect cleanups, which may run after the DOM removal (review 4, L8).
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: /Screenshots/ })));
   });
 });
 

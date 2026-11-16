@@ -50,7 +50,6 @@ const panelEl = () => document.getElementById("pf-notif-panel");
 
 async function openPanel() {
   fireEvent.click(bell());
-  // (The toast region is also called "Notifications"; find the panel by its id and check its role/name.)
   const panel = await waitFor(() => {
     const el = panelEl();
     if (!el) throw new Error("panel not open");
@@ -91,11 +90,69 @@ describe("NotificationBell", () => {
     expect(screen.queryByRole("button", { name: /^Notifications/ })).toBeNull();
   });
 
-  it("sits in the header outside the collapsible nav", async () => {
+  it("wide screens: sits in the nav just before the header actions, so Tab order is visual order", async () => {
     await setup({ header: true });
-    const b = bell();
-    expect(b.closest("#pf-mainnav")).toBeNull();
-    expect(b.closest(".pf-header__inner")).not.toBeNull();
+    const wrap = bell().closest(".pf-bell-wrap")!;
+    expect(wrap.closest("#pf-mainnav")).not.toBeNull();
+    expect(wrap.nextElementSibling?.classList.contains("pf-header__actions")).toBe(true);
+    expect(wrap.previousElementSibling?.classList.contains("pf-search")).toBe(true);
+    // Tab order: logo, nav links, search, bell, + Upload, user menu.
+    const order = Array.from(document.querySelectorAll<HTMLElement>(".pf-header a[href], .pf-header button, .pf-header input")).filter((el) => !el.classList.contains("pf-header__toggle"));
+    const i = order.indexOf(bell());
+    expect(order[i - 1]).toBe(screen.getByRole("searchbox"));
+    expect(order[i + 1]).toBe(screen.getByRole("link", { name: "+ Upload" }));
+    expect(document.querySelectorAll(".pf-bell").length).toBe(1);
+  });
+
+  it("narrow screens: sits in the header row just before the menu toggle (outside the collapsible nav)", async () => {
+    const mm = vi.fn((q: string) => ({ matches: q === "(max-width: 860px)", media: q, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    vi.stubGlobal("matchMedia", mm);
+    try {
+      await setup({ header: true });
+      const wrap = bell().closest(".pf-bell-wrap")!;
+      expect(wrap.closest("#pf-mainnav")).toBeNull();
+      expect(wrap.parentElement?.classList.contains("pf-header__inner")).toBe(true);
+      expect(wrap.nextElementSibling?.classList.contains("pf-header__toggle")).toBe(true);
+      expect(document.querySelectorAll(".pf-bell").length).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("moves between the slots when the breakpoint changes", async () => {
+    let matches = false;
+    const listeners = new Set<() => void>();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((q: string) => ({
+        get matches() {
+          return matches;
+        },
+        media: q,
+        addEventListener: (_: string, cb: () => void) => listeners.add(cb),
+        removeEventListener: (_: string, cb: () => void) => listeners.delete(cb),
+      })),
+    );
+    try {
+      await setup({ header: true });
+      expect(bell().closest("#pf-mainnav")).not.toBeNull();
+      act(() => {
+        matches = true;
+        listeners.forEach((cb) => cb());
+      });
+      expect(bell().closest("#pf-mainnav")).toBeNull();
+      expect(document.querySelectorAll(".pf-bell").length).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("the toast stack is not another \"Notifications\" region (review 4, L4)", async () => {
+    await setup();
+    expect(screen.queryAllByRole("region", { name: "Notifications" })).toHaveLength(0);
+    expect(screen.getByRole("region", { name: "Status messages" }).classList.contains("pf-toasts")).toBe(true);
+    const panel = await openPanel();
+    expect(screen.getAllByRole("region", { name: "Notifications" })).toEqual([panel]);
   });
 
   it("aria-expanded / aria-controls; opening fetches 10 and focuses the heading", async () => {

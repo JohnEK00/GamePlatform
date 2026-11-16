@@ -4832,26 +4832,13 @@ a.pf-tab {
   scroll-margin-top: calc(var(--pf-header-h) + 16px);
 }
 
-/* Wide screens: the bell sits outside #pf-mainnav in the DOM (so it stays visible on narrow screens),
-   but is shown just before "+ Upload". */
-@media (min-width: 861px) {
-  .pf-header__inner > .pf-header__nav {
-    display: contents;
-  }
-  .pf-header__inner > .pf-header__nav > nav,
-  .pf-header__inner > .pf-header__nav > .pf-search {
-    order: 1;
-  }
-  .pf-header__inner > .pf-bell-wrap {
-    order: 2;
-    margin-left: auto;
-  }
-  .pf-header__inner > .pf-header__nav > .pf-header__actions {
-    order: 3;
-  }
-  .pf-header__inner > .pf-bell-wrap ~ .pf-header__nav > .pf-header__actions {
-    margin-left: 0;
-  }
+/* The bell is rendered in the slot that matches the layout (Header's HEADER_COLLAPSE_QUERY), so DOM order is
+   visual order: wide, inside the nav just before the actions; narrow, in the header row just before ☰. */
+.pf-header__nav > .pf-bell-wrap {
+  margin-left: auto;
+}
+.pf-header__nav > .pf-bell-wrap + .pf-header__actions {
+  margin-left: 0;
 }
 @media (max-width: 860px) {
   .pf-header__inner > .pf-bell-wrap {
@@ -4870,4 +4857,9 @@ a.pf-tab {
     max-height: calc(100vh - var(--pf-header-h) - 18px);
     max-height: calc(100dvh - var(--pf-header-h) - 18px);
   }
+}
+
+/* Programmatic focus target after "Mark all as read" / the last "Load more" (review 4, L6). */
+.pf-notifs .pf-pagehead h1:focus:not(:focus-visible) {
+  outline: none;
 }

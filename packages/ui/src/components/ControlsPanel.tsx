@@ -1,4 +1,4 @@
-import { useId, useMemo } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import type { ControlAction } from "../api/types";
 import {
   effectiveActions,
@@ -6,6 +6,7 @@ import {
   gamepadLabel,
   hasCtrlShortcutRisk,
   isActionChanged,
+  keyLabel,
   MAX_ACTION_KEYS,
   useKeyboardLayout,
   type ControlOverrides,
@@ -50,6 +51,10 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
   const nameOf = (id: string) => actions.find((a) => a.id === id)?.name ?? id;
   const anyChanged = actions.some((a) => isActionChanged(a, overrides));
   const hintText = (hint ?? "").trim();
+  const tableRef = useRef<HTMLTableElement>(null);
+  const doneRef = useRef<HTMLButtonElement>(null);
+  // Polite announcement of a conflict created by an assignment (review 4, L6b).
+  const [live, setLive] = useState<{ text: string; n: number }>({ text: "", n: 0 });
 
   const setKeys = (index: number, keys: string[]) => onChange(withKeys(overrides, actions[index], keys));
 
@@ -59,10 +64,28 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
     // A code already in another slot of this action moves here.
     for (let i = 0; i < slots.length; i++) if (i !== slot && slots[i] === code) slots[i] = null;
     slots[Math.min(slot, cur.length)] = code;
-    setKeys(index, slots.filter((k): k is string => k !== null));
+    const keys = slots.filter((k): k is string => k !== null);
+    const next = withKeys(overrides, actions[index], keys);
+    const id = actions[index].id;
+    const before = new Set(conflicts[id] ?? []);
+    const fresh = (findConflicts(effectiveActions(actions, next))[id] ?? []).filter((o) => !before.has(o));
+    onChange(next);
+    if (fresh.length) {
+      const text = `${keyLabel(code, layout)} is also used by ${fresh.map(nameOf).join(", ")}`;
+      setLive((l) => ({ text, n: l.n + 1 }));
+    }
   };
   const clear = (index: number, slot: number) => setKeys(index, effective[index].keys.filter((_, i) => i !== slot));
-  const resetRow = (index: number) => onChange(withKeys(overrides, actions[index], actions[index].keys));
+  // "Reset" unmounts once the row is back to defaults: focus moves to the row's first key button first (L6a).
+  const resetRow = (index: number) => {
+    tableRef.current?.querySelector<HTMLElement>(`tr[data-action-row="${index}"] .pf-keycap__btn`)?.focus();
+    onChange(withKeys(overrides, actions[index], actions[index].keys));
+  };
+  // "Reset all" unmounts after a click: focus moves to Done.
+  const resetAll = () => {
+    doneRef.current?.focus();
+    onChange({});
+  };
 
   return (
     <div className="pf-modal-backdrop pf-controls-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -83,7 +106,7 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
 
         {effective.length > 0 && (
           <div className="pf-controls__scroll">
-            <table className="pf-controls__table">
+            <table className="pf-controls__table" ref={tableRef}>
               <thead>
                 <tr>
                   <th scope="col">Action</th>
@@ -99,7 +122,7 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
                   const warnId = `${uid}-warn-${i}`;
                   const warn = others?.length || unbound;
                   return (
-                    <tr key={a.id} className={changed ? "is-changed" : undefined} aria-describedby={warn ? warnId : undefined}>
+                    <tr key={a.id} data-action-row={i} className={changed ? "is-changed" : undefined} aria-describedby={warn ? warnId : undefined}>
                       <th scope="row" className="pf-controls__name">
                         <span>{a.name}</span>
                         {changed && <span className="pf-controls__tag">Changed</span>}
@@ -118,6 +141,7 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
                               actionName={a.name}
                               slot={s}
                               layout={layout}
+                              describedBy={warn ? warnId : undefined}
                               onAssign={(code) => assign(i, s, code)}
                               onClear={() => clear(i, s)}
                             />
@@ -146,14 +170,17 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
 
         <div className="pf-controls__foot">
           {anyChanged && (
-            <button type="button" className="pf-btn pf-btn--ghost pf-btn--sm" onClick={() => onChange({})}>
+            <button type="button" className="pf-btn pf-btn--ghost pf-btn--sm" onClick={resetAll}>
               Reset all
             </button>
           )}
           {effective.length > 0 && <span className="pf-muted pf-small pf-controls__saved">{mode === "studio" ? "Kept for this Studio session" : "Saved on this device"}</span>}
-          <button type="button" className="pf-btn pf-btn--primary pf-btn--sm" onClick={onClose} data-autofocus>
+          <button type="button" className="pf-btn pf-btn--primary pf-btn--sm" onClick={onClose} data-autofocus ref={doneRef}>
             Done
           </button>
+        </div>
+        <div className="pf-sr-only" aria-live="polite" aria-atomic="true">
+          {live.text && <span key={live.n}>{live.text}</span>}
         </div>
       </div>
     </div>

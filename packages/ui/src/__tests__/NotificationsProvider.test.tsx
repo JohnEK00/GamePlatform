@@ -203,11 +203,51 @@ describe("NotificationsProvider poll loop", () => {
     expect(count).toHaveBeenCalledTimes(1);
   });
 
-  it("401: stops until the user changes", async () => {
-    const { count } = setup({ counts: [new ApiError("unauthorized", "no", 401)] });
+  it("401 with an expired session: auth revalidates, signs out, and polling stops (review 4, L7)", async () => {
+    const { client, count, probe } = setup({ counts: [new ApiError("unauthorized", "no", 401)] });
+    const me401 = vi.spyOn(client, "me");
+    expect(me401).toHaveBeenCalledTimes(1); // startup check, already resolved with the user
+    me401.mockRejectedValue(new ApiError("unauthorized", "expired", 401));
     await flush();
+    await flush();
+    // Startup me() was call 1; the 401 from the count triggered call 2.
+    expect(me401).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem("webgame.token")).toBeNull();
+    expect(client.token).toBeNull();
+    expect(probe()).toBe("false|0|null");
     await advance(30 * 60_000);
     expect(count).toHaveBeenCalledTimes(1);
+  });
+
+  it("401 while the session is still valid: keeps the user and retries with backoff", async () => {
+    const { client, count, probe } = setup({ counts: [new ApiError("unauthorized", "no", 401), c(3, "2026-11-15T11:00:00.000Z")] });
+    await flush();
+    await flush();
+    expect(client.me).toHaveBeenCalledTimes(2);
+    expect(client.token).toBe("tok");
+    expect(count).toHaveBeenCalledTimes(1);
+    await advance(119_000);
+    expect(count).toHaveBeenCalledTimes(1);
+    await advance(1_000);
+    expect(count).toHaveBeenCalledTimes(2);
+    expect(probe()).toBe("true|3|2026-11-15T11:00:00.000Z");
+  });
+
+  it("restarts when the token changes for the same user (signed in again in another tab)", async () => {
+    // The storage event refreshes the same user (same id): the loop must restart on the token, not only the id.
+    const { client, count, probe } = setup({ counts: [c(1, "2026-11-15T10:00:00.000Z"), c(5, "2026-11-15T11:00:00.000Z")] });
+    await flush();
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(probe()).toBe("true|1|2026-11-15T10:00:00.000Z");
+    act(() => {
+      localStorage.setItem("webgame.token", "tok2");
+      window.dispatchEvent(new StorageEvent("storage", { key: "webgame.token", newValue: "tok2" }));
+    });
+    await flush();
+    await flush();
+    expect(client.token).toBe("tok2");
+    expect(count).toHaveBeenCalledTimes(2);
+    expect(probe()).toBe("true|5|2026-11-15T11:00:00.000Z");
   });
 
   it("sign-out stops polling and clears state", async () => {

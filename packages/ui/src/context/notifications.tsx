@@ -109,12 +109,13 @@ const newer = (a: string | null | undefined, b: string | null | undefined) => {
 
 /**
  * Owns the unread-count poll (spec § 2.7: one timer per tab, next fetch scheduled after each response,
- * paused while hidden unless OS notifications are on, 429/error backoff, stop on 401/404), the live region
+ * paused while hidden unless OS notifications are on, 429/error backoff, stop on 404; a 401 revalidates the session
+ * through auth and stops only when that signs out), the live region
  * (§ 2.6) and the desktop OS-notification step (§ 2.8). Mount inside AuthProvider and ToastProvider.
  */
 export function NotificationsProvider({ children }: { children: ReactNode }) {
   const api = useApi();
-  const { user } = useAuth();
+  const { user, token, refresh: authRefresh } = useAuth();
   const platform = usePlatform();
   const userId = user?.id ?? null;
 
@@ -125,6 +126,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   apiRef.current = api;
   const platformRef = useRef<PlatformConfig>(platform);
   platformRef.current = platform;
+  const authRefreshRef = useRef(authRefresh);
+  authRefreshRef.current = authRefresh;
   const loopRef = useRef<Loop>(freshLoop(0, null));
 
   // One controller for the provider's lifetime; every function reads the refs above.
@@ -232,6 +235,24 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    /**
+     * A 401 from the count: ask auth to revalidate the session (review 4, L7). If it signs out (or a new token
+     * arrives), the provider effect stops / restarts the loop; if the session is still good, retry with backoff.
+     */
+    const reauth = async (gen: number) => {
+      try {
+        await authRefreshRef.current();
+      } catch {
+        /* treated like "still signed in" below */
+      }
+      const L = loopRef.current;
+      if (gen !== L.gen || !L.userId || L.outcome !== "unauthorized") return;
+      if (!apiRef.current.token) return; // signed out: the effect stops the loop on the next render
+      L.outcome = "error";
+      L.errorStreak += 1;
+      schedule();
+    };
+
     const poll = (): Promise<void> => {
       const L = loopRef.current;
       if (!L.userId || L.outcome === "unauthorized" || L.outcome === "unsupported") return Promise.resolve();
@@ -278,6 +299,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
           }
           if (isApiError(e) && e.status === 401) {
             L.outcome = "unauthorized";
+            void reauth(gen);
           } else if (isApiError(e) && e.status === 429) {
             L.outcome = "rateLimited";
             L.retryAfter = e.retryAfter;
@@ -325,11 +347,12 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     return { announce, poll, wake, start, stop, schedule, setServerUnread };
   }, []);
 
-  // (Re)start on sign-in / user change / client change; stop and clear on sign-out.
+  // (Re)start on sign-in / user change / token change (e.g. the same user signed in again in another tab after a
+  // 401) / client change; stop and clear on sign-out.
   useEffect(() => {
     ctrl.start(userId);
     return () => ctrl.stop();
-  }, [ctrl, userId, api]);
+  }, [ctrl, userId, token, api]);
 
   useEffect(() => {
     const onVisibility = () => (isVisible() ? ctrl.wake() : ctrl.schedule());
