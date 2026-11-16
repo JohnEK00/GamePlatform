@@ -1,0 +1,61 @@
+{
+  "name": "Overclock",
+  "entry": "main.js",
+  "width": 480,
+  "height": 270,
+  "engine": "1",
+  "description": "A rogue maintenance drone clears a locked-down server facility, floor by floor. One hit kills both ways: shove, grab what the sentries drop, throw it, slam doors on them, and reboot in an instant when it goes wrong.",
+  "controls": "WASD/arrows move, mouse or right stick aims. Left click/J/Space attack (unarmed: shove, then finish), right click/K throw, E pick up, R reboot the floor, P pause, M mute. Menus: mouse, arrows + Enter, or D-pad + A. Remap keys with the controls panel.",
+  "actions": [
+    { "id": "up", "name": "Move up", "keys": ["ArrowUp", "KeyW"], "gamepad": ["Up"] },
+    { "id": "down", "name": "Move down", "keys": ["ArrowDown", "KeyS"], "gamepad": ["Down"] },
+    { "id": "left", "name": "Move left", "keys": ["ArrowLeft", "KeyA"], "gamepad": ["Left"] },
+    { "id": "right", "name": "Move right", "keys": ["ArrowRight", "KeyD"], "gamepad": ["Right"] },
+    { "id": "attack", "name": "Attack / shove", "keys": ["Mouse0", "KeyJ", "Space"], "gamepad": ["RT", "X"] },
+    { "id": "throw", "name": "Throw weapon", "keys": ["Mouse2", "KeyK"], "gamepad": ["LT", "Y"] },
+    { "id": "interact", "name": "Pick up / swap", "keys": ["KeyE", "KeyL"], "gamepad": ["A", "RB"] },
+    { "id": "restart", "name": "Reboot floor", "keys": ["KeyR"], "gamepad": ["Back"] },
+    { "id": "pause", "name": "Pause", "keys": ["KeyP", "Backspace"], "gamepad": ["Start"] },
+    { "id": "confirm", "name": "Menu confirm", "keys": ["Enter", "NumpadEnter"], "gamepad": ["A"] },
+    { "id": "mute", "name": "Mute", "keys": ["KeyM"] }
+  ],
+  "leaderboard": { "order": "desc", "format": "number", "label": "Run score" },
+  "achievements": [
+    {
+      "id": "swing_shift",
+      "name": "Swing Shift",
+      "description": "Take down a sentry while it is still dazed from a door you slammed into it.",
+      "icon": "assets/icons/ach_swing_shift.png"
+    },
+    {
+      "id": "spanner",
+      "name": "Spanner in the Works",
+      "description": "Stun a sentry with a thrown wrench.",
+      "icon": "assets/icons/ach_spanner.png"
+    },
+    {
+      "id": "overclocked",
+      "name": "Overclocked",
+      "description": "Chain a x4 combo.",
+      "icon": "assets/icons/ach_overclocked.png"
+    },
+    {
+      "id": "hands_on",
+      "name": "Hands-On",
+      "description": "Clear a floor without picking up a single weapon.",
+      "icon": "assets/icons/ach_hands_on.png"
+    },
+    {
+      "id": "zero_downtime",
+      "name": "Zero Downtime",
+      "description": "Earn an S grade on any floor.",
+      "icon": "assets/icons/ach_zero_downtime.png"
+    },
+    {
+      "id": "facility_offline",
+      "name": "Facility Offline",
+      "description": "Clear all four floors in a single run.",
+      "icon": "assets/icons/ach_facility_offline.png"
+    }
+  ]
+}
