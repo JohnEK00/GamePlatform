@@ -3,14 +3,23 @@
 export const SERVER_STORAGE_KEY = "webgame.desktop.server";
 export const DEFAULT_SERVER: string = normalizeServerUrl(import.meta.env.VITE_API_BASE_URL ?? "") ?? "http://localhost:8080";
 
-/** Trim, default the scheme to http://, drop trailing slashes. Returns null if not a valid http(s) URL. */
+/**
+ * Trim, default the scheme to http://, drop trailing slashes. Returns null if not a valid http(s) URL.
+ * This decides where the auth token is sent, so anything ambiguous is rejected rather than guessed:
+ * a scheme-less `scheme:...` (javascript:, mailto:, data:, about:) and URLs with credentials (`a@host`).
+ */
 export function normalizeServerUrl(input: string): string | null {
   let s = input.trim();
   if (!s) return null;
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = "http://" + s;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
+    // Only "host[:port][/path]" may omit the scheme; "word:" not followed by a port is some other scheme.
+    if (/^[a-z][a-z0-9+.-]*:(?!\d*(?:[/?#]|$))/i.test(s)) return null;
+    s = "http://" + s;
+  }
   try {
     const u = new URL(s);
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (u.username || u.password) return null;
     if (u.search || u.hash) return null;
     return (u.origin + u.pathname).replace(/\/+$/, "");
   } catch {

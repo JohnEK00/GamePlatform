@@ -79,6 +79,8 @@ jobs:
       - run: npm run build:ui
       # tauri's build script embeds frontendDist (../dist), so build the desktop frontend too.
       - run: npm run build -w @webgame/desktop
+      # Review 5 L10: unit tests for the desktop TypeScript (server URL validation, platform bridges, menu).
+      - run: npm test -w @webgame/desktop
       - name: cargo build
         working-directory: apps/desktop/src-tauri
         run: cargo build --locked

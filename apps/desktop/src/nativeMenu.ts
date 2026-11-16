@@ -51,7 +51,8 @@ export function installNativeIntegrations(): () => void {
     if (payload === "screenshot") window.dispatchEvent(new CustomEvent(PLAYER_SCREENSHOT_EVENT));
     else if (payload === "controls") window.dispatchEvent(new CustomEvent(PLAYER_CONTROLS_EVENT));
     else if (payload === "open-folder") openFolderInStudio();
-    else if (ROUTES[payload]) navigate(ROUTES[payload]);
+    // Own keys only: a payload like "constructor" must not resolve through Object.prototype.
+    else if (typeof payload === "string" && Object.prototype.hasOwnProperty.call(ROUTES, payload)) navigate(ROUTES[payload]);
   })
     .then((fn) => {
       if (disposed) fn();

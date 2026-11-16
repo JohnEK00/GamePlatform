@@ -445,17 +445,35 @@ fn reload_data(folders: &ProjectFolders, folder_id: &str) -> Result<ProjectData,
     })
 }
 
+/// Returns the inline text for a text-extension file, or `None` when it must stay binary.
+/// A `.fnt` may be a binary BMFont (`BMF\x03...`) or otherwise not UTF-8; lossy decoding would corrupt it,
+/// so such files are handed over as raw bytes (the Studio treats `.fnt` ArrayBuffers as binary).
+fn text_for(path: &str, bytes: &[u8]) -> Option<String> {
+    let ext = extension(path);
+    if !TEXT_EXTS.contains(&ext.as_str()) {
+        return None;
+    }
+    if ext == "fnt" {
+        if bytes.starts_with(b"BMF\x03") {
+            return None;
+        }
+        let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+        return std::str::from_utf8(body).ok().map(str::to_owned);
+    }
+    Some(decode_text(bytes))
+}
+
 /// Splits a read folder into the JSON index (texts inline) and the binary files kept behind a ticket.
 fn into_index(data: ProjectData, folder_id: String, projects: &OpenProjects) -> ProjectIndex {
     let mut entries = Vec::with_capacity(data.files.len());
     let mut binaries = HashMap::new();
     for (path, bytes) in data.files {
         let size = bytes.len() as u64;
-        if TEXT_EXTS.contains(&extension(&path).as_str()) {
+        if let Some(text) = text_for(&path, &bytes) {
             entries.push(IndexEntry {
                 path,
                 size,
-                text: Some(decode_text(&bytes)),
+                text: Some(text),
             });
         } else {
             if size > 0 {
@@ -722,6 +740,42 @@ mod tests {
             index.files[0].text.as_deref(),
             Some("info face=\"a\" size=8\n")
         );
+    }
+
+    #[test]
+    fn binary_or_non_utf8_bmfont_files_stay_binary() {
+        let store = OpenProjects::default();
+        let bin = b"BMF\x03\x01\x14\x00\x00\x00".to_vec();
+        let ascii_bmf = b"BMF\x03info face=\"a\"".to_vec();
+        let latin1 = b"info face=\"caf\xE9\"\n".to_vec();
+        let data = ProjectData {
+            root: PathBuf::from("/g"),
+            folder: "g".into(),
+            manifest: serde_json::json!({ "entry": "main.js" }),
+            files: vec![
+                ("bin.fnt".into(), bin.clone()),
+                ("ascii.fnt".into(), ascii_bmf.clone()),
+                ("latin1.fnt".into(), latin1.clone()),
+                (
+                    "bom.fnt".into(),
+                    b"\xEF\xBB\xBFinfo face=\"\xC3\xA9\"".to_vec(),
+                ),
+                ("lossy.txt".into(), b"a\xFFb".to_vec()),
+            ],
+            skipped: vec![],
+        };
+        let index = into_index(data, "id".into(), &store);
+        assert_eq!(index.files[0].text, None);
+        assert_eq!(index.files[0].size, bin.len() as u64);
+        assert_eq!(index.files[1].text, None, "BMF\x03 is binary even if UTF-8");
+        assert_eq!(index.files[2].text, None, "invalid UTF-8 .fnt is binary");
+        assert_eq!(index.files[3].text.as_deref(), Some("info face=\"\u{e9}\""));
+        assert_eq!(index.files[4].text.as_deref(), Some("a\u{fffd}b"));
+        let ticket = index.ticket.unwrap();
+        assert_eq!(store.take_file(&ticket, "bin.fnt").unwrap(), bin);
+        assert_eq!(store.take_file(&ticket, "ascii.fnt").unwrap(), ascii_bmf);
+        assert_eq!(store.take_file(&ticket, "latin1.fnt").unwrap(), latin1);
+        assert!(store.take_file(&ticket, "bom.fnt").is_err());
     }
 
     #[test]

@@ -107,7 +107,7 @@ function asError(e: unknown): Error {
 interface ProjectIndexEntry {
   path: string;
   size: number;
-  /** Present for text files (js/json/txt/css/svg). */
+  /** Present for text files (js/json/txt/css/svg/md/csv/fnt); absent for binary files, incl. a binary or non-UTF-8 `.fnt`. */
   text?: string;
 }
 
