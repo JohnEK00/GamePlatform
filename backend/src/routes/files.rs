@@ -37,6 +37,7 @@ pub fn mime_for(path: &str) -> String {
         "ogg" => "audio/ogg",
         "woff2" => "font/woff2",
         "ttf" => "font/ttf",
+        "fnt" => "text/plain; charset=utf-8",
         _ => {
             return mime_guess::from_ext(&ext)
                 .first_raw()

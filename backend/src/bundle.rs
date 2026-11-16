@@ -14,7 +14,7 @@ pub const MAX_FILES: usize = 2000;
 
 pub const ALLOWED_EXTS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "svg", "json", "txt", "wav", "mp3", "ogg", "js", "css",
-    "woff2", "ttf",
+    "woff2", "ttf", "fnt",
 ];
 
 pub const MAX_ACHIEVEMENTS: usize = 50;
