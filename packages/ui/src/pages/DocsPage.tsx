@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/auth";
 import { useDocumentTitle } from "../util";
@@ -101,6 +102,54 @@ render(engine) {
   engine.renderer.drawText("Press " + engine.input.actionLabel("jump") + " to start", 20, 20);
 }`;
 
+/**
+ * The numbered sections, in order: the single source for the "On this page" list and the headings (review 5, L4),
+ * so the two can't drift apart.
+ */
+export const DOCS_SECTIONS: readonly { id: string; title: string }[] = [
+  { id: "bundle-layout", title: "Bundle layout" },
+  { id: "game-json", title: "game.json" },
+  { id: "game-module", title: "The game module" },
+  { id: "engine-api", title: "Engine API at a glance" },
+  { id: "scores", title: "Scores & leaderboards" },
+  { id: "achievements", title: "Achievements" },
+  { id: "save-data", title: "Save data" },
+  { id: "debug-overlay", title: "Debug overlay" },
+  { id: "game-studio", title: "Game Studio" },
+  { id: "limits", title: "Limits & rules" },
+  { id: "followers", title: "Your players can follow you" },
+  { id: "tags", title: "Publishing: tags & discovery" },
+  { id: "release-notes", title: "Release notes" },
+  { id: "screenshots", title: "Screenshots" },
+  { id: "actions", title: "Actions and remapping" },
+  { id: "text-fonts-menus", title: "Text, fonts and menus" },
+];
+
+/** DOM id of the heading of section `n` (1-based). */
+export const docsSectionId = (n: number) => `docs-${DOCS_SECTIONS[n - 1].id}`;
+
+function DocsHeading({ n }: { n: number }) {
+  return (
+    <h2 id={docsSectionId(n)} tabIndex={-1} className="pf-docs__heading">
+      {n}. {DOCS_SECTIONS[n - 1].title}
+    </h2>
+  );
+}
+
+/**
+ * In-page navigation that works under BrowserRouter and HashRouter alike: scroll to and focus the heading instead of
+ * changing `location.hash` (which a HashRouter would treat as a route).
+ */
+function jumpTo(e: MouseEvent<HTMLAnchorElement>, id: string) {
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  e.preventDefault();
+  const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+  el.focus({ preventScroll: true });
+}
+
 function Code({ children, label }: { children: string; label: string }) {
   return (
     <figure className="pf-code">
@@ -129,17 +178,13 @@ export function DocsPage() {
       <nav className="pf-docs__toc pf-panel" aria-label="On this page">
         <strong>On this page</strong>
         <ol>
-          <li>Bundle layout</li>
-          <li>game.json</li>
-          <li>The game module</li>
-          <li>Engine API</li>
-          <li>Scores &amp; platform</li>
-          <li>Achievements</li>
-          <li>Save data</li>
-          <li>Debug overlay</li>
-          <li>Game Studio</li>
-          <li>Limits &amp; rules</li>
-          <li>Followers &amp; the feed</li>
+          {DOCS_SECTIONS.map((sec, i) => (
+            <li key={sec.id}>
+              <a href={`#${docsSectionId(i + 1)}`} onClick={(e) => jumpTo(e, docsSectionId(i + 1))}>
+                {sec.title}
+              </a>
+            </li>
+          ))}
         </ol>
       </nav>
 
@@ -156,8 +201,8 @@ export function DocsPage() {
         </Link>
       </div>
 
-      <section>
-        <h2>1. Bundle layout</h2>
+      <section aria-labelledby={docsSectionId(1)}>
+        <DocsHeading n={1} />
         <p>
           Upload a <code>.zip</code>. <code>game.json</code> must be at the zip root (or inside a single top-level folder, which is
           stripped).
@@ -168,8 +213,8 @@ export function DocsPage() {
 └─ assets/...       png jpg webp gif svg json txt fnt wav mp3 ogg js css woff2 ttf`}</Code>
       </section>
 
-      <section>
-        <h2>2. game.json</h2>
+      <section aria-labelledby={docsSectionId(2)}>
+        <DocsHeading n={2} />
         <Code label="game.json">{GAME_JSON}</Code>
         <ul>
           <li>
@@ -182,8 +227,8 @@ export function DocsPage() {
         </ul>
       </section>
 
-      <section>
-        <h2>3. The game module</h2>
+      <section aria-labelledby={docsSectionId(3)}>
+        <DocsHeading n={3} />
         <p>
           The entry module <strong>default-exports</strong> a game object (or a class, which is instantiated with <code>new</code>). You
           import nothing — the <code>engine</code> instance is passed in, and helpers such as <code>engine.Vec2</code> and{" "}
@@ -203,8 +248,8 @@ export function DocsPage() {
         </ul>
       </section>
 
-      <section>
-        <h2>4. Engine API at a glance</h2>
+      <section aria-labelledby={docsSectionId(4)}>
+        <DocsHeading n={4} />
         <div className="pf-docs__grid">
           <div className="pf-panel">
             <h3>renderer</h3>
@@ -270,8 +315,8 @@ export function DocsPage() {
         </div>
       </section>
 
-      <section>
-        <h2>5. Scores &amp; leaderboards</h2>
+      <section aria-labelledby={docsSectionId(5)}>
+        <DocsHeading n={5} />
         <p>
           Call <code>engine.platform.submitScore(n)</code> to post a score. If the player is logged in, Pixelforge Arcade saves it
           to the game's leaderboard (best score per player), with <strong>Today</strong>, <strong>This week</strong> (ISO week,
@@ -320,8 +365,8 @@ export function DocsPage() {
         </ul>
       </section>
 
-      <section>
-        <h2>6. Achievements</h2>
+      <section aria-labelledby={docsSectionId(6)}>
+        <DocsHeading n={6} />
         <p>
           Declare up to 50 achievements in <code>game.json</code>, then unlock them from code. Logged-in players earn them on
           their profile, and every game page shows how many players unlocked each one.
@@ -340,8 +385,8 @@ export function DocsPage() {
         </ul>
       </section>
 
-      <section>
-        <h2>7. Save data</h2>
+      <section aria-labelledby={docsSectionId(7)}>
+        <DocsHeading n={7} />
         <p>
           <code>engine.storage.get(key, fallback)</code> / <code>set(key, value)</code> persist JSON values (max 256 KB per game).
           Logged-in players get <strong>cloud saves</strong> that follow them across devices and the desktop app; anonymous
@@ -349,16 +394,16 @@ export function DocsPage() {
         </p>
       </section>
 
-      <section>
-        <h2>8. Debug overlay</h2>
+      <section aria-labelledby={docsSectionId(8)}>
+        <DocsHeading n={8} />
         <p>
           Press <kbd>F3</kbd> while your game has focus (or set <code>engine.debug = true</code>) to toggle an overlay with FPS,
           frame time, draw calls, sprite count and active tweens, particles and physics bodies.
         </p>
       </section>
 
-      <section>
-        <h2>9. Game Studio</h2>
+      <section aria-labelledby={docsSectionId(9)}>
+        <DocsHeading n={9} />
         <p>
           The <Link to="/studio">Studio</Link> is a small IDE in the arcade: a file list, a code editor (<kbd>Tab</kbd> indents, <kbd>Esc</kbd> then <kbd>Tab</kbd>{" "}
           leaves the editor, <kbd>Ctrl M</kbd> switches Tab to moving focus, <kbd>Ctrl/⌘ S</kbd> runs), a <code>game.json</code> form with an achievements editor, starter templates and a live preview
@@ -389,8 +434,8 @@ export function DocsPage() {
         </p>
       </section>
 
-      <section>
-        <h2>10. Limits &amp; rules</h2>
+      <section aria-labelledby={docsSectionId(10)}>
+        <DocsHeading n={10} />
         <ul>
           <li>≤ 50 MB compressed, ≤ 200 MB uncompressed, ≤ 2000 files.</li>
           <li>No absolute paths, no <code>..</code>, no symlinks; only the file types listed above.</li>
@@ -402,8 +447,8 @@ export function DocsPage() {
         </ul>
       </section>
 
-      <section>
-        <h2>11. Your players can follow you</h2>
+      <section aria-labelledby={docsSectionId(11)}>
+        <DocsHeading n={11} />
         <p>
           Players can follow you from your profile or any of your game pages. Their <Link to="/feed">feed</Link> then shows your
           activity. Nothing extra is needed in your code:
@@ -428,8 +473,8 @@ export function DocsPage() {
         </ul>
       </section>
 
-      <section>
-        <h2>12. Publishing: tags &amp; discovery</h2>
+      <section aria-labelledby={docsSectionId(12)}>
+        <DocsHeading n={12} />
         <p>
           Tags drive <em>More like this</em>. Use specific tags (<code>platformer</code>, <code>roguelike</code>) over generic ones
           (<code>game</code>, <code>fun</code>); rarer shared tags weigh more. <em>Trending</em> counts distinct players per day over
@@ -437,8 +482,8 @@ export function DocsPage() {
         </p>
       </section>
 
-      <section>
-        <h2>13. Release notes</h2>
+      <section aria-labelledby={docsSectionId(13)}>
+        <DocsHeading n={13} />
         <p>
           When you upload a new bundle (game page → <em>Replace bundle</em>, or the edit page), type what changed in the{" "}
           <em>What's new</em> box. You can add notes to your first upload too, and fix any note later from the game page's{" "}
@@ -454,8 +499,8 @@ export function DocsPage() {
         </p>
       </section>
 
-      <section>
-        <h2>14. Screenshots</h2>
+      <section aria-labelledby={docsSectionId(14)}>
+        <DocsHeading n={14} />
         <p>
           Players can press <strong>📷</strong> under the player at any time. Your game can also offer a moment to the player, or
           grab a frame for its own use:
@@ -482,8 +527,8 @@ const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
         </ul>
       </section>
 
-      <section>
-        <h2>15. Actions and remapping</h2>
+      <section aria-labelledby={docsSectionId(15)}>
+        <DocsHeading n={15} />
         <p>
           Declare the keys your game uses as named <strong>actions</strong>. Players see them under <strong>⌨</strong> in the
           player and on your game page, and can remap the keys (up to 3 per action). Their changes reach your running game at
@@ -513,8 +558,8 @@ const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
         </ul>
       </section>
 
-      <section>
-        <h2>16. Text, fonts and menus</h2>
+      <section aria-labelledby={docsSectionId(16)}>
+        <DocsHeading n={16} />
         <p>
           Besides the smooth canvas fonts (<code>default</code>, <code>mono</code> and anything from <code>loadFont</code>), the
           engine draws <strong>bitmap fonts</strong>, stretchable <strong>9-slice</strong> frames and simple{" "}

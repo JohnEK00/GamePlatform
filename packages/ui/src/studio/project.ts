@@ -383,6 +383,34 @@ function decodeText(d: Uint8Array | string): string {
   return typeof d === "string" ? d : new TextDecoder("utf-8", { ignoreBOM: true }).decode(d);
 }
 
+/** Review 5, L6: a binary BMFont file starts with the bytes "BMF" and format version 3. */
+export function isBinaryBmfont(data: Uint8Array | ArrayBuffer): boolean {
+  const u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+  return u8.length >= 4 && u8[0] === 0x42 && u8[1] === 0x4d && u8[2] === 0x46 && u8[3] === 3;
+}
+
+/** The warning for binary `.fnt` files the Studio keeps byte-for-byte but the engine can't read. */
+export const BINARY_BMFONT_MESSAGE = "Binary BMFont isn't supported by the engine; export the font as text or JSON.";
+
+/**
+ * Review 5, L6: how an imported file is stored. Text extensions become strings, except a `.fnt` that is a binary
+ * BMFont or isn't valid UTF-8: decoding it lossily would corrupt it, so its bytes are kept intact (`binary: true`)
+ * and publish/export stay byte-identical.
+ */
+export function decodeProjectFile(path: string, data: Uint8Array | string): { data: string | ArrayBuffer; binary: boolean } {
+  if (typeof data === "string") return { data: isTextPath(path) ? data : toArrayBuffer(new TextEncoder().encode(data)), binary: false };
+  if (!isTextPath(path)) return { data: toArrayBuffer(data), binary: false };
+  if (extOf(path) === "fnt") {
+    if (isBinaryBmfont(data)) return { data: toArrayBuffer(data), binary: true };
+    try {
+      return { data: new TextDecoder("utf-8", { ignoreBOM: true, fatal: true }).decode(data), binary: false };
+    } catch {
+      return { data: toArrayBuffer(data), binary: true };
+    }
+  }
+  return { data: decodeText(data), binary: false };
+}
+
 /**
  * Shared import rules for folders and .zip files: strips a single common top-level folder only when it holds
  * `game.json` (the backend rule), parses game.json, keeps text files as strings and everything else as
@@ -392,7 +420,7 @@ function decodeText(d: Uint8Array | string): string {
 export async function projectFromEntries(
   entries: ProjectEntry[],
   source: "folder" | "zip" = "folder",
-): Promise<{ project: StudioProject; skipped: string[] }> {
+): Promise<{ project: StudioProject; skipped: string[]; binary: string[] }> {
   const items = entries.map((e) => ({ ...e, path: e.path.replace(/\\/g, "/").replace(/^\/+/, "") }));
   if (!items.length) throw new Error(source === "zip" ? "The .zip is empty." : "The folder is empty.");
   const firstSeg = (p: string) => (p.includes("/") ? p.slice(0, p.indexOf("/")) : null);
@@ -400,6 +428,8 @@ export async function projectFromEntries(
   const strip =
     top !== null && items.every((i) => firstSeg(i.path) === top) && items.some((i) => normalizeProjectPath(i.path.slice(top.length + 1)) === "game.json");
   const skipped: string[] = [];
+  /** Text-extension files kept as bytes (binary BMFont, see `decodeProjectFile`). */
+  const binary: string[] = [];
   const files: StudioProject["files"] = {};
   let count = 0;
   let manifest: object | null = null;
@@ -421,17 +451,19 @@ export async function projectFromEntries(
       continue;
     }
     const data = await item.read();
-    files[rel] = isTextPath(rel) ? decodeText(data) : typeof data === "string" ? toArrayBuffer(new TextEncoder().encode(data)) : toArrayBuffer(data);
+    const decoded = decodeProjectFile(rel, data);
+    files[rel] = decoded.data;
+    if (decoded.binary) binary.push(rel);
     count++;
   }
   if (!manifest) throw new Error(source === "zip" ? "No game.json found at the top of the .zip." : "No game.json found at the top of the folder.");
-  return { project: { manifest, files }, skipped };
+  return { project: { manifest, files }, skipped, binary };
 }
 
 /**
  * Reads a folder selection into a project (see {@link projectFromEntries} for the rules).
  */
-export async function projectFromFileList(list: ArrayLike<File>): Promise<{ project: StudioProject; skipped: string[] }> {
+export async function projectFromFileList(list: ArrayLike<File>): Promise<{ project: StudioProject; skipped: string[]; binary: string[] }> {
   const entries: ProjectEntry[] = Array.from(list).map((f) => ({
     path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name,
     read: async () => new Uint8Array(await f.arrayBuffer()),
@@ -440,7 +472,10 @@ export async function projectFromFileList(list: ArrayLike<File>): Promise<{ proj
 }
 
 /** F013: reads a bundle .zip into a project with {@link readZip} + {@link projectFromEntries}. */
-export async function projectFromZip(data: ArrayBuffer | Uint8Array, limits?: ReadZipLimits): Promise<{ project: StudioProject; skipped: string[] }> {
+export async function projectFromZip(
+  data: ArrayBuffer | Uint8Array,
+  limits?: ReadZipLimits,
+): Promise<{ project: StudioProject; skipped: string[]; binary: string[] }> {
   const entries = await readZip(data, limits);
   return projectFromEntries(
     entries.map((e) => ({ path: e.path, read: async () => e.data })),

@@ -2091,6 +2091,31 @@ textarea.pf-input {
   columns: 2;
   color: var(--pf-text-2);
 }
+.pf-docs__toc li {
+  break-inside: avoid;
+  padding: 2px 0;
+}
+.pf-docs__toc a {
+  color: var(--pf-text-2);
+  text-decoration: none;
+}
+.pf-docs__toc a:hover,
+.pf-docs__toc a:focus-visible {
+  color: var(--pf-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.pf-docs__heading {
+  scroll-margin-top: calc(var(--pf-header-h) + 16px);
+}
+.pf-docs__heading:focus {
+  outline: none;
+}
+.pf-docs__heading:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
 .pf-docs__grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));

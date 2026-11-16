@@ -31,6 +31,8 @@ import {
   normalizeProjectPath,
   projectFromFileList,
   projectFromZip,
+  decodeProjectFile,
+  BINARY_BMFONT_MESSAGE,
   saveProjectToStorage,
   slugify,
   validateProject,
@@ -286,9 +288,15 @@ function AssetView({ path, data }: { path: string; data: string | ArrayBuffer })
       {url && isImage && <img src={url} alt={path} />}
       {url && isAudio && <audio src={url} controls />}
       {!isImage && !isAudio && <p className="pf-muted">Binary file — not editable here.</p>}
-      <p className="pf-muted pf-small">
-        Load it from code with e.g. <code>{isImage ? `engine.assets.loadTexture("${path}")` : isAudio ? `engine.assets.loadSound("${path}")` : `engine.assets.loadBinary("${path}")`}</code>
-      </p>
+      {ext === "fnt" ? (
+        <p className="pf-alert pf-alert--info pf-small" role="note">
+          {BINARY_BMFONT_MESSAGE} It is kept byte-for-byte when you export or publish.
+        </p>
+      ) : (
+        <p className="pf-muted pf-small">
+          Load it from code with e.g. <code>{isImage ? `engine.assets.loadTexture("${path}")` : isAudio ? `engine.assets.loadSound("${path}")` : `engine.assets.loadBinary("${path}")`}</code>
+        </p>
+      )}
     </div>
   );
 }
@@ -530,6 +538,15 @@ export function StudioPage() {
     setReplaceReq({ title: req.title ?? "Replace the current project?", body: req.body ?? REPLACE_BODY, confirmLabel: req.confirmLabel ?? "Replace", run: runIt });
   };
 
+  /** Review 5, L6: binary BMFont files are kept byte-for-byte, but the engine can't read them. */
+  const reportBinary = (binary: string[] | undefined) => {
+    if (binary && binary.length)
+      toast.info(
+        binary.length === 1 ? `Kept ${binary[0]} as a binary file` : `Kept ${binary.length} .fnt files as binary`,
+        `${BINARY_BMFONT_MESSAGE}${binary.length > 1 ? ` (${binary.slice(0, 3).join(", ")}${binary.length > 3 ? "…" : ""})` : ""}`,
+      );
+  };
+
   const reportSkipped = (skipped: string[]) => {
     if (skipped.length)
       toast.info(`Skipped ${skipped.length} file${skipped.length === 1 ? "" : "s"}`, `Unsupported types: ${skipped.slice(0, 3).join(", ")}${skipped.length > 3 ? "…" : ""}`);
@@ -570,9 +587,10 @@ export function StudioPage() {
   const onDirPicked = async (files: FileList | null) => {
     if (!files || !files.length) return;
     try {
-      const { project: p, skipped } = await projectFromFileList(files);
+      const { project: p, skipped, binary } = await projectFromFileList(files);
       loadProject(p, "folder", { link: null });
       reportSkipped(skipped);
+      reportBinary(binary);
     } catch (e) {
       toast.error("Couldn't open the folder", errorMessage(e));
     } finally {
@@ -590,9 +608,10 @@ export function StudioPage() {
       return;
     }
     try {
-      const { project: p, skipped } = await projectFromZip(await file.arrayBuffer());
+      const { project: p, skipped, binary } = await projectFromZip(await file.arrayBuffer());
       loadProject(p, `“${file.name}”`, { link: null });
       reportSkipped(skipped);
+      reportBinary(binary);
     } catch (e) {
       toast.error("Couldn't open the .zip", errorMessage(e));
     } finally {
@@ -646,9 +665,10 @@ export function StudioPage() {
         if (!(isApiError(e) && e.status === 409)) throw e;
         res = await api.downloadBundle(id); // the game changed mid-build: retry once
       }
-      const { project: p, skipped } = await projectFromZip(await res.blob.arrayBuffer());
+      const { project: p, skipped, binary } = await projectFromZip(await res.blob.arrayBuffer());
       loadProject(p, `“${game.title}” v${res.version}`, { link: { gameId: id, title: game.title, version: res.version, apiBase: apiBaseUrl } });
       reportSkipped(skipped);
+      reportBinary(binary);
     } catch (e) {
       openGameError(e);
     } finally {
@@ -710,18 +730,23 @@ export function StudioPage() {
   const importAssets = async (files: FileList | null) => {
     if (!files) return;
     const added: Record<string, string | ArrayBuffer> = {};
+    const binary: string[] = [];
     for (const f of Array.from(files)) {
       if (!ALLOWED_EXTENSIONS.includes(extOf(f.name))) {
         toast.error(`"${f.name}" isn't an allowed file type`);
         continue;
       }
       const path = normalizeProjectPath(`assets/${f.name}`)!;
-      added[path] = isTextPath(path) ? await f.text() : await f.arrayBuffer();
+      // Bytes first: `File.text()` would decode a binary .fnt lossily (review 5, L6).
+      const decoded = decodeProjectFile(path, new Uint8Array(await f.arrayBuffer()));
+      added[path] = decoded.data;
+      if (decoded.binary) binary.push(path);
     }
     if (Object.keys(added).length) {
       editProject((p) => ({ ...p, files: { ...p.files, ...added } }));
       setSelected(Object.keys(added)[0]);
     }
+    reportBinary(binary);
     if (assetInputRef.current) assetInputRef.current.value = "";
   };
 
