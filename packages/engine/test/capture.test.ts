@@ -219,6 +219,23 @@ describe('Engine capture integration', () => {
     await expect(p).resolves.toBeInstanceOf(Blob);
   });
 
+  it('draws the F012 UI layer after scenes.render and before the flush + capture point', async () => {
+    const { e, order, render } = fakeEngine('running');
+    const phases: string[] = [];
+    Object.assign(e, {
+      ui: {
+        frameStart: () => order.push('ui-frame'),
+        setPhase: (p: string) => phases.push(p),
+        drawLayer: () => order.push('ui'),
+      },
+    });
+    const p = e.captureFrame();
+    render(1);
+    expect(order).toEqual(['begin', 'ui-frame', 'game', 'scenes', 'ui', 'flush', 'grab', 'debug', 'overlay-rect', 'overlay-rect', 'end']);
+    expect(phases).toEqual(['render', 'other']);
+    await expect(p).resolves.toBeInstanceOf(Blob);
+  });
+
   it('answers webgame:screenshot-request from window.parent only, echoing the id', async () => {
     const parent = {};
     vi.stubGlobal('window', { parent });

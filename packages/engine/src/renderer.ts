@@ -1,7 +1,10 @@
 /** Batched WebGL2 2D renderer: sprites, shapes and bitmap text in one dynamic vertex buffer. */
+import { BitmapFont, checkFontName, layoutText } from './bmfont';
 import { Camera } from './camera';
 import { DrawCounter } from './debug';
 import { Color, type ColorLike } from './math';
+import { NineSlice, nineSliceQuads, toInsets, type NineSliceOptions } from './nineslice';
+import { createPixelFont } from './pixelfont';
 import { ShelfPacker, SpriteSheet, Texture, type TexturePage } from './texture';
 
 export type BlendMode = 'normal' | 'additive' | 'multiply';
@@ -38,17 +41,17 @@ export interface ShapeOptions {
 }
 
 export interface TextOptions {
-  /** Font size in game units (default 16). */
+  /** Font size in game units (default 16 for canvas fonts, the native size for bitmap fonts). */
   size?: number;
   color?: ColorLike;
   align?: TextAlign;
   baseline?: TextBaseline;
   alpha?: number;
-  /** Registered font name (see renderer.setFont); default "default". */
+  /** Registered font name (setFont / addBitmapFont / loadBitmapFont, or "pixel"); default "default". */
   font?: string;
   /** Extra space between letters, in game units. */
   letterSpacing?: number;
-  /** Line height multiplier (default 1.2). */
+  /** Line height multiplier (default 1.2 for canvas fonts, 1 for bitmap fonts). */
   lineHeight?: number;
   /** Draw a drop shadow in this color. */
   shadow?: ColorLike;
@@ -234,7 +237,8 @@ export class Renderer {
   private cameraOn = true;
   private pixelW = 1;
   private pixelH = 1;
-  private readonly fonts = new Map<string, FontAtlas>();
+  /** Font registry: canvas atlases and bitmap fonts behind one name space (`pixel` is created lazily). */
+  private readonly fonts = new Map<string, FontAtlas | BitmapFont>();
   private readonly atlases: AtlasPage[] = [];
   private readonly maxTex: number;
 
@@ -310,14 +314,35 @@ export class Renderer {
     return p;
   }
 
-  /** Register (or replace) a font for drawText. `family` is a CSS font-family list (load webfonts first). */
+  /**
+   * Register (or replace) a canvas font for drawText. `family` is a CSS font-family list (load webfonts
+   * first). Replaces a bitmap font of the same name; `pixel` is reserved (`default`/`mono` may be replaced).
+   */
   setFont(name: string, family: string, weight = 'normal'): void {
+    if (name !== 'default' && name !== 'mono') checkFontName(name);
+    this.replaceFont(name, new FontAtlas(this.gl, family, weight));
+  }
+
+  /** Register (or replace) a bitmap font under `name` (`default`, `mono` and `pixel` are reserved). */
+  addBitmapFont(name: string, font: BitmapFont): void {
+    checkFontName(name);
+    if (!(font instanceof BitmapFont)) throw new Error('addBitmapFont: a BitmapFont is required');
+    this.replaceFont(name, font);
+  }
+
+  /** True when `name` can be used as `drawText({ font })` (`pixel` always can). */
+  hasFont(name: string): boolean {
+    return name === 'pixel' || this.fonts.has(name);
+  }
+
+  private replaceFont(name: string, f: FontAtlas | BitmapFont): void {
     const old = this.fonts.get(name);
     if (old) {
       this.flush();
-      this.gl.deleteTexture(old.page.glTexture);
+      if (old instanceof FontAtlas) this.gl.deleteTexture(old.page.glTexture);
+      this.page = null;
     }
-    this.fonts.set(name, new FontAtlas(this.gl, family, weight));
+    this.fonts.set(name, f);
   }
 
   private setFilter(smooth: boolean): void {
@@ -432,6 +457,11 @@ export class Renderer {
     gl.clear(gl.COLOR_BUFFER_BIT);
   }
 
+  /** The current blend mode. */
+  get blendMode(): BlendMode {
+    return this.blend;
+  }
+
   setBlend(mode: BlendMode): void {
     if (mode === this.blend) return;
     this.flush();
@@ -500,7 +530,7 @@ export class Renderer {
 
   private white(): { u: number; v: number } {
     if (this.page && this.page.white) return this.page.white;
-    const f = this.fonts.get('default')!;
+    const f = this.fonts.get('default') as FontAtlas; // only setFont can replace "default"
     this.use(f.page, 0);
     return f.page.white!;
   }
@@ -592,6 +622,31 @@ export class Renderer {
     this.drawRect(x + w - t, y + t, t, h - 2 * t, color, { alpha });
   }
 
+  /**
+   * Draw a 9-slice (a NineSlice, or a Texture with `opts.insets`; a Texture without insets is one
+   * stretched quad). Corners keep their size × `scale`; borders shrink proportionally when `w`/`h` are
+   * smaller than them. Counts as one sprite; batches with sprites on the same page.
+   */
+  drawNineSlice(src: NineSlice | Texture, x: number, y: number, w: number, h: number, opts: NineSliceOptions = {}): void {
+    if (!(w > 0 && h > 0)) return;
+    const tex = src instanceof NineSlice ? src.texture : src;
+    if (!tex) return;
+    const scale = typeof opts.scale === 'number' && opts.scale > 0 && Number.isFinite(opts.scale) ? opts.scale : 1;
+    const insets = src instanceof NineSlice ? src : opts.insets !== undefined ? toInsets(opts.insets, tex.width, tex.height) : null;
+    const quads = insets
+      ? nineSliceQuads(tex, insets, x, y, w, h, scale, opts.center ?? true)
+      : [{ x, y, w, h, u0: tex.u0, v0: tex.v0, u1: tex.u1, v1: tex.v1 }];
+    if (quads.length === 0) return;
+    const c = (opts.tint !== undefined ? Color.from(opts.tint) : Color.WHITE).toABGR(opts.alpha ?? 1);
+    this.use(tex.page, quads.length * 6);
+    this.counter.sprite();
+    for (const q of quads) {
+      const x1 = q.x + q.w;
+      const y1 = q.y + q.h;
+      this.quad(q.x, q.y, x1, q.y, x1, y1, q.x, y1, q.u0, q.v0, q.u1, q.v1, c);
+    }
+  }
+
   /** Line segment of a given thickness. */
   drawLine(x1: number, y1: number, x2: number, y2: number, color: ColorLike = '#fff', thickness = 1, alpha = 1): void {
     const dx = x2 - x1;
@@ -661,8 +716,45 @@ export class Renderer {
     }
   }
 
-  private font(name?: string): FontAtlas {
-    return this.fonts.get(name ?? 'default') ?? this.fonts.get('default')!;
+  private font(name?: string): FontAtlas | BitmapFont {
+    const n = name ?? 'default';
+    let f = this.fonts.get(n);
+    if (!f && n === 'pixel') f = this.pixelFont();
+    return f ?? this.fonts.get('default')!;
+  }
+
+  /** The built-in `pixel` font, created on first use (an ImageData page packed into a sprite atlas). */
+  private pixelFont(): BitmapFont {
+    const f = createPixelFont((img) => this.createTexture(new ImageData(img.data, img.width, img.height), { atlas: true, smooth: false }));
+    this.fonts.set('pixel', f);
+    return f;
+  }
+
+  private bitmapLayout(f: BitmapFont, text: string, x: number, y: number, o: TextOptions) {
+    const lay = layoutText(f, text, {
+      size: o.size, letterSpacing: o.letterSpacing, lineHeight: o.lineHeight, align: o.align, baseline: o.baseline,
+      maxWidth: o.maxWidth, x, y,
+    });
+    if (lay.missing.length && !f.missingWarned) {
+      f.missingWarned = true;
+      const list = lay.missing.slice(0, 8).map((cp) => `"${String.fromCodePoint(cp)}" (U+${cp.toString(16).toUpperCase().padStart(4, '0')})`);
+      console.warn(`[pixelforge] font "${f.name}": missing glyph ${list.join(', ')}; drawing "?" instead`);
+    }
+    return lay;
+  }
+
+  private bitmapPass(f: BitmapFont, text: string, x: number, y: number, o: TextOptions, color: ColorLike): void {
+    const lay = this.bitmapLayout(f, text, x, y, o);
+    const c = Color.from(color).toABGR(o.alpha ?? 1);
+    for (const line of lay.lines)
+      for (const g of line.glyphs) {
+        const tex = f.pages[g.page];
+        if (!tex) continue;
+        this.use(tex.page, 6);
+        const x1 = g.x + g.w;
+        const y1 = g.y + g.h;
+        this.quad(g.x, g.y, x1, g.y, x1, y1, g.x, y1, g.u0, g.v0, g.u1, g.v1, c);
+      }
   }
 
   private wrapLines(text: string, f: FontAtlas, scale: number, spacing: number, maxWidth?: number): string[] {
@@ -697,6 +789,10 @@ export class Renderer {
   /** Size of a text block in game units. */
   measureText(text: string, opts: Pick<TextOptions, 'size' | 'font' | 'letterSpacing' | 'lineHeight' | 'maxWidth'> = {}): { width: number; height: number } {
     const f = this.font(opts.font);
+    if (f instanceof BitmapFont) {
+      const lay = this.bitmapLayout(f, String(text), 0, 0, opts);
+      return { width: lay.width, height: lay.height };
+    }
     const size = opts.size ?? 16;
     const scale = size / BASE_FONT;
     const sp = opts.letterSpacing ?? 0;
@@ -710,11 +806,19 @@ export class Renderer {
   /** Draw text. (x, y) is the anchor given by `align` (left/center/right) and `baseline` (top/middle/bottom). */
   drawText(text: string | number, x: number, y: number, o: TextOptions = {}): void {
     const str = String(text);
+    const f = this.font(o.font);
+    if (f instanceof BitmapFont) {
+      if (o.shadow !== undefined) {
+        const off = o.shadowOffset ?? Math.max(1, (o.size ?? f.size) / 12);
+        this.bitmapPass(f, str, x + off, y + off, o, o.shadow);
+      }
+      this.bitmapPass(f, str, x, y, o, o.color ?? '#fff');
+      return;
+    }
     if (o.shadow !== undefined) {
       const off = o.shadowOffset ?? Math.max(1, (o.size ?? 16) / 12);
       this.drawText(str, x + off, y + off, { ...o, color: o.shadow, shadow: undefined });
     }
-    const f = this.font(o.font);
     const size = o.size ?? 16;
     const scale = size / BASE_FONT;
     const sp = o.letterSpacing ?? 0;
@@ -754,7 +858,7 @@ export class Renderer {
   destroy(): void {
     const gl = this.gl;
     for (const a of this.atlases) gl.deleteTexture(a.page.glTexture);
-    for (const f of this.fonts.values()) gl.deleteTexture(f.page.glTexture);
+    for (const f of this.fonts.values()) if (f instanceof FontAtlas) gl.deleteTexture(f.page.glTexture);
     gl.deleteBuffer(this.vbo);
     gl.deleteVertexArray(this.vao);
     gl.deleteProgram(this.program);

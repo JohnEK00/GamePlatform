@@ -10,7 +10,7 @@ const MIME: Record<string, string> = {
   '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.png': 'image/png',
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml',
   '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.txt': 'text/plain', '.css': 'text/css',
-  '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+  '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.fnt': 'text/plain',
 };
 
 /** Dev playground: serve ../../examples/** raw (untransformed, like the backend does) at /examples/. */

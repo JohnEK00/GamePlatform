@@ -13,6 +13,7 @@ import {
 } from './math';
 import { showErrorOverlay } from './overlay';
 import { ParticleEmitter } from './particles';
+import { NineSlice } from './nineslice';
 import { Body, Physics } from './physics';
 import { Platform, Storage, defaultPoster, isRequestId, storageHandshake } from './platform';
 import { Renderer } from './renderer';
@@ -20,6 +21,7 @@ import { SceneManager, type Scene, type SceneLike } from './scenes';
 import { Animation, SpriteSheet, Texture } from './texture';
 import { Tilemap } from './tilemap';
 import { Easing, Timers, Tween, TweenManager } from './tween';
+import { Ui } from './ui';
 
 export const VERSION = '1.0.0';
 
@@ -121,6 +123,8 @@ export class Engine {
   readonly Sound = Sound;
   readonly Camera = Camera;
   readonly GamepadButtons = GamepadButtons;
+  /** F012: `new engine.NineSlice(texture, insets)`. */
+  readonly NineSlice = NineSlice;
   readonly math = { ...MathUtil, circlesOverlap, circleRectOverlap };
   readonly version = VERSION;
 
@@ -137,6 +141,8 @@ export class Engine {
   readonly storage: Storage;
   readonly platform: Platform;
   readonly tweens = new TweenManager();
+  /** F012: immediate-mode widgets (panel, label, button); call them from update. */
+  readonly ui: Ui;
   /** Shared seedable RNG. */
   readonly random = new Random();
   /** The game object the bundle exported (instantiated if it was a class). */
@@ -192,6 +198,7 @@ export class Engine {
     this.input = new Input(canvas, w, h);
     this.input.setActions(bootActions(opts.actions));
     this.scenes = new SceneManager<Engine>(this);
+    this.ui = new Ui({ input: this.input, renderer: this.renderer, warn: (m) => console.warn(m) });
     this.storage = new Storage(deriveStorageKey(this.baseUrl, opts.files, opts.storageKey),this.platform);
     this.capturer = new FrameCapture(w, h);
     this.platform.setCapture(() =>
@@ -453,6 +460,7 @@ export class Engine {
   private readonly step = (dt: number): void => {
     if (this.state !== 'running' || this.paused) return;
     this.input.beginStep();
+    this.ui.beginStep();
     this.game?.update?.(this, dt);
     this.scenes.update(dt);
     this.tweens.update(dt);
@@ -460,14 +468,24 @@ export class Engine {
     this.renderer.camera.update(dt);
     this.time += dt;
     this.frame++;
+    this.ui.endStep();
     this.input.endStep();
   };
 
   private render(alpha: number, t0 = performance.now()): void {
     const r = this.renderer;
     r.beginFrame();
-    this.game?.render?.(this, alpha);
-    this.scenes.render(alpha);
+    const ui = this.ui as Ui | undefined; // absent in engine-less test doubles
+    ui?.frameStart();
+    ui?.setPhase('render');
+    try {
+      this.game?.render?.(this, alpha);
+      this.scenes.render(alpha);
+    } finally {
+      ui?.setPhase('other');
+    }
+    // F012 UI layer: the last step's widget list, screen space, before the capture point.
+    ui?.drawLayer();
     r.flush();
     // Capture point (F005): the game's frame is complete; overlays below are not captured.
     if (this.state === 'running' && this.capturer.queued) this.capturer.grab(this.canvas, r.defaultSmooth, r.gl);

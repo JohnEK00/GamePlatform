@@ -1,7 +1,9 @@
 /** Asset loading: in-memory bundle files first (boot option `files`), then relative to the bundle's baseUrl. */
 import type { AudioManager, Sound } from './audio';
 import type { Renderer, TextureOptions } from './renderer';
-import { BundleFiles } from './files';
+import { BitmapFont, checkFontName, MAX_DESCRIPTOR_BYTES, parseBMFont, type GridFontOptions } from './bmfont';
+import { BundleFiles, normalizePath } from './files';
+import { NineSlice, type Insets } from './nineslice';
 import { SpriteSheet, Texture } from './texture';
 
 export class Assets {
@@ -150,6 +152,51 @@ export class Assets {
     });
   }
 
+  /**
+   * F012: load an AngelCode BMFont descriptor (text `.fnt` or `.json`, <= 1 MiB) and its PNG/WebP/GIF/JPEG
+   * pages (relative to the descriptor), and register it for `drawText({ font: name })`. Pages use
+   * nearest filtering and atlas packing unless `smooth`. Errors start with `BMFont "{path}": `.
+   */
+  loadBitmapFont(name: string, path: string, opts: { smooth?: boolean } = {}): Promise<BitmapFont> {
+    checkFontName(name);
+    const smooth = !!opts?.smooth;
+    return this.track(`bmfont:${name}:${path}:${smooth}`, async () => {
+      const prefix = `BMFont "${path}": `;
+      const res = await this.fetchOk(path);
+      const len = Number(res.headers?.get?.('Content-Length') ?? NaN);
+      if (len > MAX_DESCRIPTOR_BYTES) throw new Error(prefix + 'the descriptor is larger than 1 MiB');
+      const text = await res.text();
+      if (text.length > MAX_DESCRIPTOR_BYTES) throw new Error(prefix + 'the descriptor is larger than 1 MiB');
+      const data = parseBMFont(text, path);
+      const pagePaths = resolveFontPages(path, data.pages);
+      const pages = await Promise.all(
+        pagePaths.map((p) =>
+          this.loadTexture(p, { smooth, atlas: !smooth }).catch((e: unknown) => {
+            throw new Error(prefix + `page "${p}": ${(e as Error)?.message ?? e}`);
+          }),
+        ),
+      );
+      const font = new BitmapFont(name, data, pages, smooth);
+      for (const w of font.warnings) console.warn(`[pixelforge] font "${name}": ${w}`);
+      this.renderer.addBitmapFont(name, font);
+      return font;
+    });
+  }
+
+  /** F012: a monospace font cut from a grid of glyph cells (synchronous); registered under `name`. */
+  gridFont(name: string, texture: Texture, opts: GridFontOptions): BitmapFont {
+    checkFontName(name);
+    const font = BitmapFont.grid(name, texture, opts);
+    this.renderer.addBitmapFont(name, font);
+    return font;
+  }
+
+  /** F012: load an image as a NineSlice with the given border insets (source px). */
+  async loadNineSlice(path: string, insets: number | Insets, opts: TextureOptions = {}): Promise<NineSlice> {
+    const tex = await this.loadTexture(path, opts);
+    return new NineSlice(tex, insets);
+  }
+
   /** Create a texture by drawing on a 2D canvas (procedural graphics). */
   createTexture(width: number, height: number, draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void, opts: TextureOptions = {}): Texture {
     const c = document.createElement('canvas');
@@ -170,4 +217,21 @@ export class Assets {
   spriteSheet(texture: Texture, frameW: number, frameH: number = frameW, spacing = 0, margin = 0): SpriteSheet {
     return new SpriteSheet(texture, frameW, frameH, spacing, margin);
   }
+}
+
+/**
+ * Resolve BMFont page file names relative to the descriptor's directory. Throws (with the BMFont
+ * prefix) for absolute URLs, paths escaping the bundle and non-image extensions.
+ */
+export function resolveFontPages(descriptor: string, pages: readonly string[]): string[] {
+  const prefix = `BMFont "${descriptor}": `;
+  const d = normalizePath(descriptor) ?? '';
+  const dir = d.includes('/') ? d.slice(0, d.lastIndexOf('/') + 1) : '';
+  return pages.map((p, i) => {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(p) || /^[\\/]/.test(p)) throw new Error(prefix + `pages[${i}] "${p}" must be a relative path inside the bundle`);
+    const n = normalizePath(dir + p);
+    if (n === null) throw new Error(prefix + `pages[${i}] "${p}" escapes the bundle`);
+    if (!/\.(png|webp|gif|jpe?g)$/i.test(n)) throw new Error(prefix + `pages[${i}] "${p}" must be a png, webp, gif or jpg image`);
+    return n;
+  });
 }

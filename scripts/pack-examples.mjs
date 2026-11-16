@@ -11,7 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const examplesDir = join(root, 'examples');
 const outDir = join(examplesDir, 'dist');
 
-const ALLOWED = new Set(['.json', '.js', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.txt', '.wav', '.mp3', '.ogg', '.css', '.woff2', '.ttf']);
+const ALLOWED = new Set(['.json', '.js', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.txt', '.wav', '.mp3', '.ogg', '.css', '.woff2', '.ttf', '.fnt']);
 const MAX_FILES = 2000;
 const MAX_UNCOMPRESSED = 200 * 1024 * 1024;
 const MAX_COMPRESSED = 50 * 1024 * 1024;

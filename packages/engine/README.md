@@ -114,11 +114,13 @@ paths such as `"assets/ship.png"`; `./`, a leading `/`, `..` segments and query 
 | `files` | the in-memory bundle files (`boot` option `files`) |
 | `captureFrame({ maxSize? })` | PNG Blob of the next frame, or `null` (see Screenshots) |
 | `renderer`, `assets`, `input`, `audio`, `scenes`, `tweens`, `storage`, `platform`, `random` | systems (below) |
-| `Vec2`, `Rect`, `Color`, `Random`, `Tilemap`, `Physics`, `Body`, `ParticleEmitter`, `Tween`, `Easing`, `SpriteSheet`, `Animation`, `Texture`, `Sound`, `Camera`, `GamepadButtons` | classes and constants |
+| `ui` | immediate-mode widgets: `panel`, `label`, `button` (see [UI widgets](#ui-widgets-f012)) |
+| `Vec2`, `Rect`, `Color`, `Random`, `Tilemap`, `Physics`, `Body`, `ParticleEmitter`, `Tween`, `Easing`, `SpriteSheet`, `Animation`, `Texture`, `Sound`, `Camera`, `GamepadButtons`, `NineSlice` | classes and constants |
 | `math` | `clamp, lerp, invLerp, remap, approach, wrap, degToRad, radToDeg, damp, circlesOverlap, circleRectOverlap` |
 
 **Each frame, in order:** each fixed step runs `game.update` → top scene(s) `update` → tweens → timers →
-camera shake. Then a render pass clears to `background` and runs `game.render` → scenes `render` (bottom to top).
+camera shake. Then a render pass clears to `background` and runs `game.render` → scenes `render` (bottom to top)
+→ the `engine.ui` layer (screen space) → batch flush → screenshot capture point → F3 debug overlay → host "PAUSED" overlay.
 
 **Automatic behavior:**
 * **Visibility:** the game pauses while the tab or iframe is hidden.
@@ -145,6 +147,8 @@ A batched WebGL2 sprite renderer. It uses one dynamic vertex buffer and premulti
 * **Atlas packing:** small pixel-art textures are packed into shared 2048² atlas pages, so most sprites batch into a single draw call.
 * **Shape batching:** every atlas page has a white texel, so shapes batch together with sprites.
 * **Text:** a canvas-generated font atlas with mipmaps. Glyphs are rasterized lazily, so any Unicode character works.
+  **Bitmap fonts** (F012) are drawn from their pages, which are ordinary textures: nearest-filtered pages are atlas-packed
+  and batch with sprites. See [Text and fonts](#text-and-fonts-f012).
 
 | method | notes |
 |---|---|
@@ -155,8 +159,10 @@ A batched WebGL2 sprite renderer. It uses one dynamic vertex buffer and premulti
 | `drawCircle(x, y, r, color, { outline?, segments?, alpha? })` | |
 | `drawTriangle(...)`, `drawPolygon([x0, y0, ...], color)` | polygons must be convex |
 | `drawText(text, x, y, { size = 16, color, align: left\|center\|right, baseline: top\|middle\|bottom, font, alpha, shadow, shadowOffset, letterSpacing, lineHeight, maxWidth })` | `\n` and word-wrap are supported |
-| `measureText(text, opts) → { width, height }` | |
-| `setFont(name, cssFamily, weight)` | built-in fonts: `"default"` (bold sans) and `"mono"` |
+| `measureText(text, opts) → { width, height }` | with a bitmap font, `size` defaults to its native size |
+| `setFont(name, cssFamily, weight)` | built-in fonts: `"default"` (bold sans), `"mono"` and the bitmap `"pixel"`; `pixel` can't be replaced |
+| `addBitmapFont(name, font)` / `hasFont(name)` | register a `BitmapFont`; `default`, `mono`, `pixel` are reserved (`font name "…" is reserved`) |
+| `drawNineSlice(nineSlice \| texture, x, y, w, h, { insets?, scale = 1, tint, alpha, center = true })` | corners keep their size × `scale`; one sprite in the stats |
 | `setBlend('normal' \| 'additive' \| 'multiply')` | |
 | `ui(fn)` / `setCamera(bool)` | draw in screen space (HUD) without the camera |
 | `camera` | `x, y` (view top-left at zoom 1), `zoom` (around the view center), `bounds`, `roundPixels`, `shake(intensity, duration)`, `follow(x, y, smoothing)`, `centerOn(x, y)`, `view()`, `screenToWorld(x, y)`, `worldToScreen(x, y)` |
@@ -178,10 +184,13 @@ Paths are relative to the bundle's `baseUrl`. Loads are cached, and `assets.prog
   * `loadSound(path) → Sound` (`.duration`)
   * `loadJSON(path)`, `loadText(path)`, `loadBinary(path)`
   * `loadFont(name, path, weight?)`: registers a woff2 or ttf font for `drawText({ font: name })`
+  * `loadBitmapFont(name, path, { smooth? }) → BitmapFont`: an AngelCode BMFont (`.fnt` text or `.json`) and its pages
+  * `loadNineSlice(path, insets, { smooth?, atlas? }) → NineSlice`
 * **Procedural textures:**
   * `createTexture(w, h, (ctx2d, w, h) => {...}, opts) → Texture`
   * `textureFrom(canvasOrImage, opts)`
   * `spriteSheet(texture, frameW, frameH)`
+  * `gridFont(name, texture, { cellW, cellH, chars, spacing?, margin?, advance?, lineHeight? }) → BitmapFont` (synchronous)
 * `Animation(frames[], fps, loop)` is a frame helper: call `.update(dt)`, then read `.frame` and `.finished`.
 
 ## `engine.input`
@@ -460,10 +469,101 @@ if (input.wasPressed('KeyP')) engine.platform.shareScreenshot?.({ caption: `Scor
 * The dev harness (`index.html`) and `studio.html` have a 📷 button and an in-memory tray, and they answer game shares,
   re-encoding every image in the parent as the real host does.
 
+## Text and fonts (F012)
+
+Contract: docs/GAME_FORMAT.md § F012. `drawText`/`measureText` take a `font` name; canvas fonts and bitmap fonts share
+one registry.
+
+```js
+r.drawText('SCORE ' + score, 4, 4, { font: 'pixel' });            // built-in, crisp 8 px, no asset
+r.drawText('SCORE ' + score, 4, 4, { font: 'pixel', size: 16 });  // exactly 2×
+await engine.assets.loadBitmapFont('title', 'assets/title.fnt');  // + assets/title_0.png
+r.drawText('GAME OVER', W / 2, 80, { font: 'title', align: 'center' });
+engine.assets.gridFont('retro', sheetTexture, { cellW: 8, cellH: 8, chars: ' !"#0123456789ABC…' });
+```
+
+* **`pixel`**: ASCII 32–126, `size` 8, `lineHeight` 10, `base` 7, every glyph advances 6. Capitals use rows 0–6 of the
+  line, descenders rows 7–8. Any other character draws as `?`. Its texture is built on first use (an `ImageData`, no canvas
+  text) and shares an atlas page with sprites. **Glyph source**: hand-drawn for Pixelforge and dedicated to the public
+  domain (CC0); the table is `PIXEL_GLYPHS` in `src/pixelfont.ts`.
+* **Crispness rule**: a nearest-filtered bitmap font (the default) has each line's start x and top rounded to whole game
+  units, so at whole multiples of its native size (`pixel`: 8, 16, 24…) every texel is a whole pixel. Other sizes work but
+  may shimmer. Canvas fonts (`default`, `mono`, `loadFont`) stay best for large smooth text.
+* **Bitmap layout**: `size` defaults to the font's native size, the line height is `lineHeight × scale × (opts.lineHeight ?? 1)`,
+  BMFont kerning and `letterSpacing` apply between glyphs, `maxWidth` wraps at spaces, `\r\n` is one newline, other control
+  characters are skipped, missing glyphs draw `?` (or advance `size / 2`) with one warning per font, and `shadow` is a
+  second pass. `layoutText(font, text, opts)` (exported) is the pure layout behind both `drawText` and `measureText`.
+* **Recommended exporter settings** (BMFont, Hiero, Snowb, Littera…): a **text or JSON** descriptor (XML is rejected with
+  `BMFont XML is not supported; export the text or JSON format`), **PNG pages**, **no channel packing**. Limits: descriptor
+  ≤ 1 MiB, 1–16 pages, ≤ 8192 chars, ≤ 65536 kernings, numbers within −32768..32767. Pages resolve relative to the
+  descriptor and must stay inside the bundle. Errors start with `BMFont "{path}": `; warnings with `[pixelforge] font "{name}":`.
+  Distance-field fonts are drawn as plain bitmaps (with a warning). `smooth: true` loads the pages with linear filtering
+  and without atlas packing.
+* `BitmapFont` is read-only: `name`, `face`, `size`, `lineHeight`, `base`, `pages`, `smooth`, `glyph(cp)`, `kerning(a, b)`,
+  `has(char)`. `parseBMFont(source, path?)` is exported for tools.
+
+### 9-slice
+
+```js
+const frame = await engine.assets.loadNineSlice('assets/ui/frame.png', 8); // or new engine.NineSlice(texture, { left, top, right, bottom })
+r.drawNineSlice(frame, 140, 70, 200, 120);              // a dialog
+r.drawNineSlice(frame, 195, 150, 90, 24, { scale: 2 }); // crisp 2× pixel-art borders
+```
+
+Insets are source pixels (integers ≥ 0, `left + right ≤ width`, `top + bottom ≤ height`, else `RangeError`). When the box
+is smaller than its borders, they shrink proportionally and the centre is omitted. `center: false` draws the frame only.
+A `Texture` with `opts.insets` works too; a texture without insets is one stretched quad. A sprite-sheet frame is a valid
+texture. `scale` must be > 0 (anything else draws at 1).
+
+## UI widgets (F012)
+
+`engine.ui` is an immediate-mode helper. **Call widgets from `update`** (the game's or a scene's): each fixed step builds a
+draw list, and the engine draws the last step's list in screen space (camera ignored, `normal` blend) after your render and
+**before** the screenshot capture point, so 📷 captures include menus (the F3 and PAUSED overlays are still excluded).
+
+```js
+update(engine) {
+  const ui = engine.ui;
+  if (ui.button('play', 'PLAY', 190, 140, 100, 24)) this.start();
+  if (ui.button('sound', `SOUND: ${engine.audio.muted ? 'OFF' : 'ON'}`, 190, 170, 100, 24)) engine.audio.muted = !engine.audio.muted;
+  if (this.playing && ui.button('pause', 'II', 4, 4, 16, 16, { nav: false })) this.paused = true; // a HUD button
+}
+```
+
+* `ui.panel(x, y, w, h, { style?, color?, alpha? })`: `theme.panel` as a 9-slice at `theme.nineSliceScale`, or a flat rect
+  with a 1-unit border.
+* `ui.label(text, x, y, textOptions)`: `drawText` with the theme's font, size and colour as defaults.
+* `ui.button(id, label, x, y, w, h, { disabled?, nav?, font?, textSize?, textColor? }) → boolean`: `true` exactly once per
+  activation, in the step it happens. Ids are 1–64 characters and unique within a step (otherwise one warning, and that
+  button never activates). States: normal, hover, down and disabled (alpha 0.5, `disabledTextColor`, never reacts).
+* **Pointer** (mouse and primary touch): a press and a release on the same button activate it; a press that started
+  elsewhere never does. `ui.hot` / `ui.active` are the button under the pointer / being pressed (read-only).
+* **Keyboard and gamepad**: "next" is action `down`/`right` if declared, else `ArrowDown`/`ArrowRight`, plus D-pad
+  Down/Right; "previous" likewise with `up`/`left`; "activate" is action `confirm` if declared, else `Enter`,
+  `NumpadEnter`, `Space`, plus gamepad A; `Escape` / gamepad B clear the focus. Declared actions follow the player's ⌨
+  remapping. `Tab` is never used. The order is the enabled `nav !== false` buttons of the previous step, and it wraps.
+  The focus ring (2 units of `theme.focusColor`, 2 units outside the button) appears on the first navigation press, a
+  pointer press hides it again, and `ui.focus = id` shows it. `ui.navigation = false` turns navigation off.
+* **`{ nav: false }`** for buttons shown during gameplay, so arrows and `confirm` keep controlling the game.
+* **Phases**: a widget called from `render` draws immediately, and a `button` there returns `false` (one warning per id).
+  From `load` or other code outside a step, widgets draw nothing. `panel`/`label` are fine in `render` as drawing helpers.
+* **Drawing**: a step's list replaces the previous one (even when empty); with no step in a frame (paused, high refresh
+  rate) the last list is drawn again. At most 256 commands per step. `ui.autoDraw = false` turns the automatic layer off;
+  `ui.draw()` (from `render`) draws the list at that point, once per frame, and skips the automatic layer.
+* **Theme** (`ui.theme`; assign fields to restyle): `font` `"default"`, `textSize` `null` (= the font's default), `textColor`
+  `#ffffff`, `disabledTextColor` `#8b91b0`, `panel` / `button` / `buttonHover` / `buttonDown` (`NineSlice | null`),
+  `panelColor` `#141a2e`, `panelBorder` `#3a4470`, `buttonColor` `#2a3358`, `buttonHoverColor` `#3a4780`,
+  `buttonDownColor` `#1e2540`, `buttonBorder` `#5a6bc0`, `focusColor` `#ffd166`, `nineSliceScale` 1.
+* `Ui` takes its input and renderer in the constructor (`new Ui({ input, renderer, warn })`), so its rules are unit-tested
+  without a DOM.
+
 ## Examples
 
 * `examples/space-dodge`: a neon arcade shooter. It uses procedural textures, additive particles, screen shake, power-ups, the synth SFX and a stored high score.
 * `examples/pixel-peaks`: a 3-level pixel-art platformer. It uses `Tilemap` and `Physics` (one-way and moving platforms), scenes, a sprite sheet, tweens, touch buttons, and levels loaded from `assets/levels.json`.
+  F012: its HUD uses the `pixel` font, titles and banners use the kerned, outlined BMFont `assets/fonts/peaks.fnt`, the
+  title is an `engine.ui` menu, and message boxes are a 9-slice (`assets/ui/panel.png`). The font and the panel are
+  generated by `node packages/engine/scripts/gen-bitmap-font.mjs` from the `pixel` glyph table.
 
 * `examples/brick-breaker`: a six-level neon brick breaker with levels loaded from `assets/levels.json`. It has tough, steel and explosive bricks; six power-ups (wide paddle, multi-ball, slow ball, lasers, catch, extra life); combo multipliers; tweened level intros; and achievement badge icons in `assets/`.
 

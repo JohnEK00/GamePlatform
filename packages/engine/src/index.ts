@@ -6,6 +6,13 @@ export { boot, Engine, VERSION, MAX_OVERRIDE_KEYS, isOverridesObject } from './e
 export type { BootOptions, Game, GameLike } from './engine';
 
 export { Assets } from './assets';
+export { BitmapFont, parseBMFont, layoutText, RESERVED_FONT_NAMES } from './bmfont';
+export type { BitmapFontData, BitmapGlyph, Kerning, GridFontOptions, FontMetricsSource, LayoutOptions, TextLayout, LaidGlyph, PageRegion } from './bmfont';
+export { NineSlice, nineSliceQuads } from './nineslice';
+export type { Insets, NineSliceOptions, NineQuad } from './nineslice';
+export { Ui, defaultTheme } from './ui';
+export type { UiTheme, ButtonOptions, PanelOptions, UiInput, UiRenderer, UiDeps } from './ui';
+export { PIXEL_GLYPHS, pixelFontData } from './pixelfont';
 export { AudioManager, Sound } from './audio';
 export type { PlayOptions, SoundHandle, ToneOptions, NoiseOptions } from './audio';
 export { Camera } from './camera';
