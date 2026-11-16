@@ -696,3 +696,55 @@ Bitmap fonts, 9-slice and UI widgets (spec: `docs/features/F012-bitmap-fonts-and
   - The allowlist and MIME entries and `tests/f012.rs` belong to backend-dev.
   - `project.ts`, the template and the docs page belong to frontend-dev.
   - The desktop `project.rs` lists belong to desktop-dev.
+
+
+## F017 additions
+Creator comment tools: pin, lock and "Top" sort (spec: `docs/features/F017-creator-comment-tools.md`). No new tables, endpoints outside `routes/comments.rs`, or dependencies.
+- **Model.** Pin and lock are nullable timestamps on the **top-level** `comments` row. They are not stored on `games` (`games.pinned_comment_id` would create a `games` ↔ `comments` FK cycle and a dangling-id case on delete). A partial unique index enforces one pinned comment per game. Replies never get either column set (enforced in Rust: the endpoints refuse replies).
+- **Data**: migration `backend/migrations/0015_f017.sql` runs after `0014_review4.sql`:
+  ```sql
+  -- F017: creator comment tools (docs/ARCHITECTURE.md § F017 additions).
+  ALTER TABLE comments ADD COLUMN pinned_at TEXT;   -- NULL = not pinned; RFC3339 millis Z; top-level only
+  ALTER TABLE comments ADD COLUMN locked_at TEXT;   -- NULL = open; RFC3339 millis Z; top-level only
+  -- At most one pinned comment per game; also the lookup for CommentListPage.pinned.
+  CREATE UNIQUE INDEX idx_comments_game_pinned ON comments(game_id) WHERE pinned_at IS NOT NULL;
+  ```
+  Existing rows become unpinned and unlocked. No backfill, no table rebuild.
+- **Read shape** (extends the F006 `comment_select()`; `?1` = viewer id or NULL, `?2` = 1 for admins):
+  ```sql
+  (c.pinned_at IS NOT NULL)                                              AS pinned,
+  (c.parent_id IS NULL AND c.locked_at IS NOT NULL)                      AS locked,
+  (?1 IS NOT NULL AND c.parent_id IS NULL AND (?2 = 1 OR g.owner_id = ?1)) AS can_moderate
+  ```
+  - Thread page: `WHERE c.game_id = ?3 AND c.parent_id IS NULL AND c.pinned_at IS NULL`, then
+    - `sort=new`: `ORDER BY c.created_at DESC, c.rowid DESC` (walks `idx_comments_game_top`, unchanged);
+    - `sort=top`: `ORDER BY hearts DESC, c.created_at DESC, c.rowid DESC` (`hearts` is the F006 correlated count alias; one `comment_hearts` PK-prefix probe per top-level comment of the game, then a sort; fine up to tens of thousands of threads per game. A maintained counter is the next step if that is ever exceeded).
+  - Counts: `SELECT COALESCE(SUM(parent_id IS NULL AND pinned_at IS NULL), 0), COUNT(*) FROM comments WHERE game_id = ?` (`total`, `totalAll`).
+  - Pinned: `/* read shape */ WHERE c.game_id = ?3 AND c.pinned_at IS NOT NULL` (via `idx_comments_game_pinned`). Its previews and reply count come from the same `into_threads` call as the page's threads (still one preview query and one count query per request).
+- **Write paths**:
+  - Pin, one transaction (the first statement writes, so the deferred transaction takes the write lock immediately):
+    ```sql
+    UPDATE comments SET pinned_at = NULL
+     WHERE game_id = ?1 AND pinned_at IS NOT NULL AND id <> ?2 RETURNING id;     -- → unpinnedId
+    UPDATE comments SET pinned_at = COALESCE(pinned_at, ?3)
+     WHERE id = ?2 AND parent_id IS NULL;                                        -- 0 rows → 404 (rolled back)
+    ```
+  - Unpin: `UPDATE comments SET pinned_at = NULL WHERE id = ? AND parent_id IS NULL`.
+  - Lock / unlock: `UPDATE comments SET locked_at = COALESCE(locked_at, ?) WHERE id = ? AND parent_id IS NULL` / `SET locked_at = NULL`.
+  - Each handler then reads back `ThreadState` from the row (0 rows → 404).
+  - Reply insert (F006 guarded insert, one more condition; `?9` = 1 when the poster is the game owner or an admin):
+    ```sql
+    INSERT INTO comments (id, game_id, user_id, body, created_at, parent_id, reply_to_user_id)
+    SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+    WHERE EXISTS (SELECT 1 FROM comments WHERE id = ?6)
+      AND (?9 = 1 OR (SELECT locked_at FROM comments WHERE id = ?6) IS NULL)
+      AND (SELECT COUNT(*) FROM comments WHERE parent_id = ?6) < ?8
+    ```
+    Zero rows → re-read the root: missing → 404; locked and `?9 = 0` → 422 "This thread is locked"; else 422 cap. The handler also checks the lock before the insert (validation order in API § F017); the insert condition closes the race.
+  - Delete (`remove_comment`) is unchanged: pin and lock go with the row.
+- **Feed and notifications (coordination with F002/F007/F018).**
+  - F017 writes no `activity_events` and no notifications, and retracts none.
+  - Lock/unlock never notify (a moderation action; see the spec § 5).
+  - A future "your comment was pinned" notification needs a new `notifications.kind` value. The 0013 CHECK can't be widened in place, and rebuilding `notifications` with foreign keys on would cascade-delete `notification_events` on `DROP TABLE` (and fire the `0014` trigger), so the rebuild must drop the trigger, copy both tables, recreate them, and restore the indexes and trigger. That work is assigned to F018 (which already changes the notification write path), together with a `pins` setting column. `routes/comments.rs` carries a `// F018:` marker at the hook point (after a pin changed a row; recipient = the comment's author when not the pinner, dedupe once per comment).
+- **UI**: `CommentSortToggle` (new), changes in `Comments`, `CommentItem`, `CommentForm`; the sort is a per-device `localStorage["webgame.comments.sort"]`. `Comments`' internal permalink flag is renamed from `pinned` to `linked` to avoid clashing with the server field.
+- **Ownership**: the migration, `routes/comments.rs` changes, `Limit::ThreadTools`, routes and `tests/f017.rs` belong to backend-dev. Types, client, `api/comments.ts`, the components, styles and UI tests belong to frontend-dev. Desktop has no code changes.

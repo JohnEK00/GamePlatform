@@ -603,3 +603,7 @@ An immediate-mode helper. **Call widgets from `update`** (`game.update` or a sce
 - Export BMFont descriptors as **text or JSON** with PNG pages, without channel packing.
 - Buttons shown during gameplay (a pause icon on the HUD) should pass `{ nav: false }`, so arrow keys and `confirm` keep controlling the game.
 - Declare a `confirm` action (and `up`/`down`) to let players remap menu keys.
+
+
+## F017 additions
+Creator comment tools (spec: `docs/features/F017-creator-comment-tools.md`). **No changes**: games can't read, pin, lock or sort comments, and there are no new messages, engine APIs or `game.json` fields.

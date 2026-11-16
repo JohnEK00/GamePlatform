@@ -893,3 +893,82 @@ Bitmap fonts, 9-slice and UI widgets (spec: `docs/features/F012-bitmap-fonts-and
 - The full allowlist is now: `png jpg jpeg webp gif svg json txt wav mp3 ogg js css woff2 ttf fnt`. Extension matching is unchanged.
 - The backend does **not** parse or validate `.fnt` contents. A broken descriptor fails in the engine at load time, inside the game's sandbox.
 - `GET /api/games/{id}/bundle` (F013) is unchanged; `.fnt` entries are deflated like other text files.
+
+
+---
+
+## F017 additions
+
+Creator comment tools: pin, lock and "Top" sort (spec: `docs/features/F017-creator-comment-tools.md`). All earlier rules apply, including F006 (threads, hearts, visibility) and F007 (notifications).
+
+### Types
+```ts
+type Comment = {
+  ...F006,
+  pinned: boolean;                // top-level only: this is the game's pinned comment; always false on replies
+  locked: boolean;                // top-level only: the thread is locked against new replies; always false on replies
+  canModerate: boolean;           // 🔓 top-level only: the viewer is the game's current owner or an admin (may pin/lock); false on replies and when anonymous
+}
+
+type CommentListPage = Page<CommentThread> & {
+  totalAll: number;               // F006, unchanged: all comments + replies on the game, pinned thread included
+  pinned: CommentThread | null;   // the game's pinned thread (same shape as items), on every page; null when none
+}
+
+type CommentSort = "new" | "top"
+
+type ThreadState = {
+  id: string;                     // the comment acted on
+  pinned: boolean;                // its state after the request
+  locked: boolean;                // its state after the request
+  unpinnedId: string | null;      // PUT …/pin only: the comment that was pinned before and is now unpinned; else null
+}
+```
+- The three `Comment` fields appear wherever a `Comment` is returned (list items, `pinned`, previews, `/replies`, `CommentContext`, the `POST` response).
+- Clients must treat missing `pinned`/`locked`/`canModerate` as `false` and a missing `CommentListPage.pinned` as `null` (older servers).
+- A game has at most one pinned comment.
+
+### Changed endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id}/comments | `?page=1&perPage=20&sort=new` (`sort`: `new` \| `top`) | `CommentListPage` |
+| POST 🔒 | /api/games/{id}/comments | F006 body | 201 `Comment` |
+
+- **`GET …/comments`**:
+  - `sort` absent, empty or `new`: top-level comments newest first (F006 order, unchanged). `top`: most hearts on the top-level comment first (replies' hearts don't count), then `createdAt` desc, then insertion order desc.
+  - Unknown `sort` → 400 `bad_request` "Unknown sort '…' (expected new or top)". It is checked before `page`/`perPage`.
+  - The pinned thread is **not** in `items` on any page and is **not** counted in `total`. It is returned in `pinned` (with its reply preview and `replyCount`) on every page.
+  - Visibility and paging rules are unchanged.
+- **`POST …/comments`**: one new step in the F006 validation order, between step 6 (`parentId` → 404) and step 7 (200-replies cap → 422):
+  - 6b. The thread (the root of `parentId`) is locked and the poster is neither the game's owner nor an admin → 422 `validation` "This thread is locked".
+  - The check is part of the guarded insert, so a reply racing a lock is either committed before it or refused.
+  - Top-level comments are never affected by locks.
+
+### New endpoints
+| Method | Path | Body | Response |
+|---|---|---|---|
+| PUT 🔒 owner/admin | /api/comments/{id}/pin | – | `ThreadState` `{ pinned: true }` (idempotent) |
+| DELETE 🔒 owner/admin | /api/comments/{id}/pin | – | `ThreadState` `{ pinned: false, unpinnedId: null }` (idempotent; 200 even if not pinned) |
+| PUT 🔒 owner/admin | /api/comments/{id}/lock | – | `ThreadState` `{ locked: true, unpinnedId: null }` (idempotent) |
+| DELETE 🔒 owner/admin | /api/comments/{id}/lock | – | `ThreadState` `{ locked: false, unpinnedId: null }` (idempotent) |
+
+- "owner/admin" = the current owner of the comment's game, or a user with `role: "admin"`.
+- Checked in this order (all four):
+  1. Auth → 401.
+  2. Unknown comment, or its game is not visible to the caller under `GET /api/games/{id}` rules → 404 `not_found` "Comment not found".
+  3. Caller is not the game's owner or an admin → 403 `forbidden`.
+  4. `Limit::ThreadTools` → 429.
+  5. The comment is a reply → 422 `validation` "Only top-level comments can be pinned" (`…/pin`) or "Only top-level comments can be locked" (`…/lock`).
+  6. The comment was deleted after step 2 → 404.
+- **`PUT …/pin`** unpins the game's previously pinned comment (if any, and if it is another comment) in the same transaction and reports it in `unpinnedId`. Pinning the already pinned comment returns `unpinnedId: null`.
+- Pin and lock are independent: a comment can be pinned and locked at the same time.
+- Deleting a comment (any path, including admin resolve `delete`) removes its pin and lock with it. No endpoint returns a dangling pin.
+- None of the four endpoints write F002 activity or F007 notifications, and none retract existing ones.
+
+### Reports and moderation (unchanged, clarified)
+- Comment reports, `DELETE /api/comments/{id}` and admin resolve `delete` behave as in F006 for pinned and locked comments. `Report` has no new fields.
+- Admins have the same pin/lock tools as owners on every game.
+
+### Rate limits
+- `PUT`/`DELETE …/pin` and `PUT`/`DELETE …/lock` share **`Limit::ThreadTools`: 60 per 10 min, per user**. Over the limit → 429 `rate_limited` with `Retry-After`.
+- They don't use `Limit::Comment` or `Limit::Heart`. `GET …/comments` with any `sort` stays an unlimited public read.

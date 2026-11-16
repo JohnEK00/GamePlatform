@@ -31,16 +31,17 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F009 | Controls overlay and key remapping | M | shipped |
 | F006 | Comment replies and reactions | M | shipped |
 | F007 | In-app notifications | M | shipped |
-| F012 | Engine bitmap fonts, 9-slice and UI widgets | M | specced |
-| F017 | Creator comment tools: pin, lock and "top" sort | S | proposed |
+| F012 | Engine bitmap fonts, 9-slice and UI widgets | M | shipped |
+| F017 | Creator comment tools: pin, lock and "top" sort | S | specced |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
 | F008 | Collections (curated game lists) | M | proposed |
+| F018 | Notification controls: mutes, shared polling, "pinned" notifications | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
 | F016 | Gamepad remapping and synced control bindings | M | proposed |
-| F018 | Notification controls: mute a game or thread, shared polling across tabs | S | proposed |
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
+| F020 | Game comment settings: turn comments off, slow mode | S | proposed |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
@@ -145,7 +146,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: creators can make art without leaving the browser.
 - **Areas**: frontend only.
 
-### F012: Engine bitmap fonts, 9-slice and UI widgets (M, specced → [spec](features/F012-bitmap-fonts-and-ui-widgets.md))
+### F012: Engine bitmap fonts, 9-slice and UI widgets (M, shipped → [spec](features/F012-bitmap-fonts-and-ui-widgets.md))
 - **Pitch**:
   - Bitmap fonts through the existing `drawText`/`measureText`: `assets.loadBitmapFont` (AngelCode BMFont text `.fnt` or JSON, with kerning), `assets.gridFont` for fixed-cell glyph sheets, and a built-in crisp 5×7 `pixel` font that needs no asset.
   - `NineSlice` + `renderer.drawNineSlice` (with a pixel-art `scale` and a shrink rule) and `assets.loadNineSlice`.
@@ -165,17 +166,27 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: controller players get the same accessibility as keyboard players, and bindings follow the account to the desktop app.
 - **Areas**: engine (accept `gamepad` overrides), backend (small per-user bindings table and endpoints), frontend (gamepad capture, sync toggle).
 
-### F017: Creator comment tools: pin, lock and "top" sort (S, proposed; after F006)
-- **Pitch**: the game owner can pin one thread to the top of the comments and lock a thread against new replies, and players can sort threads by "Top" (hearts, then newest) instead of "Newest".
+### F017: Creator comment tools: pin, lock and "top" sort (S, specced → [spec](features/F017-creator-comment-tools.md))
+- **Pitch**:
+  - The game owner (and admins) can pin one top-level comment, shown above all threads in every sort with a "Pinned" badge; pinning another replaces it after a confirmation.
+  - Owners and admins can lock a thread: only they can still reply, hearts/delete/report keep working, and the thread says "Replies are turned off".
+  - Anyone can sort threads by "Top" (hearts on the top-level comment, then newest); the choice is remembered per device.
+  - No notifications for pins or locks in this round (the `pinned` kind moves to F018, which owns the notification table rebuild).
 - **User value**: creators can keep an FAQ or known-issues answer visible and stop a thread that has gone off the rails, and the most useful tips surface first.
-- **Areas**: backend (`games.pinned_comment_id`, `comments.locked`, `sort=top` on the list), frontend (owner menu on threads, sort toggle). No engine changes.
+- **Areas**: backend (migration `0015_f017.sql`: `comments.pinned_at`, `comments.locked_at`, one partial unique index; `sort=top`; four pin/lock endpoints; `Limit::ThreadTools`; lock check in the guarded reply insert), frontend (sort toggle, pinned slot, Pin/Lock buttons, locked-thread UI), desktop (verification only). No engine changes.
+- **Depends on**: F006 and F007 (shipped).
 
-### F018: Notification controls: mute a game or thread, shared polling across tabs (S, proposed; after F007)
-- **Pitch**: "Mute notifications for this game" (owners of busy games) and "Mute this thread" (players in long threads), stored per user and checked in the F007 upsert. Plus a `BroadcastChannel` leader tab, so only one tab per browser polls `unread-count` and the others receive the result.
-- **User value**: creators of popular games keep the bell useful, and heavy users with many tabs make fewer requests.
-- **Areas**: backend (`notification_mutes` table, two endpoints, a `NOT EXISTS` in the upsert), frontend (mute actions on the game page and threads, tab leader election in `NotificationsProvider`). No engine or desktop changes.
+### F018: Notification controls: mutes, shared polling and "pinned" notifications (S, proposed; after F007, F017)
+- **Pitch**: "Mute notifications for this game" (owners of busy games) and "Mute this thread" (players in long threads), stored per user and checked in the F007 upsert. A `BroadcastChannel` leader tab, so only one tab per browser polls `unread-count` and the others receive the result. A new `pinned` kind ("Mia pinned your comment on Space Dodge", from F017's `// F018:` hook, once per comment) with a `pins` setting; this needs the one-time `notifications` CHECK rebuild described in ARCHITECTURE § F017, which should also drop the kind CHECK in favour of Rust validation so later kinds need no rebuild.
+- **User value**: creators of popular games keep the bell useful, heavy users with many tabs make fewer requests, and players learn when a creator featured their comment.
+- **Areas**: backend (`notification_mutes` table, two endpoints, a `NOT EXISTS` in the upsert, the notification table rebuild, `pinned` kind), frontend (mute actions on the game page and threads, tab leader election in `NotificationsProvider`, the `pinned` item text and setting). No engine or desktop changes.
 
 ### F019: Engine UI widgets 2 (S, proposed; after F012)
 - **Pitch**: `ui.slider` (volume, difficulty), `ui.toggle`, a single-line `ui.textField` (uses `input.typed`, for name entry), and `ui.list` (a vertical list with keyboard and gamepad scrolling), all following the F012 theme, phase and navigation rules. Left and right adjust a focused slider.
 - **User value**: settings and name-entry screens without custom code, completing the F012 menu toolkit.
 - **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.
+
+### F020: Game comment settings: turn comments off, slow mode (S, proposed; after F017)
+- **Pitch**: per-game owner settings on the edit page: "Comments: on / replies only to existing threads / off" and an optional slow mode (one comment or reply per user per game every N minutes). Existing comments stay visible when comments are off.
+- **User value**: creators of small or controversial games can pause discussion without deleting it, and busy games get calmer threads.
+- **Areas**: backend (`games` columns, checks in `create_comment`, `Game` fields), frontend (edit page fieldset, comment form states). No engine changes.
