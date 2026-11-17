@@ -21,12 +21,16 @@ pub const KIND_ACHIEVEMENT: &str = "achievementUnlocked";
 /// F021: a curator added published games to a public collection (one row per collection and
 /// UTC day; `game_id` NULL, `collection_id` and `game_ids` set).
 pub const KIND_COLLECTION_UPDATED: &str = "collectionUpdated";
-pub const KINDS: [&str; 5] = [
+/// F015: someone posted screenshots of a published game (one row per actor, game and UTC day;
+/// the shots are found at read time, the row stores no screenshot ids).
+pub const KIND_SCREENSHOT_POSTED: &str = "screenshotPosted";
+pub const KINDS: [&str; 6] = [
     KIND_GAME_PUBLISHED,
     KIND_GAME_UPDATED,
     KIND_PERSONAL_BEST,
     KIND_ACHIEVEMENT,
     KIND_COLLECTION_UPDATED,
+    KIND_SCREENSHOT_POSTED,
 ];
 
 /// F021: at most this many game ids in one `collectionUpdated` row's `game_ids`.
@@ -275,6 +279,44 @@ pub async fn record_collection_added(
     log_failure(KIND_COLLECTION_UPDATED, game_id, res);
 }
 
+/// F015 `screenshotPosted`: one row per (actor, game, UTC day). Each post replaces the day's
+/// row (new, higher id). `now` is the exact `created_at` bound in the screenshot insert; its
+/// first 10 characters are the day. The caller checked that the game was published; the game
+/// owner is not excluded.
+pub async fn record_screenshot_posted(
+    conn: &mut SqliteConnection,
+    actor_id: &str,
+    game_id: &str,
+    now: &str,
+) {
+    let res = async {
+        let day = now.get(..10).unwrap_or(now);
+        let mut tx = conn.begin().await?;
+        sqlx::query(
+            "DELETE FROM activity_events \
+             WHERE actor_id = ?1 AND game_id = ?2 AND kind = 'screenshotPosted' AND day = ?3",
+        )
+        .bind(actor_id)
+        .bind(game_id)
+        .bind(day)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO activity_events (actor_id, kind, game_id, day, created_at) \
+             VALUES (?1, 'screenshotPosted', ?2, ?3, ?4)",
+        )
+        .bind(actor_id)
+        .bind(game_id)
+        .bind(day)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await
+    }
+    .await;
+    log_failure(KIND_SCREENSHOT_POSTED, game_id, res);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,7 +336,8 @@ mod tests {
         assert_eq!(merged.len(), COLLECTION_EVENT_GAMES_MAX);
         assert_eq!(merged[0], "new");
         assert_eq!(merged[1], "g0");
-        assert_eq!(KINDS.len(), 5);
+        assert_eq!(KINDS.len(), 6);
         assert!(KINDS.contains(&KIND_COLLECTION_UPDATED));
+        assert!(KINDS.contains(&KIND_SCREENSHOT_POSTED));
     }
 }

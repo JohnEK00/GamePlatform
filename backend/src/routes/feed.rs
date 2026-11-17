@@ -9,7 +9,8 @@ use sqlx::Row;
 
 use crate::AppState;
 use crate::activity::{
-    KIND_ACHIEVEMENT, KIND_COLLECTION_UPDATED, KIND_GAME_UPDATED, KIND_PERSONAL_BEST, KINDS,
+    KIND_ACHIEVEMENT, KIND_COLLECTION_UPDATED, KIND_GAME_UPDATED, KIND_PERSONAL_BEST,
+    KIND_SCREENSHOT_POSTED, KINDS,
 };
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
@@ -20,6 +21,9 @@ use crate::models::{
 };
 use crate::ratelimit::Limit;
 use crate::routes::games::limit_user;
+use crate::routes::screenshots::{
+    FEED_SCREENSHOTS_SQL, Screenshot, Viewer, is_admin, screenshot_from_row,
+};
 
 pub const FEED_LIMIT_DEFAULT: i64 = 20;
 pub const FEED_LIMIT_MAX: i64 = 50;
@@ -28,6 +32,8 @@ pub const SUGGESTIONS_MAX: i64 = 6;
 pub const FEED_CHANGES_MAX: usize = 3;
 /// F021: at most this many games per `collectionUpdated` item (`gameCount` counts all).
 pub const FEED_COLLECTION_GAMES_MAX: usize = 4;
+/// F015: at most this many screenshots per `screenshotPosted` item (`count` counts all).
+pub const FEED_SCREENSHOTS_MAX: usize = 4;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +83,16 @@ pub struct FeedItem {
     pub update: Option<FeedUpdate>,
     /// F021: non-null for `collectionUpdated` only.
     pub collection: Option<FeedCollection>,
+    /// F015: non-null for `screenshotPosted` only.
+    pub screenshots: Option<FeedScreenshots>,
+}
+
+/// F015 `FeedScreenshots`: the actor's screenshots of the game on the item's UTC day.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedScreenshots {
+    pub count: i64,
+    pub items: Vec<Screenshot>,
 }
 
 #[derive(Serialize)]
@@ -151,6 +167,8 @@ fn json_list<T: Serialize>(v: &[T]) -> AppResult<String> {
 /// Feed page query (N1). Three index-driven branches, each yielding at most `limit + 1` ids
 /// (`?3`) newest first with every filter applied inside the branch:
 ///   (a) followed creators: `follows` PK → `idx_activity_actor_id (actor_id, id DESC)`;
+///       F015 `screenshotPosted` rows additionally probe `idx_screenshots_author_game
+///       (author_id, game_id)` (at most 20 rows per pair) for a shot still on the row's day;
 ///   (b) favorited games' publish/update events: `idx_favorites_user_game` →
 ///       `idx_activity_game_kind (game_id, kind, id DESC)`;
 ///   (c) F021 followed curators' `collectionUpdated` events: `follows` PK →
@@ -177,6 +195,10 @@ pub const FEED_SQL: &str = "\
           AND (e.kind <> 'achievementUnlocked' OR EXISTS ( \
                 SELECT 1 FROM achievements a \
                 WHERE a.game_id = e.game_id AND a.ach_id = e.ach_id)) \
+          AND (e.kind <> 'screenshotPosted' OR EXISTS ( \
+                SELECT 1 FROM screenshots s INDEXED BY idx_screenshots_author_game \
+                WHERE s.author_id = e.actor_id AND s.game_id = e.game_id \
+                  AND substr(s.created_at, 1, 10) = e.day)) \
         ORDER BY e.id DESC LIMIT ?3) \
       UNION \
       SELECT id FROM ( \
@@ -346,10 +368,66 @@ pub async fn get_feed(
         }
     }
 
+    // F015: the screenshots of this page's `screenshotPosted` rows in one query, grouped by
+    // `[actorId, gameId, day]` in query order (newest first within a group).
+    let mut shot_keys: Vec<[String; 3]> = Vec::new();
+    for r in rows {
+        let kind: String = r.try_get("kind")?;
+        if kind != KIND_SCREENSHOT_POSTED {
+            continue;
+        }
+        let Some(gid) = r.try_get::<Option<String>, _>("game_id")? else {
+            continue;
+        };
+        let key = [r.try_get("u_id")?, gid, r.try_get("day")?];
+        if !shot_keys.contains(&key) {
+            shot_keys.push(key);
+        }
+    }
+    let mut shots_of: HashMap<[String; 3], (i64, Vec<Screenshot>)> = HashMap::new();
+    if !shot_keys.is_empty() {
+        let viewer = Viewer {
+            id: Some(&user.id),
+            admin: is_admin(&state, Some(&user.id)).await?,
+        };
+        let shot_rows = sqlx::query(FEED_SCREENSHOTS_SQL)
+            .bind(json_list(&shot_keys)?)
+            .fetch_all(&state.db)
+            .await?;
+        for sr in &shot_rows {
+            let key = [
+                sr.try_get("p_actor")?,
+                sr.try_get("p_game")?,
+                sr.try_get("p_day")?,
+            ];
+            let group = shots_of.entry(key).or_default();
+            group.0 += 1;
+            if group.1.len() < FEED_SCREENSHOTS_MAX {
+                group.1.push(screenshot_from_row(sr, &viewer)?);
+            }
+        }
+    }
+
     let mut items = Vec::with_capacity(rows.len());
     for r in rows {
         let kind: String = r.try_get("kind")?;
         let id: i64 = r.try_get("id")?;
+        let mut screenshots = None;
+        if kind == KIND_SCREENSHOT_POSTED {
+            let key: [String; 3] = [
+                r.try_get("u_id")?,
+                r.try_get::<Option<String>, _>("game_id")?
+                    .unwrap_or_default(),
+                r.try_get("day")?,
+            ];
+            let Some((count, shots)) = shots_of.remove(&key) else {
+                continue; // every shot of that day was deleted since the page query
+            };
+            screenshots = Some(FeedScreenshots {
+                count,
+                items: shots,
+            });
+        }
         let followed: i64 = r.try_get("followed")?;
         let mut collection = None;
         let (game_id, game) = if kind == KIND_COLLECTION_UPDATED {
@@ -472,6 +550,7 @@ pub async fn get_feed(
             achievement,
             update,
             collection,
+            screenshots,
             kind,
         });
     }

@@ -1564,3 +1564,8 @@ type UserScreenshot = Screenshot & { game: ScreenshotGameRef }
 
 ### Rate limits
 - Unchanged. Posting stays under F005 `Limit::Screenshot` (10/hour) and the 20-per-game cap. Feed reads stay under `Limit::Feed`.
+
+### F015 implementation notes (backend)
+- **`GET /api/users/{username}/screenshots`:** the user is looked up before paging is parsed. An unknown user with a bad `page` returns 404, not 400; `/users/{u}/collections` does the opposite.
+- **Duplicate feed rows:** if a race leaves two `screenshotPosted` rows for the same actor, game and day, only the newest is shown.
+- **Rejected post when the day's cap is reached:** a 422 for hitting the cap doesn't replace that day's existing event row.

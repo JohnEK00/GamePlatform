@@ -13,6 +13,7 @@ use serde_json::json;
 use sqlx::Row;
 use webgame_server::routes::feed::FEED_SQL;
 use webgame_server::routes::scores::{Period, period_bounds, window_board};
+use webgame_server::routes::screenshots::user_screenshots_page_sql;
 use webgame_server::trending;
 
 async fn plan(t: &TestApp, sql: &str, binds: &[Option<&str>]) -> Vec<String> {
@@ -39,8 +40,8 @@ async fn n1_feed_plan_is_index_driven() {
     // Run the planner with statistics too: the plan must not depend on them.
     webgame_server::db::optimize(&t.state.db, true).await;
     sqlx::query("ANALYZE").execute(&t.state.db).await.unwrap();
-    // F021: every kind, so branch (c) is planned too.
-    let kinds = r#"["gamePublished","gameUpdated","personalBest","achievementUnlocked","collectionUpdated"]"#;
+    // F021: every kind, so branch (c) is planned too. F015: and the `screenshotPosted` probe.
+    let kinds = r#"["gamePublished","gameUpdated","personalBest","achievementUnlocked","collectionUpdated","screenshotPosted"]"#;
     for cursor in [None, Some("100")] {
         let p = plan(
             &t,
@@ -64,7 +65,16 @@ async fn n1_feed_plan_is_index_driven() {
                 !(l.starts_with("scan c") || l.contains("scan collection")),
                 "scan of collections / collection_games:\n{text}"
             );
+            // F015: the branch (a) predicate probes screenshots by (author, game) only.
+            assert!(
+                !(l.starts_with("scan s ") || l.contains("scan screenshots")),
+                "scan of screenshots:\n{text}"
+            );
         }
+        assert!(
+            text.contains("idx_screenshots_author_game (author_id=? AND game_id=?)"),
+            "branch (a) probes idx_screenshots_author_game:\n{text}"
+        );
         assert!(
             text.contains("sqlite_autoindex_collections_1 (id=?)"),
             "branch (c) probes collections by id:\n{text}"
@@ -82,6 +92,35 @@ async fn n1_feed_plan_is_index_driven() {
             "{text}"
         );
         assert!(text.contains("idx_favorites_user_game"), "{text}");
+    }
+}
+
+/// F015: the profile list walks `idx_screenshots_author_created` in order (no sort), with
+/// and without a viewer and with planner statistics.
+#[tokio::test]
+async fn f015_profile_screenshots_plan_uses_author_created_index() {
+    let t = setup().await;
+    webgame_server::db::optimize(&t.state.db, true).await;
+    sqlx::query("ANALYZE").execute(&t.state.db).await.unwrap();
+    let sql = user_screenshots_page_sql();
+    for viewer in [None, Some("viewer")] {
+        let p = plan(&t, &sql, &[Some("author"), viewer, Some("12"), Some("0")]).await;
+        let text = p.join("\n");
+        assert!(
+            text.contains("idx_screenshots_author_created"),
+            "profile list uses idx_screenshots_author_created:\n{text}"
+        );
+        assert!(
+            !text.contains("USE TEMP B-TREE FOR ORDER BY"),
+            "profile list sorts in a temp B-tree:\n{text}"
+        );
+        for line in &p {
+            let l = line.to_ascii_lowercase();
+            assert!(
+                !(l.starts_with("scan s ") || l.contains("scan screenshots")),
+                "scan of screenshots:\n{text}"
+            );
+        }
     }
 }
 

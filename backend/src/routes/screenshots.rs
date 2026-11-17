@@ -44,19 +44,80 @@ pub struct Screenshot {
     pub can_delete: bool,
 }
 
-const SCREENSHOT_SELECT: &str = "SELECT s.id, s.game_id, s.author_id, s.caption, s.ext, \
-     s.width, s.height, s.game_version, s.created_at, g.owner_id, \
+/// F015 `ScreenshotGameRef`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotGameRef {
+    pub id: String,
+    pub title: String,
+}
+
+/// F015 `UserScreenshot`: a `Screenshot` plus the game it belongs to.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserScreenshot {
+    #[serde(flatten)]
+    pub shot: Screenshot,
+    pub game: ScreenshotGameRef,
+}
+
+/// SELECT prefix for [`screenshot_from_row`]; append `WHERE ...`. F015: also selects
+/// `g.title AS game_title` (read only by the profile list).
+pub const SCREENSHOT_SELECT: &str = "SELECT s.id, s.game_id, s.author_id, s.caption, s.ext, \
+     s.width, s.height, s.game_version, s.created_at, g.owner_id, g.title AS game_title, \
      u.id AS a_id, u.username AS a_username, u.display_name AS a_display_name, \
      u.avatar_ext AS a_avatar_ext, u.avatar_version AS a_avatar_version \
      FROM screenshots s JOIN users u ON u.id = s.author_id JOIN games g ON g.id = s.game_id";
 
-/// Who is looking: used for `canDelete`.
-struct Viewer<'a> {
-    id: Option<&'a str>,
-    admin: bool,
+/// F015 feed assembly: the screenshots of every `[actorId, gameId, day]` triple in the JSON
+/// array `?1`, grouped by triple (`p.key`), each group newest first. The column list matches
+/// [`SCREENSHOT_SELECT`], plus the triple as `p_actor`, `p_game`, `p_day`.
+pub const FEED_SCREENSHOTS_SQL: &str = "\
+    SELECT s.id, s.game_id, s.author_id, s.caption, s.ext, s.width, s.height, s.game_version, \
+           s.created_at, \
+           g.owner_id, g.title AS game_title, \
+           u.id AS a_id, u.username AS a_username, u.display_name AS a_display_name, \
+           u.avatar_ext AS a_avatar_ext, u.avatar_version AS a_avatar_version, \
+           json_extract(p.value, '$[0]') AS p_actor, json_extract(p.value, '$[1]') AS p_game, \
+           json_extract(p.value, '$[2]') AS p_day \
+    FROM json_each(?1) p \
+    CROSS JOIN screenshots s INDEXED BY idx_screenshots_author_game \
+    JOIN users u ON u.id = s.author_id \
+    JOIN games g ON g.id = s.game_id \
+    WHERE s.author_id = json_extract(p.value, '$[0]') AND s.game_id = json_extract(p.value, '$[1]') \
+      AND substr(s.created_at, 1, 10) = json_extract(p.value, '$[2]') \
+    ORDER BY p.key, s.created_at DESC, s.id";
+
+/// F015 profile list: the shared visibility filter (`?1` author id, `?2` viewer id or NULL).
+const USER_SCREENSHOTS_WHERE: &str =
+    "WHERE s.author_id = ?1 AND (g.published = 1 OR g.owner_id = ?2)";
+
+/// F015 profile list: the count query.
+pub fn user_screenshots_count_sql() -> String {
+    format!(
+        "SELECT COUNT(*) FROM screenshots s JOIN games g ON g.id = s.game_id {USER_SCREENSHOTS_WHERE}"
+    )
 }
 
-fn screenshot_from_row(row: &SqliteRow, viewer: &Viewer<'_>) -> Result<Screenshot, sqlx::Error> {
+/// F015 profile list: the page query (`?3` limit, `?4` offset). `tests/review2.rs` asserts it
+/// walks `idx_screenshots_author_created` without a temp B-tree sort.
+pub fn user_screenshots_page_sql() -> String {
+    format!(
+        "{SCREENSHOT_SELECT} {USER_SCREENSHOTS_WHERE} \
+         ORDER BY s.created_at DESC, s.id LIMIT ?3 OFFSET ?4"
+    )
+}
+
+/// Who is looking: used for `canDelete`.
+pub(crate) struct Viewer<'a> {
+    pub(crate) id: Option<&'a str>,
+    pub(crate) admin: bool,
+}
+
+pub(crate) fn screenshot_from_row(
+    row: &SqliteRow,
+    viewer: &Viewer<'_>,
+) -> Result<Screenshot, sqlx::Error> {
     let id: String = row.try_get("id")?;
     let ext: String = row.try_get("ext")?;
     let author_id: String = row.try_get("author_id")?;
@@ -157,6 +218,61 @@ pub async fn list_screenshots(
     }))
 }
 
+/// F015 GET /api/users/{username}/screenshots?page=&perPage= (🔓, no rate limit): the user's
+/// screenshots on games that are published or owned by the viewer, newest first.
+pub async fn list_user_screenshots(
+    State(state): State<AppState>,
+    viewer: MaybeAuthUser,
+    ApiPath(username): ApiPath<String>,
+    ApiQuery(query): ApiQuery<PageQuery>,
+) -> AppResult<Json<Page<UserScreenshot>>> {
+    let author: String = sqlx::query_scalar("SELECT id FROM users WHERE username_lower = ?")
+        .bind(username.to_lowercase())
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+    let (page, per_page) = parse_paging(
+        query.page.as_deref(),
+        query.per_page.as_deref(),
+        PER_PAGE_DEFAULT,
+    )?;
+    let per_page = per_page.clamp(1, PER_PAGE_MAX);
+    let v = Viewer {
+        id: viewer.id(),
+        admin: is_admin(&state, viewer.id()).await?,
+    };
+    let total: i64 = sqlx::query_scalar(&user_screenshots_count_sql())
+        .bind(&author)
+        .bind(viewer.id())
+        .fetch_one(&state.db)
+        .await?;
+    let rows = sqlx::query(&user_screenshots_page_sql())
+        .bind(&author)
+        .bind(viewer.id())
+        .bind(per_page)
+        .bind((page - 1) * per_page)
+        .fetch_all(&state.db)
+        .await?;
+    let items = rows
+        .iter()
+        .map(|r| {
+            Ok(UserScreenshot {
+                game: ScreenshotGameRef {
+                    id: r.try_get("game_id")?,
+                    title: r.try_get("game_title")?,
+                },
+                shot: screenshot_from_row(r, &v)?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    Ok(Json(Page {
+        items,
+        total,
+        page,
+        per_page,
+    }))
+}
+
 fn busy() -> Response {
     let mut res =
         AppError::ServiceUnavailable("The server is busy, try again in a few seconds".into())
@@ -179,7 +295,7 @@ pub async fn create_screenshot(
     ApiMultipart(mut multipart): ApiMultipart,
 ) -> AppResult<Response> {
     // 2-3: visibility, then the rate limit (before the body is read).
-    fetch_visible_game(&state, &game_id, Some(&user.id)).await?;
+    let game = fetch_visible_game(&state, &game_id, Some(&user.id)).await?;
     limit_user(&state, Limit::Screenshot, &user.id)?;
 
     // 4: multipart.
@@ -260,7 +376,9 @@ pub async fn create_screenshot(
         return Err(e.into());
     }
 
-    // 11: guarded insert; the game version is read in the same statement.
+    // 11: guarded insert; the game version is read in the same statement. F015: one `now` is
+    // both the screenshot's `created_at` and the feed event's time and UTC day.
+    let now = now_rfc3339();
     let inserted = sqlx::query(
         "INSERT INTO screenshots (id, game_id, author_id, caption, ext, width, height, bytes, \
          game_version, created_at) \
@@ -274,7 +392,7 @@ pub async fn create_screenshot(
     .bind(processed.width)
     .bind(processed.height)
     .bind(processed.full.len() as i64)
-    .bind(now_rfc3339())
+    .bind(&now)
     .bind(&game_id)
     .bind(&user.id)
     .bind(PER_USER_GAME_CAP)
@@ -293,6 +411,13 @@ pub async fn create_screenshot(
         // The game was deleted meanwhile → 404; otherwise the cap was reached.
         fetch_visible_game(&state, &game_id, Some(&user.id)).await?;
         return Err(cap_error());
+    }
+
+    // F015: best-effort `screenshotPosted` event, only for a game published at step 2.
+    if game.published
+        && let Some(mut conn) = crate::activity::acquire(&state.db).await
+    {
+        crate::activity::record_screenshot_posted(&mut conn, &user.id, &game_id, &now).await;
     }
 
     // 12.

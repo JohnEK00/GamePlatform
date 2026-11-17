@@ -77,6 +77,11 @@ pub fn api_router() -> Router<AppState> {
             "/users/{username}/collections",
             get(collections::list_user_collections),
         )
+        // F015: public; no `/users/me/screenshots` alias.
+        .route(
+            "/users/{username}/screenshots",
+            get(screenshots::list_user_screenshots),
+        )
         .route(
             "/users/{username}/achievements",
             get(achievements::list_user_achievements),
