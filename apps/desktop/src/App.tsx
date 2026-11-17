@@ -45,9 +45,10 @@ export function App() {
 
   return (
     <ServerContext.Provider value={serverState}>
-      <OfflineBanner key={server} />
-      {/* key: switching servers re-mounts the whole app (fresh API client, auth state, caches). */}
-      <WebGameApp key={server} config={config} />
+      <OfflineBanner key={`banner:${server}`} />
+      {/* key: switching servers re-mounts the whole app (fresh API client, auth state, caches).
+          Sibling keys must differ (review 10). */}
+      <WebGameApp key={`app:${server}`} config={config} />
     </ServerContext.Provider>
   );
 }
