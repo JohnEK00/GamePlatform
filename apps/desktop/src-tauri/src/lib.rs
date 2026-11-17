@@ -5,7 +5,9 @@
 //! `read_picked` exchanges that ticket for the bytes. The webview never supplies a filesystem path.
 //! The same pattern is used for local game folders (`project`) and native "Save as" (`save`).
 //! `menu` builds the native application menu. `notify` shows native OS notifications (F007; `os-notifications` feature).
+//! `external` sends new-window requests (`target="_blank"` links such as "Open image") to the system browser.
 
+mod external;
 mod menu;
 mod notify;
 mod project;
@@ -24,6 +26,9 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::Response;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
+
+/// Label of the app's only window (tauri.conf.json, capabilities/default.json).
+const MAIN_WINDOW: &str = "main";
 
 /// Largest file the frontend may read (game bundles are capped well below this server-side).
 const MAX_READ_BYTES: u64 = 60 * 1024 * 1024;
@@ -238,6 +243,23 @@ pub fn run() {
         .manage(save::LastImageDir::default())
         .menu(menu::build)
         .on_menu_event(menu::handle)
+        // The main window has `create: false` in tauri.conf.json and is built here from that same config, so it
+        // gets the new-window handler (otherwise `target="_blank"` links silently do nothing in the webview).
+        .setup(|app| {
+            let conf = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|w| w.label == MAIN_WINDOW)
+                .cloned()
+                .ok_or("tauri.conf.json has no main window")?;
+            let throttle = external::Throttle::default();
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &conf)?
+                .on_new_window(move |url, _features| external::handle_new_window(&url, &throttle))
+                .build()?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             pick_file,
             read_picked,

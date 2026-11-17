@@ -1409,3 +1409,19 @@ Screenshots in the feed and on profiles (spec: `docs/features/F015-screenshots-i
   - backend-dev: the migration, `activity.rs`, `routes/screenshots.rs`, `routes/feed.rs`, `routes/mod.rs`, `tests/f015.rs` and the `review2.rs` extension.
   - frontend-dev: types, client, `util.ts`, `ScreenshotLightbox`, `ScreenshotGallery`, `FeedItem`, `FeedPage`, `ProfileScreenshots`, `ProfilePage`, `GamePage`, styles and tests.
   - desktop-dev: verification only.
+
+### F015 desktop note: external links
+In the desktop app, `target="_blank"` links (such as "Open image" in the screenshot lightbox on the game page, the feed and profiles, or the admin report thumbnail) used to do nothing: WebView2 drops new-window requests unless there is a handler.
+
+`apps/desktop/src-tauri/src/external.rs` now handles them:
+- **Never a second window:** it never opens a second webview.
+- **Allowed URLs only:** it opens the URL in the default system browser only if the URL:
+  - is `http` or `https`;
+  - has a host;
+  - has no credentials;
+  - is at most 2048 bytes;
+  - contains no whitespace, quotes or control characters.
+- **Rate limited:** at most one URL every 500 ms.
+- **No shell:** the browser is started directly with `rundll32 url.dll,FileProtocolHandler`, `open` or `xdg-open`.
+
+The main window is now created in `setup` from its `tauri.conf.json` entry (`create: false`) so that it gets this handler. Game iframes can't trigger it, because their sandbox doesn't include `allow-popups`.
