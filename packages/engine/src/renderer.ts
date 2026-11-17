@@ -109,6 +109,8 @@ interface Glyph {
 }
 
 /** Canvas-rasterized font atlas; glyphs are added lazily, so any Unicode character works. */
+const WHITE_BLOCK = new Uint8Array(8 * 8 * 4).fill(255);
+
 class FontAtlas {
   readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -141,8 +143,11 @@ class FontAtlas {
     this.descent = Math.ceil(m.actualBoundingBoxDescent || BASE_FONT * 0.25);
     this.cellH = this.ascent + this.descent + FONT_PAD * 2;
     // White block for shapes (sample its center).
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, 8, 8);
+    this.paintWhite();
+    // The browser may discard this offscreen 2D canvas (Chrome: memory pressure / backgrounded
+    // tab), then restore it blank. Uploading it then would wipe every glyph and the white block
+    // that all shapes sample, so repaint it from the glyph table before the next upload.
+    this.canvas.addEventListener('contextrestored', () => this.repaint());
     this.cx = 12;
     this.rowH = 8;
     const tex = gl.createTexture();
@@ -174,10 +179,7 @@ class FontAtlas {
       // Atlas full: fall back to '?'
       return this.glyphs.get('?') ?? { u0: 0, v0: 0, u1: 0, v1: 0, w: 0, h: 0, adv };
     }
-    ctx.fillStyle = '#fff';
-    ctx.textBaseline = 'alphabetic';
-    ctx.textAlign = 'left';
-    ctx.fillText(ch, this.cx + FONT_PAD, this.cy + FONT_PAD + this.ascent);
+    this.paintGlyph(ch, this.cx, this.cy);
     const s = this.size;
     g = { u0: this.cx / s, v0: this.cy / s, u1: (this.cx + w) / s, v1: (this.cy + h) / s, w, h, adv };
     this.glyphs.set(ch, g);
@@ -187,12 +189,40 @@ class FontAtlas {
     return g;
   }
 
+  private paintWhite(): void {
+    this.ctx.fillStyle = '#fff';
+    this.ctx.fillRect(0, 0, 8, 8);
+  }
+
+  private paintGlyph(ch: string, x: number, y: number): void {
+    const ctx = this.ctx;
+    ctx.font = this.fontCss;
+    ctx.fillStyle = '#fff';
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    ctx.fillText(ch, x + FONT_PAD, y + FONT_PAD + this.ascent);
+  }
+
+  /** Redraw the white block and every cached glyph at its existing atlas position (after a canvas reset). */
+  repaint(): void {
+    this.ctx.clearRect(0, 0, this.size, this.size);
+    this.paintWhite();
+    const s = this.size;
+    for (const [ch, g] of this.glyphs) if (g.w > 0) this.paintGlyph(ch, Math.round(g.u0 * s), Math.round(g.v0 * s));
+    this.dirty = true;
+  }
+
   private upload(): void {
     if (!this.dirty) return;
+    // While the 2D canvas is lost its pixels are gone; keep the GPU copy and upload after restore.
+    if (typeof this.ctx.isContextLost === 'function' && this.ctx.isContextLost()) return;
     this.dirty = false;
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.page.glTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.canvas);
+    // Shapes sample the white block. Write it from bytes too, so shapes never depend on the browser
+    // returning the 2D canvas intact (GPU-canvas copy quirks, anti-fingerprinting canvas blocking).
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 8, 8, gl.RGBA, gl.UNSIGNED_BYTE, WHITE_BLOCK);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
