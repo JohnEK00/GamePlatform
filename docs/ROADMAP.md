@@ -42,10 +42,12 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F020 | Game comment settings: comments on / replies only / off, slow mode | S | shipped |
 | F015 | Screenshots in the feed and on profiles | S | shipped |
 | F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | shipped |
+| F024 | "Screenshot of your game" notifications for creators | S | specced |
 | F022 | Announce a collection when it goes public | S | proposed |
-| F024 | "Screenshot of your game" notifications for creators | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
+| F026 | "Your record was beaten" leaderboard notifications | S | proposed |
 | F025 | On-screen keyboard 2: symbols page and accented letters | S | proposed |
+| F027 | Featured screenshots: owners pin up to 3 shots on the game page | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
 
@@ -254,10 +256,30 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: engine (new pure `osk.ts`, `ui.ts` wiring, README, two test files), frontend (template hint removal, docs subsection, two tests; desktop tests in acceptance), desktop (verification only). Backend not dispatched. No migration (the next free number stays `0023`), no messages, no example changes.
 - **Depends on**: F019, F016, F012 (all shipped). Follow-up: F025.
 
-### F024: "Screenshot of your game" notifications for creators (S, proposed; after F015)
-- **Pitch**: a F007 kind `screenshotPosted` for the game owner ("Mia posted 2 screenshots of Space Dodge"), coalesced per game while unread (F018 group), withdrawn when all of them are deleted while unread, with a `screenshots` setting (default on). F018 game mutes apply, and the author never notifies themself.
+### F024: "Screenshot of your game" notifications for creators (S, specced → [spec](features/F024-screenshot-notifications.md))
+- **Pitch**:
+  - A F007 kind `screenshotPosted` for the game owner: "Mia posted 2 screenshots of Space Dodge", with a 48 px preview of the newest shot, linking to `/games/{id}?section=screenshots`.
+  - One unread notification per game; every screenshot is one event.
+  - Written only for posts to published games by someone other than the owner.
+  - A `screenshots` setting ("Screenshots of my games", default on). F018 game mutes apply.
+- **Deletes**: each event references its screenshot (`ON DELETE CASCADE`), so deleting a screenshot removes it from the notification, read or unread. A notification left empty is deleted by the `0014` trigger, the F007 comment rule. This replaces the earlier "withdrawn while unread" idea.
 - **User value**: creators notice community shots quickly, can thank players, set a good one as the thumbnail, or remove an inappropriate one.
-- **Areas**: backend (notification kind, setting column in a small migration, hook in `create_screenshot`/`remove_screenshot`), frontend (summary text, setting switch, icon). No engine changes; desktop verification of OS notification text.
+- **Areas**:
+  - backend: migration `0023_f024.sql` with `notification_events.screenshot_id`, the dedupe index swap and `notification_settings.screenshots`; the kind; the hook in `create_screenshot`; the batched `screenshot` read; `tests/f018.rs` normalisation.
+  - frontend: summary, thumbnail, 📷 icon, switch.
+  - desktop: one verification test, no source changes.
+  - No engine changes.
+- **Depends on**: F005, F007, F015, F018, F021 (all shipped).
+
+### F026: "Your record was beaten" leaderboard notifications (S, proposed; after F024)
+- **Pitch**: a F007 kind `recordBeaten` for the player who held **#1** on a game's all-time board (F001, per board direction) when another player takes the top spot: "Mia beat your best on Space Dodge (12,400)", linking to the game's leaderboard. One notification per (game, board) while unread, with the newest challenger. It has a `records` setting and F018 game mutes apply. Daily and weekly boards never notify, to avoid churn.
+- **User value**: brings competitive players back to defend their spot, the strongest re-engagement loop leaderboards offer, and composes with F001 and F007 with no new UI surfaces beyond one notification text.
+- **Areas**: backend (hook in the score-submit path after the F001 best update, kind, setting column), frontend (summary, setting switch). No engine changes.
+
+### F027: Featured screenshots (S, proposed; after F024)
+- **Pitch**: game owners "Feature" up to 3 screenshots from their gallery (any author). Featured shots show first in the gallery with a "Featured" badge, and as a strip on the game page header. The author gets a F007 `screenshotFeatured` notification (once per screenshot, the F018 pin pattern).
+- **User value**: creators curate the best community shots as their storefront, and players get recognition, which closes the loop F024 opens.
+- **Areas**: backend (`screenshots.featured_at`, PUT/DELETE feature endpoints, kind), frontend (gallery badge and button, header strip, notification text). No engine changes.
 
 ### F025: On-screen keyboard 2: symbols page and accented letters (S, proposed; after F023)
 - **Pitch**: a `?123` key switching the F023 keyboard to a symbols page (`! ? , : ; ( ) & @ # + = / *`), and a long-press or `RB` accent row for the letter under the cursor (é, ñ, ü…), shown only for glyphs the theme font has.

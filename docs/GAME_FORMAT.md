@@ -1019,3 +1019,7 @@ Host and author pauses keep the keyboard open (editing stays on). A key press in
 - **Pressing a dimmed key** sends its event as usual, and `applyTextEvents` rejects it under the usual rules (`maxLength`, `allow`, Backspace at caret 0). So a SHIFT earlier in the same step is applied correctly.
 - **Keyboard that doesn't fit:** it counts as not shown. `keyboardRect` is `null` and all F019 rules apply, including gamepad A submitting. In the warning, `{W}x{H}` is the renderer size rounded to whole pixels.
 - **Hover and pressed styles** come from the mouse state at the end of the step. A disabled key never shows them.
+
+
+## F024 additions
+None. Screenshot notifications for creators are written by the existing F005 post flow (the 📷 button, `engine.platform.shareScreenshot()`). There are no engine, message, game.json or bundle changes.

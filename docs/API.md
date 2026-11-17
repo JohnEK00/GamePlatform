@@ -1581,3 +1581,75 @@ type UserScreenshot = Screenshot & { game: ScreenshotGameRef }
 
 ## F023 additions
 On-screen keyboard for `ui.textField` (spec: `docs/features/F023-on-screen-keyboard.md`). **No changes**: no endpoints, no fields, no status codes and no limits. The keyboard is engine-only (GAME_FORMAT § F023), and its text never leaves the game iframe.
+
+
+## F024 additions
+"Screenshot of your game" notifications for creators (spec: `docs/features/F024-screenshot-notifications.md`; § 0 there settles every ambiguity). All earlier rules apply, including F005, F007, F015, F018 and F021. **No new endpoints, no new status codes and no new rate limits.**
+
+### Types
+```ts
+type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished" | "pinned" | "addedToCollection"
+                      | "screenshotPosted"                 // F024
+
+type NotificationScreenshot = {
+  id: string;                     // screenshot id (UUID v4)
+  thumbUrl: string;               // "/media/screenshots/{id}_t.jpg" (F005 Screenshot.thumbUrl; resolve against the API base)
+}
+
+type Notification = {
+  ...F007, F018 and F021,
+  screenshot: NotificationScreenshot | null;   // screenshotPosted: the group's newest remaining screenshot; null for every other kind
+}
+
+type NotificationSettings = {
+  ...F007, F018 and F021,
+  screenshots: boolean;           // "screenshotPosted" kind; default true
+}
+```
+- Clients must still ignore notifications with an unknown `kind` (F007).
+- Clients must treat a missing `screenshot` as `null`, and a missing `screenshots` setting as "not supported" (hide the switch).
+
+### Trigger and recipient
+| Kind | Written when | Recipient | Group | Joins an unread group? |
+|---|---|---|---|---|
+| `screenshotPosted` | `POST /api/games/{id}/screenshots` returns 201 **and** the game was published at that request's visibility check (the F015 feed-event condition) | the game's owner, unless they are the author | per game | yes; each screenshot is one event |
+
+- **Fields:**
+  - `actors` = the 1–3 most recent distinct authors, newest first.
+  - `actorCount` = distinct authors.
+  - `eventCount` = screenshots in the group that still exist (≥ `actorCount`).
+  - `game` = the game.
+  - `screenshot` = the newest of those screenshots.
+  - `commentId`, `excerpt`, `threadId` and `collection` = `null`; `ownsThread` and `creatorHeart` = `false`.
+  - `path` = `/games/{gameId}?section=screenshots`.
+- **Timing:** the notification is written before the 201 is sent. On a new notification, `createdAt` and `updatedAt` equal the screenshot's `createdAt`. A join moves `updatedAt` to the new screenshot's `createdAt`. Best effort: a failure is logged and the 201 is unchanged. A request refused with 4xx (including 422 for the cap or a bad image, and 429) writes nothing.
+- **Coalescing:** the F007 rule. While unread, new screenshots join the notification. Once it is read, it never gains events again, and the next screenshot opens a new unread notification.
+- **Captions** are never part of a notification.
+
+### Deletion
+- Deleting a screenshot (`DELETE /api/screenshots/{id}` by the author, the game owner or an admin, or a report resolved with `delete`) removes its event from the `screenshotPosted` notification, **read or unread**. `eventCount`, `actorCount`, `actors` and `screenshot` change accordingly.
+- A notification left with no screenshots is deleted. It is no longer listed or counted.
+- Deleting the game deletes its notifications. Deleting a user deletes their screenshots and with them their events.
+- This is the F007 rule for deleted comments. Unlike F018 pins and F021 collections, nothing is "withdrawn and restorable".
+
+### Settings and mutes
+- **Settings:** `screenshots` (default `true`). `PUT /api/notifications/settings` accepts it. A non-boolean → 422 `validation` `screenshots must be a boolean`. Turning it off stops **new** notifications and joins; existing ones stay until they expire (F007).
+- **Mutes (F018):** a game mute of the game suppresses the kind, including joins. Muting the game marks an unread one read. Thread mutes never apply. The F018 mute scopes table gains `screenshotPosted` in the "game `G`" row.
+
+### Visibility
+Unchanged F007 rule. The recipient owns the game, so the notification stays visible if the game is unpublished later.
+
+### Paths
+| Kind | `path` |
+|---|---|
+| `screenshotPosted` | `/games/{gameId}?section=screenshots` (F015 web route: the game page scrolls to its Screenshots section) |
+
+### Privacy
+- The game owner learns which users posted screenshots of their game. Those screenshots and their authors are already public on the game page (F005).
+- OS notifications (desktop) use the in-app summary, which contains no caption (client rule, spec § 0.12).
+
+### Rate limits
+Unchanged. Posting stays under F005 `Limit::Screenshot` (10/hour per user) and the 20-per-user-per-game cap. Notification reads keep `Limit::Notifications`.
+
+### Retention
+F007 retention applies unchanged.

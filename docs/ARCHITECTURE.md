@@ -1476,3 +1476,69 @@ On-screen keyboard for `ui.textField` (spec: `docs/features/F023-on-screen-keybo
 - **Ownership**:
   - engine-dev: `osk.ts`, `ui.ts`, `index.ts`, the engine README and the engine tests.
   - frontend-dev: `templates.ts`, `DocsPage.tsx` and their tests.
+
+
+## F024 additions
+"Screenshot of your game" notifications (spec: `docs/features/F024-screenshot-notifications.md`). This round adds one migration (two added columns and one index swap; no table rebuild), one notification kind, one hook in `create_screenshot` and one batched read query. There are no new endpoints or dependencies, and no engine or desktop source changes.
+- **Model.**
+  - `screenshotPosted` is a normal F007 kind with `Dedupe::None`, grouped per game (`game:{gameId}`, `notifications::game_group`) for the game owner.
+  - Each event stores its screenshot in `notification_events.screenshot_id` (`ON DELETE CASCADE`). Deleting a screenshot through any path (`remove_screenshot`, game delete, user delete) deletes its event through the foreign key, and the `0014` trigger `notification_events_last_gone` deletes a notification left with no events. That is how comment events already behave, so there is no withdraw/restore logic and no code in the delete paths.
+- **Data**: migration `backend/migrations/0023_f024.sql` runs after `0022_f015.sql`. Normative, in this order:
+  ```sql
+  -- F024: "screenshot of your game" notifications (docs/ARCHITECTURE.md § F024 additions).
+
+  -- 1. The screenshot of a screenshotPosted event (NULL for every other kind). Deleting the screenshot
+  --    deletes the event; the 0014 trigger then deletes a notification left without events.
+  --    ADD COLUMN with REFERENCES is allowed because the default is NULL.
+  ALTER TABLE notification_events ADD COLUMN screenshot_id TEXT REFERENCES screenshots(id) ON DELETE CASCADE;
+  CREATE INDEX idx_notification_events_screenshot ON notification_events(screenshot_id) WHERE screenshot_id IS NOT NULL;
+
+  -- 2. One event per screenshot: append screenshot_id to the dedupe key, so two screenshots by one author in one
+  --    unread group are two events (with the 0013 key the second INSERT OR IGNORE would be dropped). The new key is
+  --    strictly finer than the old one, so existing rows can't violate it.
+  DROP INDEX idx_notification_events_dedupe;
+  CREATE UNIQUE INDEX idx_notification_events_dedupe ON notification_events(notification_id, actor_id, IFNULL(comment_id, ''), IFNULL(screenshot_id, ''));
+
+  -- 3. The screenshotPosted kind's setting.
+  ALTER TABLE notification_settings ADD COLUMN screenshots INTEGER NOT NULL DEFAULT 1 CHECK (screenshots IN (0, 1));
+  ```
+  - `tests/f018.rs` compares post-migration index SQL with its 0016 baseline. It excludes `idx_notification_events_screenshot` and normalises the dedupe entry after asserting its new definition (spec § 4 backend task 8).
+- **Write path** (`routes/screenshots.rs::create_screenshot`). This runs after the guarded insert affected one row and after the F015 `record_screenshot_posted` block, and before the step-12 re-read:
+  ```rust
+  if game.published && game.owner_id != user.id {
+      let at = DateTime::parse_from_rfc3339(&now).map(|t| t.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now());
+      notifications::notify_pool(&state.db, &NewNotification {
+          recipient_id: game.owner_id.clone(), kind: Kind::ScreenshotPosted, group_key: game_group(&game_id),
+          game_id: Some(game_id.clone()), comment_id: None, actor_id: user.id.clone(),
+          event_comment_id: None, event_screenshot_id: Some(id.clone()), dedupe: Dedupe::None,
+          thread_id: None, collection_id: None, now: at,
+      }).await;
+  }
+  ```
+  - `try_notify` is unchanged except for the event insert, which writes `screenshot_id`: `INSERT OR IGNORE INTO notification_events (notification_id, actor_id, comment_id, screenshot_id, created_at) VALUES (?, ?, ?, ?, ?)`. Settings (`{col}` = `screenshots`), F018 mutes (`?9` NULL, so only game mutes match) and the open-group upsert are unchanged.
+  - If the screenshot was deleted in between, the event insert fails its foreign key check, the whole `BEGIN IMMEDIATE` transaction rolls back, and the failure is logged.
+- **Read path** (`notifications::list_page`):
+  - `eventCount` counts live events for `screenshotPosted`, as for `comment`/`reply`.
+  - `path` = `/games/{gameId}?section=screenshots`.
+  - `commentId`, `threadId`, `excerpt` and `collection` are `None`.
+  - One batched query, only for the page's `screenshotPosted` ids:
+  ```sql
+  SELECT notification_id, screenshot_id FROM (
+    SELECT notification_id, screenshot_id, ROW_NUMBER() OVER (
+      PARTITION BY notification_id ORDER BY created_at DESC, id DESC) AS rn
+    FROM notification_events
+    WHERE notification_id IN (SELECT value FROM json_each(?1))
+      AND screenshot_id IS NOT NULL AND retracted_at IS NULL)
+  WHERE rn = 1
+  ```
+  → `Notification.screenshot = Some(NotificationScreenshot { id, thumb_url: screenshots::thumb_url(&id) })`. `VISIBLE`, `unread_count`, `mark_read`, mutes and pruning are unchanged (none of them names kinds, except `mute_thread`, which correctly doesn't include this kind).
+- **Settings**: `notification_settings.screenshots` ↔ `NotificationSettings.screenshots`. `SettingsPatch.screenshots` is bound as `?10` in `update_settings`.
+- **UI.**
+  - `notifications.ts` adds the summary, the game mute action and `screenshotThumb`.
+  - `NotificationItem` adds the 📷 glyph and a decorative 48 px thumbnail (`NotificationShot`, resolved with `api.url`, so desktop gets an absolute URL on the configured server).
+  - `NotificationSettings` adds the eighth switch.
+  - `osNotificationText` needs no change (no user free text beyond names and the game title).
+- **Ownership**:
+  - backend-dev: the migration, `notifications.rs`, `models.rs`, `routes/notifications.rs`, `routes/screenshots.rs`, the `event_screenshot_id: None` additions in `routes/comments.rs`, `routes/follows.rs` and `routes/collections.rs`, `tests/f024.rs`, and the `tests/f007.rs` and `tests/f018.rs` adjustments.
+  - frontend-dev: types, `index.ts`, `notifications.ts`, `NotificationItem`, `NotificationSettings`, styles and tests.
+  - desktop-dev: `apps/desktop/src/__tests__/f024.desktop.test.tsx` only.
