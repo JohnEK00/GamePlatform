@@ -1417,3 +1417,75 @@ type ControlBindingsResponse = { bindings: ControlBindings | null; updatedAt: st
 
 ## F019 additions
 Engine UI widgets 2 (spec: `docs/features/F019-ui-widgets-2.md`). **No changes**: no new or changed endpoints, types, status codes, migrations, rate limits or bundle extensions. The feature is engine API only (GAME_FORMAT.md § F019 additions). The repacked example bundles must still pass the existing upload validation (`actions`, allowlist, size), which the backend suites already check.
+
+
+## F020 additions
+Game comment settings: comments on / replies only / off, and slow mode (spec: `docs/features/F020-game-comment-settings.md`). All earlier rules apply, including F006 (threads, validation order), F017 (locks, `canModerate`, `Limit::ThreadTools`) and the v2 error shape.
+
+### Errors
+- New code **`slow_mode`** → **429**, always with `Retry-After` (whole seconds, ≥ 1). Message: `Slow mode is on: you can post again in {n} seconds`, where `{n}` equals the `Retry-After` value (always "seconds", also for 1). It is used only by `POST /api/games/{id}/comments`. Clients that don't know it must treat it as a 429.
+
+### Types
+```ts
+type CommentMode = "on" | "repliesOnly" | "off"
+type SlowModeSecs = 0 | 30 | 60 | 300 | 900 | 3600     // 0 = slow mode off
+
+type CommentSettings = {
+  mode: CommentMode;              // "on" by default
+  slowModeSecs: SlowModeSecs;     // 0 by default
+}
+
+type CommentSettingsView = CommentSettings & {
+  canManage: boolean;             // 🔓 the viewer is the game's CURRENT owner or an admin: may change the settings and is exempt from mode and slow mode; false when anonymous
+  waitSecs: number;               // 🔓 integer seconds until the viewer may post again under slow mode, 0..slowModeSecs; 0 when anonymous, when canManage, when slowModeSecs is 0, or when the wait is over
+}
+
+type Game = { ...F018, commentSettings: CommentSettings }          // public: the same for every viewer
+type CommentListPage = { ...F017, settings: CommentSettingsView }  // returned on every page (clients read it from page 1)
+```
+- Clients must treat a missing `Game.commentSettings` as "unknown" (hide the settings UI) and a missing `CommentListPage.settings` as `{ mode: "on", slowModeSecs: 0, canManage: false, waitSecs: 0 }` (older servers).
+- An unknown stored mode reads as `"on"`; an unknown stored interval reads as `0`.
+
+### New endpoint
+| Method | Path | Body | Response |
+|---|---|---|---|
+| PUT 🔒 owner/admin | /api/games/{id}/comment-settings | `{ mode: CommentMode, slowModeSecs: SlowModeSecs }` (both required) | 200 `CommentSettings` (the stored values) |
+
+- "owner/admin" = the game's current owner, or a user with `role: "admin"`.
+- Checked in this order:
+  1. Auth → 401.
+  2. Malformed JSON → 400 `bad_request`.
+  3. Unknown game, or not visible to the caller under `GET /api/games/{id}` rules → 404 `not_found` "Game not found".
+  4. Caller is not the owner or an admin → 403 `forbidden`.
+  5. `Limit::ThreadTools` → 429 `rate_limited`.
+  6. Body is not a JSON object → 422 `validation` `Body must be a JSON object`.
+  7. `mode` missing or not exactly `"on"`, `"repliesOnly"` or `"off"` → 422 `validation` `mode must be one of: on, repliesOnly, off`.
+  8. `slowModeSecs` missing or not a JSON integer in {0, 30, 60, 300, 900, 3600} → 422 `validation` `slowModeSecs must be one of: 0, 30, 60, 300, 900, 3600` (`"60"`, `60.5`, `true`, `null` are rejected).
+- Unknown extra fields are ignored. Idempotent. Does **not** change `updatedAt` or `lastUpdatedAt`. Writes no F002 activity and no F007 notifications.
+
+### Changed endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/games/{id} | – | `Game` + `commentSettings` |
+| GET 🔓 | /api/games/{id}/comments | F017 query | `CommentListPage` + `settings` |
+| POST 🔒 | /api/games/{id}/comments | F006 body | 201 `Comment` |
+
+- **`POST …/comments`**, the full validation order (F006 steps, F017 6b, F020 5b and 6c). "Exempt" = the poster is the game's current owner or an admin.
+  1. Auth → 401.
+  2. Game visibility → 404.
+  3. `Limit::Comment` → 429 `rate_limited`.
+  4. `parentId` not a string or `null` → 422.
+  5. `body` trimmed length not 1–2000 → 422.
+  - **5b.** Not exempt and mode `"off"` → 422 `validation` `Comments are turned off for this game`. Not exempt, mode `"repliesOnly"` and no `parentId` (top-level) → 422 `validation` `New comments are turned off for this game`.
+  6. `parentId` unknown or on another game → 404 "Comment not found".
+  - **6b.** (F017) Thread locked and not exempt → 422 "This thread is locked".
+  - **6c.** Not exempt, `slowModeSecs > 0`, and the poster's last successful post on this game (top-level or reply, including posts since deleted and posts made while slow mode was off) was less than `slowModeSecs` ago → 429 `slow_mode` with `Retry-After` = `clamp(ceil(last + slowModeSecs − now), 1, slowModeSecs)`.
+  7. Thread already has 200 replies → 422 "This thread has reached 200 replies".
+- Steps 6b, 6c and 7 are enforced atomically with the insert: a rejected post never counts as the poster's last post, and two concurrent posts by one user under slow mode yield exactly one 201.
+- Every successful post (by anyone, in any mode) updates the poster's last-post time for that game.
+- The mode check (5b) is not atomic with the insert: a post racing a settings change may still be accepted.
+- Hearts, deletes, reports, pins and locks are not affected by either setting. Existing comments are always listed.
+
+### Rate limits
+- `PUT /api/games/{id}/comment-settings` shares **`Limit::ThreadTools`** (60 per 10 min, per user) with the F017 pin/lock endpoints.
+- Slow mode is a per-game setting enforced by the server, not a rate-limit bucket: it is unaffected by `RATE_LIMIT=off` and reported as `slow_mode`, not `rate_limited`. `Limit::Comment` still applies on top of it.

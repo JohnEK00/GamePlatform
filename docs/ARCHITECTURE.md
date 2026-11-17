@@ -1301,3 +1301,48 @@ Engine UI widgets 2 (spec: `docs/features/F019-ui-widgets-2.md`). Engine-only. *
 - **No platform involvement.** Text typed into a field stays inside the sandboxed, opaque-origin game iframe. There is no new message, no host keyboard handling and no clipboard permission: `paste` events only fire on a user paste gesture into the iframe document.
 - **Studio and docs** (frontend-dev): the `menu-hud` template gains a settings screen using all four widgets; the docs page section 16 gains a "Settings and text entry" subsection. Desktop: verification only.
 - **Ownership**: `ui.ts`, `uitext.ts`, `input.ts`, `engine.ts`, the engine README and the Ember Garden settings scene belong to engine-dev; `templates.ts` and `DocsPage.tsx` to frontend-dev.
+
+
+## F020 additions
+Game comment settings (spec: `docs/features/F020-game-comment-settings.md`). Two `games` columns, one small table, one endpoint in `routes/comments.rs`, one new `AppError` variant. No new dependencies, no engine changes.
+- **Model.** The mode and the slow-mode interval are per-game columns on `games` (read through `GAME_SELECT`, so `create_comment` and `list_comments` get them from the game row they already load). Slow mode is enforced from `comment_post_times`, one row per (game, user) holding the time of that user's last **successful** post on that game. It is written on every post, not only while slow mode is on, so turning slow mode on applies immediately and deleting a comment never resets the wait.
+- **No CHECK constraints** on the new `games` columns: values are validated in Rust (`CommentMode`, `SLOW_MODE_SECS`), so later modes need no rebuild of `games` (which has many inbound FKs). Unknown stored values read as `on` / `0` with a warning.
+- **Data**: migration `backend/migrations/0021_f020.sql` runs after `0020_f016.sql`:
+  ```sql
+  -- F020: game comment settings (docs/ARCHITECTURE.md § F020 additions).
+  ALTER TABLE games ADD COLUMN comment_mode TEXT NOT NULL DEFAULT 'on';            -- 'on' | 'repliesOnly' | 'off' (validated in Rust)
+  ALTER TABLE games ADD COLUMN comment_slow_mode_secs INTEGER NOT NULL DEFAULT 0;  -- 0 | 30 | 60 | 300 | 900 | 3600 (validated in Rust)
+
+  CREATE TABLE comment_post_times (
+      game_id        TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      last_posted_at TEXT NOT NULL,   -- RFC3339 millis Z (same format as comments.created_at)
+      PRIMARY KEY (game_id, user_id)
+  );
+  CREATE INDEX idx_comment_post_times_user ON comment_post_times(user_id);   -- user delete cascade
+
+  INSERT INTO comment_post_times (game_id, user_id, last_posted_at)
+  SELECT game_id, user_id, MAX(created_at) FROM comments GROUP BY game_id, user_id;
+  ```
+- **Write path** (`create_comment`, one transaction; `now` is one `now_rfc3339()` value used for both tables):
+  ```sql
+  -- 1. Slow-mode claim (first statement writes, so the deferred transaction takes the write lock at once).
+  --    ?4 = 1 when the check is skipped (slowModeSecs = 0 or the poster is the owner/an admin);
+  --    ?5 = cutoff = now − slowModeSecs, formatted like now_rfc3339() (string comparison is chronological).
+  INSERT INTO comment_post_times (game_id, user_id, last_posted_at) VALUES (?1, ?2, ?3)
+  ON CONFLICT (game_id, user_id) DO UPDATE SET last_posted_at = excluded.last_posted_at
+   WHERE ?4 = 1 OR comment_post_times.last_posted_at <= ?5;
+  -- 0 rows → ROLLBACK; SELECT last_posted_at → AppError::SlowMode { retry_after: clamp(ceil(last + secs − now), 1, secs) }.
+  -- 2. The existing insert: plain top-level INSERT, or the F017 guarded reply INSERT … SELECT … WHERE ….
+  -- 0 rows → ROLLBACK; the F017 re-read decides 404 / 422 locked / 422 cap.
+  -- 3. COMMIT, then the F007 notification hook (unchanged, after the commit).
+  ```
+  The mode check (API § F020 step 5b) happens before the transaction from the loaded game row and is not repeated inside it (a settings change racing a post may let one post through; accepted).
+- **Read shapes**:
+  - `GAME_SELECT` adds `g.comment_mode, g.comment_slow_mode_secs`; `GameRow::game` fills `Game.commentSettings`.
+  - `list_comments` builds `CommentListPage.settings` from the game row and the already loaded `Viewer` (`canManage` = owner or admin). `waitSecs` needs one primary-key lookup, `SELECT last_posted_at FROM comment_post_times WHERE game_id = ? AND user_id = ?`, made only for a signed-in, non-managing viewer when `comment_slow_mode_secs > 0`.
+- **Settings write**: `UPDATE games SET comment_mode = ?, comment_slow_mode_secs = ? WHERE id = ?`. It leaves `updated_at`/`last_updated_at` alone (those drive sorting and the F004 "Updated" badge).
+- **Errors**: `AppError::SlowMode { retry_after }` → 429, code `slow_mode`, `Retry-After` set like `RateLimited`. It is not a `RateLimiter` bucket, so `RATE_LIMIT=off` doesn't disable it.
+- **Feed and notifications**: none written or retracted by settings changes. Rejected posts write nothing, so F007 hooks run only for committed posts (unchanged).
+- **UI**: `CommentSettingsForm` + `CommentSettingsDialog` (new), changes in `Comments`, `CommentForm`, `EditGamePage`; helpers in `api/comments.ts`. The slow-mode countdown is a monotonic deadline (`performance.now()`) seeded from server-relative seconds (`waitSecs`, `Retry-After`), so client clock skew never matters.
+- **Ownership**: the migration, `error.rs`, `models.rs`, `routes/comments.rs`, `routes/mod.rs`, the `Limit::ThreadTools` doc comment and `tests/f020.rs` belong to backend-dev. Types, client, `api/comments.ts`, the components, `EditGamePage`, styles and UI tests belong to frontend-dev. Desktop has no code changes.

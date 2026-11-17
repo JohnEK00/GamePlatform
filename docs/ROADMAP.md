@@ -39,7 +39,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F021 | Collection activity: feed items and "added to a collection" notifications | M | shipped |
 | F016 | Gamepad remapping, synced control bindings and device-aware prompts | M | shipped |
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | M | shipped |
-| F020 | Game comment settings: turn comments off, slow mode | S | proposed |
+| F020 | Game comment settings: comments on / replies only / off, slow mode | S | specced |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
 | F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | proposed |
 | F022 | Announce a collection when it goes public | S | proposed |
@@ -221,10 +221,16 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration, `record_collection_added`, a third feed branch, notification kind, read-time collection filter, hooks in the add/remove endpoints), frontend (feed item and tab, notification text, OS text without the title, setting), desktop (verification only). No engine changes.
 - **Depends on**: F002, F007, F008, F018 (all shipped).
 
-### F020: Game comment settings: turn comments off, slow mode (S, proposed; after F017)
-- **Pitch**: per-game owner settings on the edit page: "Comments: on / replies only to existing threads / off" and an optional slow mode (one comment or reply per user per game every N minutes). Existing comments stay visible when comments are off.
-- **User value**: creators of small or controversial games can pause discussion without deleting it, and busy games get calmer threads.
-- **Areas**: backend (`games` columns, checks in `create_comment`, `Game` fields), frontend (edit page fieldset, comment form states). No engine changes.
+### F020: Game comment settings: comments on / replies only / off, slow mode (S, specced → [spec](features/F020-game-comment-settings.md))
+- **Pitch**:
+  - Per-game "Who can comment": everyone (default), replies only (no new threads; F017 locks still apply) or off. Existing comments always stay visible; hearts, delete, report, pin and lock keep working.
+  - Optional slow mode: one comment or reply per user per game every 30 s, 1 min, 5 min, 15 min or 1 h. A rejected post never uses the slot, deleting a comment never resets it, and concurrent posts can't both get through.
+  - The game owner and admins are exempt from both, like the F017 lock bypass, and can change the settings on the edit page ("Comments" panel) or from a ⚙ Settings dialog in the game page's Comments header.
+  - Players see "Comments off", "Replies only" or "Slow mode · 5 min" badges, a closed note instead of the form, and a slow-mode countdown on their forms.
+  - `PUT /api/games/{id}/comment-settings` (shares `Limit::ThreadTools`), `Game.commentSettings`, `CommentListPage.settings` (`canManage`, `waitSecs`), and a new 429 error code `slow_mode` with `Retry-After`.
+- **User value**: creators of small or controversial games can pause discussion without deleting it, jam entries can close comments after the jam, admins can stop a pile-on, and busy games get calmer threads.
+- **Areas**: backend (migration `0021_f020.sql`: two `games` columns without CHECK and `comment_post_times` with a backfill; mode and slow-mode steps in `create_comment` inside one transaction; the settings endpoint; `AppError::SlowMode`), frontend (`CommentSettingsForm`, `CommentSettingsDialog`, edit page panel, comment form states and countdown), desktop (verification only). No engine changes.
+- **Depends on**: F006 and F017 (shipped).
 
 ### F022: Announce a collection when it goes public (S, proposed; after F021)
 - **Pitch**: when a collection changes from private to public with at least one published game, followers get one `collectionShared` feed item ("Mia shared *Cozy games*: 8 games") instead of nothing, and creators of the games in it get the F021 `addedToCollection` notification (deduped per collection and game, so re-toggling never re-notifies).
