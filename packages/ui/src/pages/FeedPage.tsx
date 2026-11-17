@@ -11,23 +11,25 @@ import { errorMessage, formatCount, useAsync, useDocumentTitle } from "../util";
 /** localStorage key remembering the last selected feed tab. */
 export const FEED_TAB_KEY = "webgame.feed.tab";
 
-export type FeedTab = "all" | "games";
+export type FeedTab = "all" | "games" | "collections";
 
 const TABS: TabItem<FeedTab>[] = [
   { value: "all", label: "Everything" },
   { value: "games", label: "New games" },
+  { value: "collections", label: "Collections" },
 ];
 const TABS_ID = "pf-feed-tabs";
 
 const TAB_KINDS: Record<FeedTab, FeedItemKind[] | undefined> = {
   all: undefined,
   games: ["gamePublished", "gameUpdated"],
+  collections: ["collectionUpdated"],
 };
 
 function readTab(): FeedTab {
   try {
     const v = localStorage.getItem(FEED_TAB_KEY);
-    if (v === "all" || v === "games") return v;
+    if (v === "all" || v === "games" || v === "collections") return v;
   } catch {
     /* storage unavailable */
   }
@@ -190,6 +192,13 @@ export function FeedPage() {
       ) : empty ? (
         tab === "games" ? (
           <EmptyState icon="🎮" title="No new games from people you follow yet." />
+        ) : tab === "collections" ? (
+          <>
+            <EmptyState icon="📚" title="No collection updates yet.">
+              Follow players who curate collections to see their picks here.
+            </EmptyState>
+            <SuggestedCreators onFollowed={() => setFollowedSome(true)} />
+          </>
         ) : (
           <>
             <EmptyState

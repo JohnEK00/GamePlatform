@@ -225,6 +225,7 @@ export {
   isKnownNotification,
   notificationParts,
   notificationText,
+  osNotificationText,
   safeNotificationPath,
   mergeNotifications,
   unreadBadgeText,

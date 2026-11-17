@@ -3694,6 +3694,98 @@ a.pf-tab {
   text-decoration: underline;
 }
 
+/* ---------- F021: collection activity in the feed ---------- */
+.pf-feeditem__collection {
+  overflow-wrap: anywhere;
+}
+.pf-feeditem__kindicon {
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.pf-feed-collection-games {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.pf-feed-collection-games__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 4px 10px 4px 4px;
+  border-radius: var(--pf-radius-sm);
+  background: var(--pf-bg-2);
+  border: 1px solid var(--pf-border);
+  transition: border-color 0.15s;
+}
+.pf-feed-collection-games__item:hover {
+  border-color: var(--pf-border-strong);
+}
+.pf-feed-collection-games__thumb {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  line-height: 0;
+}
+.pf-feed-collection-games__thumb .pf-thumb {
+  aspect-ratio: 1 / 1;
+  height: 100%;
+}
+.pf-feed-collection-games__info {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  line-height: 1.35;
+}
+.pf-feed-collection-games__line {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9rem;
+}
+.pf-feed-collection-games__title {
+  color: var(--pf-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+.pf-feed-collection-games__title:hover,
+.pf-feed-collection-games__more a:hover {
+  color: var(--pf-accent);
+  text-decoration: underline;
+}
+.pf-feed-collection-games__owner {
+  font-size: 0.82rem;
+}
+.pf-feed-collection-games__note {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.82rem;
+  font-style: italic;
+}
+.pf-feed-collection-games__more {
+  padding-left: 4px;
+}
+.pf-feed-collection-games__more a {
+  color: var(--pf-accent);
+  text-decoration: none;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .pf-feed-collection-games__item {
+    padding-right: 8px;
+  }
+}
+
 /* ---------- F013: Studio open menu, link chip, download overlay, publish modes ---------- */
 .pf-menuwrap {
   position: relative;

@@ -467,7 +467,29 @@ export type FollowResponse = {
   followers: number;
 };
 
-export type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked";
+/** F021 adds "collectionUpdated". */
+export type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked" | "collectionUpdated";
+
+/** F021: one game of a `collectionUpdated` item. */
+export type FeedCollectionGame = {
+  game: GameSummary;
+  /** The curator's current note (plain text, 0–140 chars, single line); "" = none. Never render as HTML. */
+  note: string;
+};
+
+/** F021: the collection of a `collectionUpdated` item. */
+export type FeedCollection = {
+  /** Collection id (UUID v4). */
+  id: string;
+  /** The collection's CURRENT title (plain text). */
+  title: string;
+  /** "/c/{id}" */
+  path: string;
+  /** 1–4 entries, newest added first. */
+  games: FeedCollectionGame[];
+  /** All games of the item (>= games.length >= 1). */
+  gameCount: number;
+};
 
 export type FeedItem = {
   /** Opaque cursor value (decimal string). */
@@ -496,6 +518,8 @@ export type FeedItem = {
   achievement: (AchievementDef & { count: number }) | null;
   /** F004: gameUpdated only; missing on older servers (treat as null). */
   update?: FeedUpdate | null;
+  /** F021: collectionUpdated only; null for every other kind. Older servers omit it (treat as null). */
+  collection?: FeedCollection | null;
 };
 
 export type FeedPage = { items: FeedItem[]; nextCursor: string | null };
@@ -544,8 +568,17 @@ export type ScreenshotPage = Page<Screenshot>;
 
 // ---- F007: in-app notifications ----
 
-/** F018 adds "pinned". */
-export type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished" | "pinned";
+/** F018 adds "pinned"; F021 adds "addedToCollection". */
+export type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished" | "pinned" | "addedToCollection";
+
+/** F021: the collection of an `addedToCollection` notification. */
+export type NotificationCollection = {
+  id: string;
+  /** The collection's CURRENT title (plain text written by another user). */
+  title: string;
+  /** "/c/{id}" */
+  path: string;
+};
 
 export type NotificationGame = { id: string; title: string; thumbnailUrl: string | null };
 
@@ -582,6 +615,8 @@ export type Notification = {
    * pinned → the pinned comment; else null. Older servers omit it (treat as null).
    */
   threadId?: string | null;
+  /** F021: addedToCollection only; null for every other kind. Older servers omit it (treat as null). */
+  collection?: NotificationCollection | null;
 };
 
 export type NotificationPage = {
@@ -616,6 +651,8 @@ export type NotificationSettings = {
   newGames: boolean;
   /** F018: "pinned" kind. Older servers omit it: hide the switch. */
   pins?: boolean;
+  /** F021: "addedToCollection" kind. Older servers omit it: hide the switch. */
+  collections?: boolean;
 };
 
 // ---- F018: notification mutes ----

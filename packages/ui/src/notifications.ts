@@ -2,7 +2,7 @@
 import type { Notification, NotificationKind, UserRef } from "./api/types";
 
 /** Kinds this client knows how to render. Others are ignored (API § F007). */
-export const NOTIFICATION_KINDS: readonly NotificationKind[] = ["comment", "reply", "heart", "follow", "gamePublished", "pinned"];
+export const NOTIFICATION_KINDS: readonly NotificationKind[] = ["comment", "reply", "heart", "follow", "gamePublished", "pinned", "addedToCollection"];
 
 export function isKnownNotification(n: unknown): n is Notification {
   if (!n || typeof n !== "object") return false;
@@ -23,6 +23,12 @@ export type NotificationPart = { type: "text" | "name" | "title"; text: string }
 function displayName(u: UserRef | undefined): string {
   if (!u) return "Someone";
   return u.displayName || u.username || "Someone";
+}
+
+/** F021: the collection title of an addedToCollection item, or "" when missing (older or defensive). */
+function collectionTitle(n: Notification): string {
+  const c = n.collection;
+  return c && typeof c === "object" && typeof c.title === "string" ? c.title : "";
 }
 
 /** The normative summary (spec § 2.5) as parts; [] for unknown kinds. */
@@ -61,6 +67,11 @@ export function notificationParts(n: Notification): NotificationPart[] {
     case "pinned":
       // F018 § 2.5: only the newest actor is named.
       return [name(a), t(" pinned your comment on "), title];
+    case "addedToCollection": {
+      // F021 § 2.3: only the curator is named.
+      const coll = collectionTitle(n);
+      return coll ? [name(a), t(" added "), title, t(" to "), { type: "title", text: coll }] : [name(a), t(" added "), title, t(" to a collection")];
+    }
     default:
       return [];
   }
@@ -81,6 +92,7 @@ export function muteActionFor(n: Notification): MuteAction | null {
       return { target: "thread", id: threadId, label: `Mute notifications for this thread on ${title}` };
     case "comment":
     case "gamePublished":
+    case "addedToCollection":
       if (!n.game || typeof n.game.id !== "string" || !n.game.id) return null;
       return { target: "game", id: n.game.id, label: `Mute notifications for ${title}` };
     default:
@@ -93,6 +105,16 @@ export function notificationText(n: Notification): string {
   return notificationParts(n)
     .map((p) => p.text)
     .join("");
+}
+
+/**
+ * F021 § 2.3: the body of an OS notification. Equals `notificationText` except for `addedToCollection`, whose
+ * collection title (free text written by another user) never goes to the OS: "{actor} added {game} to a collection".
+ */
+export function osNotificationText(n: Notification): string {
+  if (!isKnownNotification(n)) return "";
+  if (n.kind === "addedToCollection") return notificationText({ ...n, collection: null });
+  return notificationText(n);
 }
 
 /** Only in-app absolute paths are followed; anything else falls back to the notifications page. */
@@ -178,7 +200,7 @@ export function osNotificationsFor(items: Notification[]): { title: string; body
   return known
     .slice()
     .sort((x, y) => Date.parse(x.updatedAt) - Date.parse(y.updatedAt))
-    .map((n) => ({ title: OS_NOTIFICATION_TITLE, body: notificationText(n) }));
+    .map((n) => ({ title: OS_NOTIFICATION_TITLE, body: osNotificationText(n) }));
 }
 
 // ---------- Poll cadence (spec § 2.7) ----------

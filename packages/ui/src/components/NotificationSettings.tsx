@@ -11,8 +11,8 @@ import { MutedList } from "./MutedList";
 type Key = keyof Settings;
 
 /**
- * The switches, in display order (F007 spec § 2.4; F018 adds `pins`). A switch is shown only when the server's
- * settings have its field (older servers omit `pins`).
+ * The switches, in display order (F007 spec § 2.4; F018 adds `pins`, F021 `collections`). A switch is shown only
+ * when the server's settings have its field (older servers omit `pins` / `collections`).
  */
 export const NOTIFICATION_SETTING_FIELDS: readonly { key: Key; label: string; hint: string }[] = [
   { key: "comments", label: "Comments on my games", hint: "Someone comments on a game you made." },
@@ -21,6 +21,7 @@ export const NOTIFICATION_SETTING_FIELDS: readonly { key: Key; label: string; hi
   { key: "pins", label: "Pins on your comments", hint: "A creator pins a comment you wrote." },
   { key: "follows", label: "New followers", hint: "Someone starts following you." },
   { key: "newGames", label: "New games from creators I follow", hint: "A creator you follow publishes a new game." },
+  { key: "collections", label: "My games added to collections", hint: "Someone adds a game you made to a public collection." },
 ];
 
 /**

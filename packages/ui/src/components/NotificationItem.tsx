@@ -64,6 +64,11 @@ export function NotificationItem({ item, onActivate, variant = "panel", showMute
                 📌
               </span>
             )}
+            {item.kind === "addedToCollection" && (
+              <span className="pf-notif__kind pf-notif__kind--collection" aria-hidden="true">
+                📚
+              </span>
+            )}
             <time dateTime={item.updatedAt}>{timeAgo(item.updatedAt)}</time>
           </span>
         </span>
