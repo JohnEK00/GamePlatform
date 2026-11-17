@@ -187,7 +187,9 @@ const EVENT_ROWS: &str = "SELECT id, notification_id, actor_id, comment_id, crea
 /// test checks that the 0017 rebuild keeps the existing ones.
 const SCHEMA_OF: &str = "SELECT type, name, tbl_name, sql FROM sqlite_master \
      WHERE tbl_name IN ('notifications', 'notification_events') AND type IN ('index', 'trigger') \
-     AND sql IS NOT NULL AND name <> 'idx_notifications_collection' ORDER BY type, name";
+     AND sql IS NOT NULL \
+     AND name NOT IN ('idx_notifications_collection', 'idx_notification_events_screenshot') \
+     ORDER BY type, name";
 
 /// `sqlite_master` entries whose name or SQL contains `_new`.
 const WITH_NEW: &str = "SELECT name FROM sqlite_master WHERE instr(name, '_new') > 0 \
@@ -372,7 +374,12 @@ async fn migration_upgrade_from_0016() {
         )),
         "{fks:?}"
     );
-    assert_eq!(fks.len(), 3, "notification, actor, comment: {fks:?}");
+    // 0023 (F024) adds the screenshot foreign key; tests/f024.rs checks it.
+    assert_eq!(
+        fks.len(),
+        4,
+        "notification, actor, comment, screenshot: {fks:?}"
+    );
     let with_new: Vec<String> = sqlx::query_scalar(WITH_NEW).fetch_all(&db).await.unwrap();
     assert_eq!(with_new, expected_with_new(), "no rebuild leftovers");
     let refs_new: i64 = sqlx::query_scalar(
@@ -401,7 +408,24 @@ async fn migration_upgrade_from_0016() {
     assert!(!table_sql.contains("kind IN ("), "{table_sql}");
 
     // 5. The ten F007 indexes and the 0014 trigger, with their original definitions.
-    let schema: Schema = sqlx::query_as(SCHEMA_OF).fetch_all(&db).await.unwrap();
+    let mut schema: Schema = sqlx::query_as(SCHEMA_OF).fetch_all(&db).await.unwrap();
+    // 0023 (F024) appends screenshot_id to the dedupe index; tests/f024.rs checks it.
+    let dedupe_before = schema_before
+        .iter()
+        .find(|(_, name, ..)| name == "idx_notification_events_dedupe")
+        .expect("dedupe index before")
+        .3
+        .clone();
+    let dedupe = schema
+        .iter_mut()
+        .find(|(_, name, ..)| name == "idx_notification_events_dedupe")
+        .expect("dedupe index after");
+    assert!(
+        dedupe.3.contains("IFNULL(screenshot_id, '')"),
+        "{}",
+        dedupe.3
+    );
+    dedupe.3 = dedupe_before;
     assert_eq!(schema, schema_before);
     let mut index_names: Vec<&str> = schema
         .iter()

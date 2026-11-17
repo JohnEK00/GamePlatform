@@ -4,6 +4,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
@@ -13,6 +14,7 @@ use crate::auth::{AuthUser, MaybeAuthUser};
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiMultipart, ApiPath, ApiQuery};
 use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
+use crate::notifications::{self, Dedupe, Kind, NewNotification, game_group};
 use crate::ratelimit::Limit;
 use crate::routes::games::{fetch_visible_game, limit_user, page_offset, parse_paging};
 use crate::screenshots::{
@@ -418,6 +420,32 @@ pub async fn create_screenshot(
         && let Some(mut conn) = crate::activity::acquire(&state.db).await
     {
         crate::activity::record_screenshot_posted(&mut conn, &user.id, &game_id, &now).await;
+    }
+
+    // F024: best-effort `screenshotPosted` notification for the owner of a game published at
+    // step 2 (never for their own shots). Same `now` as the screenshot's `created_at`.
+    if game.published && game.owner_id != user.id {
+        let at = DateTime::parse_from_rfc3339(&now)
+            .map(|t| t.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+        notifications::notify_pool(
+            &state.db,
+            &NewNotification {
+                recipient_id: game.owner_id.clone(),
+                kind: Kind::ScreenshotPosted,
+                group_key: game_group(&game_id),
+                game_id: Some(game_id.clone()),
+                comment_id: None,
+                actor_id: user.id.clone(),
+                event_comment_id: None,
+                event_screenshot_id: Some(id.clone()),
+                dedupe: Dedupe::None,
+                thread_id: None,
+                collection_id: None,
+                now: at,
+            },
+        )
+        .await;
     }
 
     // 12.

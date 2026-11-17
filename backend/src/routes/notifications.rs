@@ -187,6 +187,7 @@ pub async fn put_settings(
         new_games: field("newGames")?,
         pins: field("pins")?,
         collections: field("collections")?,
+        screenshots: field("screenshots")?,
     };
     if !patch.is_empty() {
         notif::update_settings(&state.db, &user.id, patch, Utc::now()).await?;

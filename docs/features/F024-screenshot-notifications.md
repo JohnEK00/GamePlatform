@@ -1,6 +1,6 @@
 # F024: "Screenshot of your game" notifications for creators
 
-Status: **specced**. Size: **S** (backend small: one migration with two added columns and one index swap, one notification kind, one hook, one batched read query; frontend small: one summary text, one thumbnail, one icon, one settings switch; desktop: one verification test file, no source changes; one round). Areas: backend, frontend, desktop (verification test only). Engine: none.
+Status: **shipped**. Size: **S** (backend small: one migration with two added columns and one index swap, one notification kind, one hook, one batched read query; frontend small: one summary text, one thumbnail, one icon, one settings switch; desktop: one verification test file, no source changes; one round). Areas: backend, frontend, desktop (verification test only). Engine: none.
 Contracts: `docs/API.md` § F024 additions (kind, `Notification.screenshot`, `NotificationScreenshot`, `NotificationSettings.screenshots`, trigger, deletion, path), `docs/ARCHITECTURE.md` § F024 additions (migration `0023_f024.sql` with the exact SQL, write path, read path, the `f018.rs` test adjustment), `docs/GAME_FORMAT.md` § F024 additions (no changes).
 Depends on: F005 (screenshots), F007 (notifications), F015 (`screenshotPosted` feed event, `?section=screenshots`), F018 (mutes, no `notifications.kind` CHECK) and F021 (`NewNotification.collection_id`, the settings pattern). All shipped.
 
@@ -293,3 +293,12 @@ As listed in § 4 desktop-dev.
 3. Clicking it marks it read and scrolls the game page to the gallery. O uses "Set as thumbnail" on one shot and deletes the other, and the notification (now read) shows 1 screenshot.
 4. O switches "Screenshots of my games" off, and Mia's next post doesn't notify.
 5. On desktop with OS notifications on, the OS toast reads "Mia posted a screenshot of Space Dodge" with no caption.
+
+## Implementation notes (as shipped)
+- **Backend:**
+  - Seven `NewNotification` literals needed `event_screenshot_id: None`, not six. The extra one is `tests/review4.rs:126`.
+  - `tests/f018.rs`: the `notification_events` foreign-key count goes from 3 to 4 because of the new `screenshot_id` FK.
+  - Successful-post tests build a real 64×64 PNG; `png_bytes()` is only a header and is used for the rejected-image case.
+- **Frontend:**
+  - `NotificationItem` still needs the API context for every kind, because `Avatar` already uses it. `NotificationShot` only keeps the `<img>` logic separate.
+  - Singular or plural comes from `eventCount === 1` alone, because `eventCount >= actorCount` always holds.

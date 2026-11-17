@@ -634,8 +634,24 @@ export type UserScreenshot = Screenshot & { game: ScreenshotGameRef };
 
 // ---- F007: in-app notifications ----
 
-/** F018 adds "pinned"; F021 adds "addedToCollection". */
-export type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished" | "pinned" | "addedToCollection";
+/** F018 adds "pinned"; F021 adds "addedToCollection"; F024 adds "screenshotPosted". */
+export type NotificationKind =
+  | "comment"
+  | "reply"
+  | "heart"
+  | "follow"
+  | "gamePublished"
+  | "pinned"
+  | "addedToCollection"
+  | "screenshotPosted";
+
+/** F024: the newest remaining screenshot of a `screenshotPosted` notification. */
+export type NotificationScreenshot = {
+  /** Screenshot id (UUID v4). */
+  id: string;
+  /** "/media/screenshots/{id}_t.jpg"; resolve against the API base. */
+  thumbUrl: string;
+};
 
 /** F021: the collection of an `addedToCollection` notification. */
 export type NotificationCollection = {
@@ -683,6 +699,8 @@ export type Notification = {
   threadId?: string | null;
   /** F021: addedToCollection only; null for every other kind. Older servers omit it (treat as null). */
   collection?: NotificationCollection | null;
+  /** F024: screenshotPosted only; null for every other kind. Older servers omit it (treat as null). */
+  screenshot?: NotificationScreenshot | null;
 };
 
 export type NotificationPage = {
@@ -719,6 +737,8 @@ export type NotificationSettings = {
   pins?: boolean;
   /** F021: "addedToCollection" kind. Older servers omit it: hide the switch. */
   collections?: boolean;
+  /** F024: "screenshotPosted" kind. Older servers omit it: hide the switch. */
+  screenshots?: boolean;
 };
 
 // ---- F018: notification mutes ----

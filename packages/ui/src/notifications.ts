@@ -2,7 +2,7 @@
 import type { Notification, NotificationKind, UserRef } from "./api/types";
 
 /** Kinds this client knows how to render. Others are ignored (API § F007). */
-export const NOTIFICATION_KINDS: readonly NotificationKind[] = ["comment", "reply", "heart", "follow", "gamePublished", "pinned", "addedToCollection"];
+export const NOTIFICATION_KINDS: readonly NotificationKind[] = ["comment", "reply", "heart", "follow", "gamePublished", "pinned", "addedToCollection", "screenshotPosted"];
 
 export function isKnownNotification(n: unknown): n is Notification {
   if (!n || typeof n !== "object") return false;
@@ -72,9 +72,24 @@ export function notificationParts(n: Notification): NotificationPart[] {
       const coll = collectionTitle(n);
       return coll ? [name(a), t(" added "), title, t(" to "), { type: "title", text: coll }] : [name(a), t(" added "), title, t(" to a collection")];
     }
+    case "screenshotPosted":
+      // F024 § 0.8: captions never appear; one verb form per screenshot count.
+      return [...who, t(eventCount === 1 ? " posted a screenshot of " : ` posted ${eventCount} screenshots of `), title];
     default:
       return [];
   }
+}
+
+/**
+ * F024 § 0.9: the thumbnail path of a screenshotPosted item, or null (other kinds, `screenshot` null, missing or
+ * malformed, or an empty `thumbUrl`). Resolve the result with `api.url`.
+ */
+export function screenshotThumb(item: Notification): string | null {
+  if (!item || item.kind !== "screenshotPosted") return null;
+  const s: unknown = item.screenshot;
+  if (!s || typeof s !== "object") return null;
+  const thumb = (s as { thumbUrl?: unknown }).thumbUrl;
+  return typeof thumb === "string" && thumb !== "" ? thumb : null;
 }
 
 /** F018 § 2.3: the "Mute" action of an item on the /notifications page, or null when it has none. */
@@ -93,6 +108,7 @@ export function muteActionFor(n: Notification): MuteAction | null {
     case "comment":
     case "gamePublished":
     case "addedToCollection":
+    case "screenshotPosted":
       if (!n.game || typeof n.game.id !== "string" || !n.game.id) return null;
       return { target: "game", id: n.game.id, label: `Mute game: ${title}` };
     default:

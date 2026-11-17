@@ -69,6 +69,8 @@ describe("F021: addedToCollection notifications", () => {
       notif({ id: "4", kind: "follow", game: null }),
       notif({ id: "5", kind: "gamePublished" }),
       notif({ id: "6", kind: "pinned", threadId: "c1" }),
+      // F024
+      notif({ id: "7", kind: "screenshotPosted", commentId: null, eventCount: 2, screenshot: { id: "s1", thumbUrl: "/media/screenshots/s1_t.jpg" } }),
     ];
     const kinds = new Set(others.map((n) => n.kind));
     for (const k of NOTIFICATION_KINDS) if (k !== "addedToCollection") expect(kinds.has(k)).toBe(true);

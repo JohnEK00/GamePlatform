@@ -5916,6 +5916,17 @@ a.pf-tab {
   font-size: 0.8rem;
   line-height: 1;
 }
+/* F024: decorative screenshot preview, never taller than the stacked avatars */
+.pf-notif__shot {
+  flex: none;
+  display: block;
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: var(--pf-surface-2);
+}
 
 /* Settings → Notifications → Muted */
 .pf-muted-list {

@@ -1,9 +1,19 @@
 import { Fragment, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 import type { Notification } from "../api/types";
-import { isKnownNotification, muteActionFor, notificationParts, safeNotificationPath, type MuteAction } from "../notifications";
+import { useApi } from "../context/config";
+import { isKnownNotification, muteActionFor, notificationParts, safeNotificationPath, screenshotThumb, type MuteAction } from "../notifications";
 import { timeAgo } from "../util";
 import { Avatar } from "./common";
+
+/**
+ * F024 § 0.9: the decorative 48 px preview of a screenshotPosted item (inside the item's link; the summary names it).
+ * The API hook lives here so other kinds never need the API context.
+ */
+export function NotificationShot({ thumbUrl }: { thumbUrl: string }) {
+  const api = useApi();
+  return <img className="pf-notif__shot" src={api.url(thumbUrl)} alt="" loading="lazy" width={48} height={48} />;
+}
 
 export type NotificationItemProps = {
   item: Notification;
@@ -29,6 +39,7 @@ export function NotificationItem({ item, onActivate, variant = "panel", showMute
   const unread = !item.read;
   const actors = item.actors.slice(0, 2);
   const mute = showMute && onMute ? muteActionFor(item) : null;
+  const shot = screenshotThumb(item);
   return (
     <li className={`pf-notif pf-notif--${variant}${unread ? " pf-notif--unread" : ""}${mute ? " pf-notif--mutable" : ""}`} data-notif-id={item.id}>
       <Link to={safeNotificationPath(item.path)} className="pf-notif__link" onClick={(e) => onActivate?.(item, e)}>
@@ -69,10 +80,16 @@ export function NotificationItem({ item, onActivate, variant = "panel", showMute
                 📚
               </span>
             )}
+            {item.kind === "screenshotPosted" && (
+              <span className="pf-notif__kind pf-notif__kind--screenshot" aria-hidden="true">
+                📷
+              </span>
+            )}
             <time dateTime={item.updatedAt}>{timeAgo(item.updatedAt)}</time>
           </span>
         </span>
-        {unread && <span className="pf-notif__dot" aria-hidden="true" />}
+        {shot && <NotificationShot thumbUrl={shot} />}
+        {unread &&<span className="pf-notif__dot" aria-hidden="true" />}
       </Link>
       {mute && (
         <button

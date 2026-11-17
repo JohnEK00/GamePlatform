@@ -15,7 +15,9 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::Serialize;
 use sqlx::{Connection, Row, SqliteConnection, SqlitePool};
 
-use crate::models::{NotificationCollection, UserRef, thumbnail_url, user_ref_from_row};
+use crate::models::{
+    NotificationCollection, NotificationScreenshot, UserRef, thumbnail_url, user_ref_from_row,
+};
 
 /// Notification kinds. The API strings come from [`Kind::as_str`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,10 +31,12 @@ pub enum Kind {
     Pinned,
     /// F021: a curator added the recipient's game to a public collection.
     AddedToCollection,
+    /// F024: a player posted a screenshot of the recipient's game.
+    ScreenshotPosted,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::Comment,
         Kind::Reply,
         Kind::Heart,
@@ -40,6 +44,7 @@ impl Kind {
         Kind::GamePublished,
         Kind::Pinned,
         Kind::AddedToCollection,
+        Kind::ScreenshotPosted,
     ];
 
     /// The `NotificationKind` string (also the stored `kind` column). Since F018 the column has
@@ -53,6 +58,7 @@ impl Kind {
             Kind::GamePublished => "gamePublished",
             Kind::Pinned => "pinned",
             Kind::AddedToCollection => "addedToCollection",
+            Kind::ScreenshotPosted => "screenshotPosted",
         }
     }
 
@@ -67,6 +73,7 @@ impl Kind {
             Kind::GamePublished => "new_games",
             Kind::Pinned => "pins",
             Kind::AddedToCollection => "collections",
+            Kind::ScreenshotPosted => "screenshots",
         }
     }
 
@@ -153,6 +160,8 @@ pub struct NewNotification {
     pub actor_id: String,
     /// `comment`/`reply`: the newly posted comment; else `None`.
     pub event_comment_id: Option<String>,
+    /// F024 `screenshotPosted`: the posted screenshot; else `None`.
+    pub event_screenshot_id: Option<String>,
     pub dedupe: Dedupe,
     /// F018: the top-level comment of the related thread, for thread mutes (`reply`: the root;
     /// `heart`: the hearted comment's parent, or itself when top-level; `pinned`: the comment;
@@ -267,11 +276,12 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     };
     sqlx::query(
         "INSERT OR IGNORE INTO notification_events (notification_id, actor_id, comment_id, \
-         created_at) VALUES (?, ?, ?, ?)",
+         screenshot_id, created_at) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&n.actor_id)
     .bind(&n.event_comment_id)
+    .bind(&n.event_screenshot_id)
     .bind(&now)
     .execute(&mut *tx)
     .await?;
@@ -963,6 +973,8 @@ pub struct Notification {
     pub path: String,
     /// F021: `addedToCollection` only; `null` for every other kind.
     pub collection: Option<NotificationCollection>,
+    /// F024: `screenshotPosted` only; `null` for every other kind.
+    pub screenshot: Option<NotificationScreenshot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -993,6 +1005,8 @@ pub struct NotificationSettings {
     pub pins: bool,
     /// F021: the `addedToCollection` kind.
     pub collections: bool,
+    /// F024: the `screenshotPosted` kind.
+    pub screenshots: bool,
 }
 
 impl Default for NotificationSettings {
@@ -1005,6 +1019,7 @@ impl Default for NotificationSettings {
             new_games: true,
             pins: true,
             collections: true,
+            screenshots: true,
         }
     }
 }
@@ -1128,9 +1143,9 @@ pub async fn mark_read(
 }
 
 pub async fn load_settings(db: &SqlitePool, user_id: &str) -> sqlx::Result<NotificationSettings> {
-    type Row = (bool, bool, bool, bool, bool, bool, bool);
+    type Row = (bool, bool, bool, bool, bool, bool, bool, bool);
     let row: Option<Row> = sqlx::query_as(
-        "SELECT comments, replies, hearts, follows, new_games, pins, collections \
+        "SELECT comments, replies, hearts, follows, new_games, pins, collections, screenshots \
          FROM notification_settings WHERE user_id = ?",
     )
     .bind(user_id)
@@ -1138,7 +1153,7 @@ pub async fn load_settings(db: &SqlitePool, user_id: &str) -> sqlx::Result<Notif
     .await?;
     Ok(match row {
         None => NotificationSettings::default(),
-        Some((comments, replies, hearts, follows, new_games, pins, collections)) => {
+        Some((comments, replies, hearts, follows, new_games, pins, collections, screenshots)) => {
             NotificationSettings {
                 comments,
                 replies,
@@ -1147,6 +1162,7 @@ pub async fn load_settings(db: &SqlitePool, user_id: &str) -> sqlx::Result<Notif
                 new_games,
                 pins,
                 collections,
+                screenshots,
             }
         }
     })
@@ -1163,6 +1179,8 @@ pub struct SettingsPatch {
     pub pins: Option<bool>,
     /// F021
     pub collections: Option<bool>,
+    /// F024
+    pub screenshots: Option<bool>,
 }
 
 impl SettingsPatch {
@@ -1174,6 +1192,7 @@ impl SettingsPatch {
             && self.new_games.is_none()
             && self.pins.is_none()
             && self.collections.is_none()
+            && self.screenshots.is_none()
     }
 }
 
@@ -1187,14 +1206,15 @@ pub async fn update_settings(
     sqlx::query(
         "INSERT INTO notification_settings \
            (user_id, comments, replies, hearts, follows, new_games, pins, collections, \
-            updated_at) \
+            screenshots, updated_at) \
          VALUES (?1, COALESCE(?2, 1), COALESCE(?3, 1), COALESCE(?4, 1), COALESCE(?5, 1), \
-           COALESCE(?6, 1), COALESCE(?8, 1), COALESCE(?9, 1), ?7) \
+           COALESCE(?6, 1), COALESCE(?8, 1), COALESCE(?9, 1), COALESCE(?10, 1), ?7) \
          ON CONFLICT (user_id) DO UPDATE SET \
            comments = COALESCE(?2, comments), replies = COALESCE(?3, replies), \
            hearts = COALESCE(?4, hearts), follows = COALESCE(?5, follows), \
            new_games = COALESCE(?6, new_games), pins = COALESCE(?8, pins), \
-           collections = COALESCE(?9, collections), updated_at = ?7",
+           collections = COALESCE(?9, collections), \
+           screenshots = COALESCE(?10, screenshots), updated_at = ?7",
     )
     .bind(user_id)
     .bind(patch.comments)
@@ -1205,6 +1225,7 @@ pub async fn update_settings(
     .bind(stamp(now))
     .bind(patch.pins)
     .bind(patch.collections)
+    .bind(patch.screenshots)
     .execute(db)
     .await?;
     Ok(())
@@ -1354,12 +1375,40 @@ pub async fn list_page(
         .collect();
     }
 
+    // F024: newest remaining screenshot of screenshotPosted groups.
+    let shot_ids: Vec<i64> = bases
+        .iter()
+        .filter(|b| b.kind == Kind::ScreenshotPosted)
+        .map(|b| b.id)
+        .collect();
+    let mut newest_shot: HashMap<i64, String> = HashMap::new();
+    if !shot_ids.is_empty() {
+        let shot_json = serde_json::to_string(&shot_ids).unwrap_or_else(|_| "[]".into());
+        newest_shot = sqlx::query_as::<_, (i64, String)>(
+            "SELECT notification_id, screenshot_id FROM ( \
+               SELECT notification_id, screenshot_id, ROW_NUMBER() OVER ( \
+                 PARTITION BY notification_id ORDER BY created_at DESC, id DESC) AS rn \
+               FROM notification_events \
+               WHERE notification_id IN (SELECT value FROM json_each(?1)) \
+                 AND screenshot_id IS NOT NULL AND retracted_at IS NULL) \
+             WHERE rn = 1",
+        )
+        .bind(&shot_json)
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .collect();
+    }
+
     // Target comments (excerpts) and thread roots (ownsThread).
     let target_of = |b: &Base| -> Option<String> {
         match b.kind {
             Kind::Comment | Kind::Reply => newest.get(&b.id).cloned(),
             Kind::Heart | Kind::Pinned => b.comment_id.clone(),
-            Kind::Follow | Kind::GamePublished | Kind::AddedToCollection => None,
+            Kind::Follow
+            | Kind::GamePublished
+            | Kind::AddedToCollection
+            | Kind::ScreenshotPosted => None,
         }
     };
     let mut comment_ids: HashSet<String> = HashSet::new();
@@ -1462,7 +1511,11 @@ pub async fn list_page(
                     .get(c)
                     .map(|info| info.parent_id.clone().unwrap_or_else(|| c.clone()))
             }),
-            Kind::Comment | Kind::Follow | Kind::GamePublished | Kind::AddedToCollection => None,
+            Kind::Comment
+            | Kind::Follow
+            | Kind::GamePublished
+            | Kind::AddedToCollection
+            | Kind::ScreenshotPosted => None,
         };
         let gid = b.game_id.as_deref().unwrap_or("");
         let path = match b.kind {
@@ -1475,6 +1528,7 @@ pub async fn list_page(
             Kind::AddedToCollection => {
                 format!("/c/{}", b.collection_id.as_deref().unwrap_or(""))
             }
+            Kind::ScreenshotPosted => format!("/games/{gid}?section=screenshots"),
         };
         let collection = match (b.kind, &b.collection_id, &b.collection_title) {
             (Kind::AddedToCollection, Some(cid), Some(title)) => Some(NotificationCollection {
@@ -1485,8 +1539,15 @@ pub async fn list_page(
             _ => None,
         };
         let event_count = match b.kind {
-            Kind::Comment | Kind::Reply => events,
+            Kind::Comment | Kind::Reply | Kind::ScreenshotPosted => events,
             _ => actor_count,
+        };
+        let screenshot = match b.kind {
+            Kind::ScreenshotPosted => newest_shot.get(&b.id).map(|id| NotificationScreenshot {
+                thumb_url: crate::screenshots::thumb_url(id),
+                id: id.clone(),
+            }),
+            _ => None,
         };
         items.push(Notification {
             id: b.id.to_string(),
@@ -1505,6 +1566,7 @@ pub async fn list_page(
             updated_at: b.updated_at.clone(),
             path,
             collection,
+            screenshot,
         });
     }
     Ok((items, next_cursor))
@@ -1554,7 +1616,13 @@ mod tests {
         assert_eq!(Kind::Pinned.as_str(), "pinned");
         assert_eq!(Kind::Pinned.setting_column(), "pins");
         assert_eq!(pin_group("c1"), "pin:c1");
-        assert_eq!(Kind::ALL.len(), 7);
+        assert_eq!(Kind::ALL.len(), 8);
+        assert_eq!(Kind::ScreenshotPosted.as_str(), "screenshotPosted");
+        assert_eq!(Kind::ScreenshotPosted.setting_column(), "screenshots");
+        assert_eq!(
+            Kind::parse("screenshotPosted"),
+            Some(Kind::ScreenshotPosted)
+        );
         assert_eq!(Kind::AddedToCollection.as_str(), "addedToCollection");
         assert_eq!(Kind::AddedToCollection.setting_column(), "collections");
         assert_eq!(collection_group("c1", "g1"), "coll:c1:g1");

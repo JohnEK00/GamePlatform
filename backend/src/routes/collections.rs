@@ -449,6 +449,7 @@ async fn notify_added(
         comment_id: None,
         actor_id: actor_id.to_string(),
         event_comment_id: None,
+        event_screenshot_id: None,
         dedupe: Dedupe::Group,
         thread_id: None,
         collection_id: Some(collection_id.to_string()),

@@ -131,6 +131,7 @@ async fn m1_notify_survives_a_concurrent_commit() {
         comment_id: None,
         actor_id: mia_id.clone(),
         event_comment_id: None,
+        event_screenshot_id: None,
         dedupe: notifications::Dedupe::Actor,
         thread_id: None,
         collection_id: None,

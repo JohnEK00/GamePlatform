@@ -616,6 +616,16 @@ pub struct NotificationCollection {
     pub path: String,
 }
 
+/// F024 `NotificationScreenshot`: the newest remaining screenshot of a `screenshotPosted`
+/// notification.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationScreenshot {
+    pub id: String,
+    /// `/media/screenshots/{id}_t.jpg`
+    pub thumb_url: String,
+}
+
 // ---------------------------------------------------------------------------
 // F008 collections (docs/API.md § F008 additions)
 // ---------------------------------------------------------------------------

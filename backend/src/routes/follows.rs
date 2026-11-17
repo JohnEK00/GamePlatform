@@ -112,6 +112,7 @@ pub async fn put_follow(
                 comment_id: None,
                 actor_id: user.id.clone(),
                 event_comment_id: None,
+                event_screenshot_id: None,
                 dedupe: Dedupe::Actor,
                 thread_id: None,
                 collection_id: None,

@@ -285,6 +285,9 @@ export type { NotificationPart, PollOutcome, PollDelayInput } from "./notificati
 // F018: notification controls
 export { muteActionFor } from "./notifications";
 export type { MuteAction } from "./notifications";
+// F024: screenshot notifications (the NotificationScreenshot type is also covered by `export type *` above)
+export { screenshotThumb } from "./notifications";
+export type { NotificationScreenshot } from "./api/types";
 export {
   tabScope,
   parseTabMessage,
