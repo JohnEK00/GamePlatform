@@ -36,13 +36,13 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F017 | Creator comment tools: pin, lock and "top" sort | S | shipped |
 | F008 | Collections (curated game lists) | M | shipped |
 | F018 | Notification controls: mutes, shared polling, "pinned" notifications | M | shipped |
-| F021 | Collection activity: feed items and "added to a collection" notifications | M | specced |
+| F021 | Collection activity: feed items and "added to a collection" notifications | M | shipped |
+| F016 | Gamepad remapping, synced control bindings and device-aware prompts | M | specced |
+| F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
 | F020 | Game comment settings: turn comments off, slow mode | S | proposed |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
 | F022 | Announce a collection when it goes public | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
-| F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
-| F016 | Gamepad remapping and synced control bindings | M | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
 
@@ -170,10 +170,15 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: desktop creators can mix Studio edits and their own editor without exporting zips or losing edits on reload.
 - **Areas**: desktop (write command scoped to the F013 folder registry, `notify` watcher), frontend (Save button, auto-reload toggle). No backend changes.
 
-### F016: Gamepad remapping and synced control bindings (M, proposed; after F009)
-- **Pitch**: remap gamepad buttons in the F009 controls panel (capture via the parent's Gamepad API), and an opt-in "Sync my controls" that stores overrides per user per game on the server, falling back to the device copy.
-- **User value**: controller players get the same accessibility as keyboard players, and bindings follow the account to the desktop app.
-- **Areas**: engine (accept `gamepad` overrides), backend (small per-user bindings table and endpoints), frontend (gamepad capture, sync toggle).
+### F016: Gamepad remapping, synced control bindings and device-aware prompts (M, specced → [spec](features/F016-gamepad-remapping-and-sync.md))
+- **Pitch**:
+  - The F009 controls panel's gamepad column becomes two capture slots per action. The parent page captures the button through its own Gamepad API (standard-mapping controllers, with a baseline so held or "wake-up" presses never count). Changes apply to the running game at once through an optional `gamepad` field on `webgame:controls`.
+  - Signed-in players' bindings (keys and gamepad) sync per user per game through `GET`/`PUT /api/games/{id}/controls`, so they follow the account between the web and desktop apps. The account copy wins on load unless this device has an unsynced change. Device-only bindings from F009 are uploaded on first sign-in. Anonymous players keep device storage.
+  - Engine: `input.lastDevice` and `actionLabel(id, "auto")`, so prompts say "Space" or "A" depending on what the player last touched, plus a resume latch so a button held when the game resumes never fires `pressed`.
+  - Migration `0020_f016.sql` (`control_bindings`), `Limit::Controls` (60 `PUT`/min), a 16 KiB body limit, strict validation and read-time filtering against the current actions.
+- **User value**: controller players get the same accessibility as keyboard players, bindings survive a device or app switch, and games can show the right button in prompts. This is the first engine capability since F012.
+- **Areas**: engine (gamepad overrides, `lastDevice`, label option, latch, examples), backend (table, two endpoints, limit), frontend (`gamepadCapture.ts`, `GamepadCaptureButton`, panel, sync hook, store extension), desktop (verification only).
+- **Depends on**: F009 (shipped). The opt-in switch from the original pitch is dropped: sync is automatic for signed-in players, like cloud saves, and the panel footer says where bindings are saved.
 
 ### F017: Creator comment tools: pin, lock and "top" sort (S, shipped → [spec](features/F017-creator-comment-tools.md))
 - **Pitch**:
@@ -200,7 +205,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: settings and name-entry screens without custom code, completing the F012 menu toolkit.
 - **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.
 
-### F021: Collection activity: feed items and notifications (M, specced → [spec](features/F021-collection-activity.md))
+### F021: Collection activity: feed items and notifications (M, shipped → [spec](features/F021-collection-activity.md))
 - **Pitch**:
   - A F002 feed kind `collectionUpdated`: "Mia added 3 games to *Cozy games*", with up to 4 of the added games and the curator's notes. One item per collection per UTC day, for followers of the curator, plus a **Collections** tab on `/feed`.
   - A F007 notification kind `addedToCollection` for creators: "Mia added Space Dodge to *Cozy games*", linking to `/c/{id}`. Once per collection and game (F018 group dedupe), withdrawn if the game is removed while unread, with a `collections` setting; F018 game mutes apply.

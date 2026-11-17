@@ -628,3 +628,58 @@ Notification controls (spec: `docs/features/F018-notification-controls.md`). **N
 
 ## F021 additions
 Collection activity (spec: `docs/features/F021-collection-activity.md`). **No changes**: games can't read or write the feed, notifications or collections, and there are no new messages, engine APIs or `game.json` fields.
+
+
+## F016 additions
+Gamepad remapping and synced control bindings (spec: `docs/features/F016-gamepad-remapping-and-sync.md`). **No changes** to game.json or the boot options. The `webgame:controls` message gains an optional field, and the engine gains a device hint, a label option and a resume latch. Existing games keep working unchanged. This section supersedes the F009 sentence "They are **not** remappable in F009" for gamepad buttons.
+
+### Message (extended)
+| Direction | Message |
+|---|---|
+| parent → game | `{ type: "webgame:controls", overrides: { [actionId: string]: string[] }, gamepad?: { [actionId: string]: GamepadButtonName[] } }` |
+
+- `overrides` keeps every F009 rule.
+- `gamepad` is optional. When present (not `undefined`), it must be a plain object with at most 32 own keys; otherwise the **whole** message is ignored (keys are not applied either).
+- Each `gamepad` value replaces that action's `gamepad` buttons: non-array values, unknown action ids and names outside the F009 gamepad table (`Home` included) are ignored, duplicates are removed and only the first **2** names are kept. `[]` means "no gamepad buttons" (keys still apply).
+- Each message **replaces** all previous key **and** gamepad overrides. A message without `gamepad` therefore restores the gamepad defaults.
+- `engine.input.actions` reflects both kinds of override. `engine.input.defaultActions` is unchanged.
+
+### Engine API (additions)
+```ts
+type InputDevice = "keyboard" | "mouse" | "touch" | "gamepad";
+type GamepadOverrides = Record<string, GamepadButtonName[]>;
+
+engine.input.lastDevice: InputDevice     // read-only; initial "keyboard"
+engine.input.actionLabel(id: string, device?: "keyboard" | "gamepad" | "auto"): string
+```
+- **`lastDevice`** changes on player input only:
+  - `"keyboard"`: a `keydown` that is not a repeat (`e.repeat === false`), for any code.
+  - `"mouse"`: a mouse button press (`pointerdown` with `pointerType === "mouse"`, or `mousedown`).
+  - `"touch"`: a `touchstart`, or `pointerdown` with `pointerType` `"touch"` or `"pen"`.
+  - `"gamepad"`: at the start of a fixed step, any connected pad with a button `wasPressed`, or a left/right stick axis whose absolute value crosses from below 0.5 to 0.5 or above.
+  - DOM events update it when they arrive; gamepads are checked when the step starts, so if both happen before the same step, `"gamepad"` wins. Mouse movement, the wheel and synthetic (cancelled) releases never change it.
+- **`actionLabel(id, device)`**:
+  - no `device`: unchanged (first effective key, else first gamepad button, else `""`).
+  - `"keyboard"`: label of the first effective key (mouse codes included), else `""`.
+  - `"gamepad"`: label of the first effective gamepad button (`gamepadLabel`), else `""`.
+  - `"auto"`: like `"gamepad"` when `lastDevice === "gamepad"` and the action has at least one effective gamepad button; otherwise like no `device`.
+  - Unknown ids return `""` and warn once per id (F009 rule).
+- **Resume latch**: on host `webgame:resume` and on window `focus`, the engine latches all gamepads. On the next poll, every button's previous state is set to its current state, so a button held at that moment reports `isDown` but not `wasPressed`, and actions bound to it report `actionDown` but not `actionPressed`. Releasing it afterwards reports `wasReleased` as usual. Keyboard and mouse keep the F009 / review-5 blur and cancel rules.
+- `input.gamepad(i)` and the raw `GamepadState` methods still report physical buttons; they are not remapped (same rule as raw keys).
+
+### Parent behaviour (GamePlayer on /play/{id}, StudioPreview on /play/studio)
+- When the game has at least one action, `webgame:controls` (sent at the same moments as in F009) always includes `gamepad` (possibly `{}`), with only entries that differ from the defaults.
+- It sends only declared action ids, key codes and gamepad button names. It never sends key labels, the keyboard layout, `Gamepad.id`, user ids, tokens or sync state.
+- `GamePlayer` reads bindings from the device store, which signed-in players sync with their account (API § F016, ARCHITECTURE § F016). `StudioPreview` keeps them in memory.
+
+### Parent capture (normative for the controls panel)
+- While, and only while, a gamepad slot is capturing, the parent calls `navigator.getGamepads()` once per animation frame.
+- If `navigator.getGamepads` is missing or throws (for example a `SecurityError` on a non-secure origin), capture ends with "Controllers aren't available on this page".
+- **Baseline**: when capture starts, and when a pad (keyed by `index` and `id`, in memory only) is first seen during capture, its currently pressed buttons are recorded as held. A held button counts only after it has been released and pressed again.
+- A button counts when its `pressed` flag goes from `false` to `true` on a pad with `mapping === "standard"`. Indices 0–15 map to `A, B, X, Y, LB, RB, LT, RT, Back, Start, LS, RS, Up, Down, Left, Right`. Index 16 (`Home`) or higher shows "That button can't be used" and capture continues. A press on a pad whose `mapping` is not `"standard"` shows "This controller isn't supported yet" and capture continues.
+- The first counted button is assigned; capture then ends. `Escape`, blur, a click elsewhere or 10 s end it without change.
+
+### For creators
+- Players can now remap gamepad buttons too. Read actions (`actionPressed("jump")`) instead of raw buttons (`gamepad(0).wasPressed("A")`) for everything you declared.
+- Use `actionLabel("jump", "auto")` in prompts so they show "Space" to keyboard players and "A" (or the player's remapped button) to controller players.
+- Menus built with `engine.ui` keep the fixed gamepad D-pad, `A` and `B` navigation fallbacks (F012), so a remap can never lock a player out of a menu.

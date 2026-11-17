@@ -1182,3 +1182,58 @@ Collection activity (spec: `docs/features/F021-collection-activity.md`). One mig
   - backend-dev: the migration, `activity.rs`, `routes/feed.rs`, `routes/collections.rs`, `notifications.rs`, `models.rs`, `tests/f021.rs` and the `review2.rs` extension.
   - frontend-dev: types, `notifications.ts`, `FeedItem`, `FeedPage`, `NotificationItem`, `NotificationSettings`, styles and tests.
   - desktop-dev: verification only.
+
+
+## F016 additions
+Gamepad remapping and synced control bindings (spec: `docs/features/F016-gamepad-remapping-and-sync.md`). For signed-in players, this section supersedes the F009 rule "Overrides live on the device. No server storage".
+
+- **Data flow**:
+  ```
+  ControlsPanel (keys + gamepad capture in the parent) ── writeBindings ──► localStorage webgame.controls.{gameId}
+        │                                                                          │ (subscription)
+        │                                    GamePlayer ── webgame:controls { overrides, gamepad } ──► iframe engine
+        ▼
+  useControlsSync (signed in, GamePlayer only) ── GET / PUT {api}/api/games/{id}/controls ──► control_bindings (user, game)
+  ```
+  The engine never talks to the server. The parent is still the only writer of the device store and the only sender of `webgame:controls`.
+- **Data**: migration `backend/migrations/0020_f016.sql` runs after `0019_f021.sql`:
+  ```sql
+  CREATE TABLE control_bindings (
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      game_id     TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      bindings    TEXT NOT NULL,   -- normalised ControlBindings as compact JSON, e.g. {"keys":{},"gamepad":{"jump":["B"]}}
+      updated_at  TEXT NOT NULL,   -- RFC3339
+      PRIMARY KEY (user_id, game_id)
+  );
+  CREATE INDEX idx_control_bindings_game ON control_bindings(game_id);   -- cascade deletes per game
+  ```
+  Validation bounds the stored JSON (32 ids × (3 codes + 2 names)) well under 8 KiB. Bindings are not versioned. They are filtered against the current actions when read (API § F016 "Normalisation").
+- **Device store** (extends ARCHITECTURE § F009): key `webgame.controls.{gameId}`, value `{ "v": 1, "overrides": { [actionId]: string[] }, "gamepad"?: { [actionId]: GamepadButtonName[] }, "unsynced"?: string }`.
+  - The cap on the serialised entry rises from 4096 to **8192** bytes.
+  - The other F009 read rules are unchanged: a malformed entry, `v !== 1`, a non-object `overrides` or an oversize entry reads as `{}` and the key is removed.
+  - A missing or non-object `gamepad` reads as `{}`. An `unsynced` that is not a non-empty string reads as absent.
+  - Entries written by F009 code (without `gamepad`) stay valid. A keys-only write keeps the stored `gamepad`, and a gamepad-only write keeps the stored keys.
+  - `unsynced` is the id of the signed-in user whose latest change has not yet been confirmed by a successful `PUT`.
+  - The entry is removed only when the bindings are empty **and** `unsynced` is absent. An empty entry that is still unsynced is kept, so a "Reset all" still reaches the account.
+- **Sync algorithm** (`packages/ui/src/controlsSync.ts`, `useControlsSync`): mounted by `GamePlayer` only. Anonymous players and the Studio skip it.
+  1. **On mount, and whenever the signed-in user changes**:
+     - If the device entry's `unsynced` equals the user's id, `PUT` the device bindings without reading the account copy.
+     - Otherwise `GET`:
+       - If `bindings` is not `null`, write it to the device store (without `unsynced`). The store subscription then posts a fresh `webgame:controls`.
+       - If it is `null` and the device bindings are non-empty, `PUT` them.
+       - If it is `null` and the device has nothing, do nothing.
+     - A failed `GET` leaves the device copy in charge until the next mount. There is no retry loop.
+  2. **On every change in the panel**: write the device store at once with `unsynced = userId`, so the game updates immediately. Then debounce a `PUT` by **1000 ms**; changes within the window coalesce into one request.
+  3. **On `PUT` success**: if the device entry still holds exactly the bindings that were sent, clear `unsynced` and adopt the server's normalised copy. Otherwise change nothing.
+  4. **On `PUT` failure** (network, 401, 429, 5xx): keep `unsynced`, and the panel shows the failed-sync note. The upload is retried on the next change or the next mount. There is no automatic retry timer.
+  5. **On unmount** with a pending debounce: send the `PUT` at once with `keepalive: true`.
+  - **Conflict rule**: the account copy wins on load, unless this device has an unsynced change for the same user. When two devices edit concurrently, the last successful `PUT` wins. There is no merge.
+  - Signing out never touches the device store. When a different user signs in on the device, they adopt the device bindings for a game only if their account has none for it.
+- **Gamepad capture runs in the parent.** The parent document is top level, so it can use the Gamepad API in secure contexts (`https`, `localhost`, the Tauri webview). It polls only during capture (`packages/ui/src/gamepadCapture.ts`). The iframe keeps `allow="gamepad"` for gameplay. `Gamepad.id` is held in memory only during capture, as part of the baseline key.
+- **Tables**: no new copy. The backend validates with the F009 tables in `bundle.rs`. The engine and the UI keep their own copies (ARCHITECTURE § F009 "Three copies").
+- **Engine**: `applyOverrides` gains gamepad overrides. `Input` gains `lastDevice`, the `actionLabel` device option and `latchGamepads()`, which runs on host resume and on window focus. No new modules.
+- **Ownership**:
+  - engine-dev: `actions.ts`, `input.ts`, `engine.ts`, `index.ts`, the README and the examples.
+  - backend-dev: the migration, `routes/controls.rs`, the router entry and body limit, `Limit::Controls` and `tests/f016.rs`.
+  - frontend-dev: types, the client, `controls.ts`, `gamepadCapture.ts`, `controlsSync.ts`, `GamepadCaptureButton`, `ControlsPanel`, `ControlsSummary`, `GamePlayer`, `StudioPreview`, templates, the docs page, styles and tests.
+  - desktop-dev: verification only (WebView2 gamepad capture, cross-app sync, CSP).

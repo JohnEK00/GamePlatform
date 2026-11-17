@@ -1347,3 +1347,48 @@ Unchanged. Events and notifications are written by the F008 collection endpoints
 
 ### F021 implementation note
 - **Withdrawn "added to a collection" notifications stay stored:** if a game is added and then removed while its notification is unread, the notification is withdrawn. It is not listed or counted, but it stays in the database (re-adding restores it without moving it) and is deleted when the collection is. This follows the same pattern as F018 pinned notifications.
+
+
+## F016 additions
+Gamepad remapping and synced control bindings (spec: `docs/features/F016-gamepad-remapping-and-sync.md`). Two endpoints store a signed-in player's control bindings per game. Games can't read them; they reach the game only through the parent's `webgame:controls` message (GAME_FORMAT § F016).
+
+### Types
+```ts
+type GamepadButtonName = "A" | "B" | "X" | "Y" | "LB" | "RB" | "LT" | "RT" | "Back" | "Start" | "LS" | "RS" | "Up" | "Down" | "Left" | "Right";   // F009 table
+type ControlBindings = {
+  keys:    { [actionId: string]: string[] };              // replaces the action's default keys; codes from the F009 bindable key table (Mouse0..2 allowed)
+  gamepad: { [actionId: string]: GamepadButtonName[] };   // replaces the action's default gamepad buttons
+}
+type ControlBindingsResponse = { bindings: ControlBindings | null; updatedAt: string | null /*RFC3339*/ }
+```
+
+### Endpoints
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET 🔒 | /api/games/{id}/controls | – | `ControlBindingsResponse`: `{ bindings: null, updatedAt: null }` when the caller has never stored bindings for this game |
+| PUT 🔒 | /api/games/{id}/controls | `{ bindings: ControlBindings }` | 200 `{ bindings: ControlBindings, updatedAt: string }` (the normalised copy that was stored) |
+
+- **Visibility**: both follow the cloud-save rule. The game must be visible to the caller: an unpublished game → 404 unless the caller owns it; an unknown id → 404. Anonymous → 401.
+- **Validation** (`PUT`, strict; the first violation → 422 `validation` naming the path, e.g. `bindings.gamepad.jump[0] "Home" can't be bound`):
+  - `bindings` must be a JSON object.
+  - `keys` and `gamepad`: absent or `null` → `{}`; otherwise a JSON object with at most **32** own keys.
+  - Every key (action id) matches `^[a-z0-9_-]{1,32}$`.
+  - Every `keys` value is an array of at most **3** unique strings from the F009 bindable key table (86 codes).
+  - Every `gamepad` value is an array of at most **2** unique names from the F009 gamepad table (16 names; `Home` is not allowed).
+  - Empty arrays are allowed: they mean "no keys" or "no gamepad buttons" for that action.
+  - Unknown fields inside `bindings` other than `keys` and `gamepad` are ignored.
+- **Normalisation** (on `PUT` before storing, and on `GET` before returning):
+  - Ids not declared by the game's **current** version are dropped.
+  - Entries equal to that action's current defaults (same codes in the same order) are dropped.
+  - `keys` and `gamepad` are listed in manifest order.
+  - An empty result is stored and returned as `{ "keys": {}, "gamepad": {} }`. It is still a row, so the next `GET` returns it and **not** `null`.
+- **Body limit**: request bodies above **16 KiB** → 413 `payload_too_large`.
+- There is no `DELETE`. Deleting the game or the user deletes the bindings.
+
+### Rate limits
+- `PUT /api/games/{id}/controls`: **60/min per user** (`Limit::Controls`), checked after the visibility 404. Exceeding it → 429 `rate_limited` + `Retry-After`.
+- `GET` is not rate limited (like `GET …/save`).
+
+### Privacy
+- Bindings are visible only to their owner. They are not part of `Game`, stats, profiles, the feed or any admin view.
+- The server never receives controller names (`Gamepad.id`) or keyboard layouts.
