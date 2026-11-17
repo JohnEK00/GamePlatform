@@ -9,18 +9,44 @@ import { useToast } from "../context/toast";
 import { CollectionCover, PrivateBadge } from "../components/CollectionCard";
 import { CollectionFormDialog } from "../components/CollectionFormDialog";
 import { CollectionItemRow, collectionItemTitle, type MoveDirection } from "../components/CollectionItemRow";
-import { ConfirmDialog, EmptyState, ErrorState, Skeleton, UserLink } from "../components/common";
+import { ConfirmDialog, EmptyState, ErrorState, Skeleton, Spinner, UserLink } from "../components/common";
 import { ReportButton } from "../components/Report";
 import { errorMessage, formatDate, useAsync, useDocumentTitle } from "../util";
 import { NotFoundPage } from "./NotFoundPage";
 
 /** How long "Link copied" stays on the Copy link button. */
 export const LINK_COPIED_MS = 2000;
-/** How long the Undo action of a removal stays available. */
-export const COLLECTION_UNDO_MS = 5000;
 export const COLLECTION_CONFLICT_MESSAGE = "This collection changed in another tab. Reloaded.";
 
 type FocusRequest = { get: () => HTMLElement | null | undefined; select?: boolean };
+
+/**
+ * A removed item kept in the list as an inline "Removed … Undo" row (review 6, M2: no time limit, keyboard
+ * reachable). `following` lists the rows (items and Undo rows) that came after it when it was removed: it is drawn
+ * before the first of them still shown. `before` is the item order to restore.
+ */
+type RemovedEntry = { item: CollectionItem; before: string[]; following: string[] };
+
+type ListEntry = { kind: "item"; item: CollectionItem; index: number } | { kind: "removed"; entry: RemovedEntry };
+
+/** Interleaves the inline Undo rows with the items: newest first, each before its first shown follower. */
+const entryKey = (e: ListEntry) => (e.kind === "item" ? e.item.gameId : e.entry.item.gameId);
+
+function listEntries(items: CollectionItem[], removed: RemovedEntry[]): ListEntry[] {
+  const out: ListEntry[] = items.map((item, index) => ({ kind: "item", item, index }));
+  const live = new Set(items.map((i) => i.gameId));
+  for (let k = removed.length - 1; k >= 0; k--) {
+    const r = removed[k];
+    if (live.has(r.item.gameId)) continue;
+    const pos = new Map(out.map((e, i) => [entryKey(e), i]));
+    const next = r.following.find((k2) => pos.has(k2));
+    const at = next === undefined ? -1 : pos.get(next)!;
+    const entry: ListEntry = { kind: "removed", entry: r };
+    if (at >= 0) out.splice(at, 0, entry);
+    else out.push(entry);
+  }
+  return out;
+}
 
 const sameOrder = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
@@ -76,8 +102,29 @@ export function CollectionPage() {
     return null;
   }, []);
 
+  const removedRow = useCallback((gameId: string, action: string): HTMLElement | null => {
+    const list = listRef.current;
+    if (!list) return null;
+    const row = Array.from(list.children).find((li) => (li as HTMLElement).dataset.removedId === gameId) as HTMLElement | undefined;
+    return row?.querySelector<HTMLElement>(`[data-action="${action}"]`) ?? null;
+  }, []);
+
+  /** The rendered rows (items and Undo rows), for placing a new Undo row. */
+  const entriesRef = useRef<ListEntry[]>([]);
+  const followersOf = (gameId: string): string[] => {
+    const keys = entriesRef.current.map(entryKey);
+    const i = keys.indexOf(gameId);
+    return i >= 0 ? keys.slice(i + 1) : [];
+  };
+
   const moving = useRef(false);
   const removing = useRef(new Set<string>());
+  const undoing = useRef(new Set<string>());
+  const [removed, setRemoved] = useState<RemovedEntry[]>([]);
+  const [undoBusy, setUndoBusy] = useState<ReadonlySet<string>>(() => new Set());
+  /** An unavailable item waiting for the "can't add it back" confirmation. */
+  const [confirmRemove, setConfirmRemove] = useState<CollectionItem | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
@@ -89,6 +136,8 @@ export function CollectionPage() {
   useEffect(() => {
     setFallbackUrl(null);
     setCopied(false);
+    setRemoved([]);
+    setConfirmRemove(null);
   }, [id]);
 
   const reloadAfterConflict = useCallback(async () => {
@@ -143,18 +192,25 @@ export function CollectionPage() {
     announce(note ? "Note saved" : "Note removed");
   };
 
-  const undo = async (item: CollectionItem, before: string[]) => {
+  const setUndoing = (gameId: string, on: boolean) => {
+    if (on) undoing.current.add(gameId);
+    else undoing.current.delete(gameId);
+    setUndoBusy(new Set(undoing.current));
+  };
+
+  const undo = async (entry: RemovedEntry) => {
+    const { item, before } = entry;
     const title = collectionItemTitle(item);
-    // The toast (and its Undo button) goes away: keep focus in the list meanwhile.
-    requestFocus({ get: () => headingRef.current });
     const c = collRef.current;
-    if (!c) return;
+    if (!c || undoing.current.has(item.gameId)) return;
+    setUndoing(item.gameId, true);
     try {
       const r = await api.putCollectionGame(c.id, item.gameId, { note: item.note });
       const latest = collRef.current ?? c;
       const restored: CollectionItem = r?.item ? { ...item, ...r.item } : item;
       const afterAdd = [...latest.items.filter((i) => i.gameId !== item.gameId), restored];
       setData((prev) => (prev ? { ...prev, items: afterAdd, gameCount: r?.gameCount ?? prev.gameCount, updatedAt: r?.updatedAt ?? prev.updatedAt } : (prev as never)));
+      setRemoved((rs) => rs.filter((x) => x.item.gameId !== item.gameId));
       const current = afterAdd.map((i) => i.gameId);
       const desired = [...before.filter((x) => current.includes(x)), ...current.filter((x) => !before.includes(x))];
       if (!sameOrder(desired, current)) setData(await api.reorderCollection(c.id, desired));
@@ -163,21 +219,37 @@ export function CollectionPage() {
     } catch (e) {
       if (isApiError(e) && e.status === 409) await reloadAfterConflict();
       else toast.error(`Couldn't restore ${title}`, errorMessage(e));
+    } finally {
+      setUndoing(item.gameId, false);
     }
   };
 
-  const remove = async (index: number) => {
+  /** Drops an inline Undo row; focus goes to the next row (or the previous one, or the list heading). */
+  const dismissRemoved = (gameId: string) => {
+    const li = removedRow(gameId, "undo")?.closest("li");
+    const sib = (li?.nextElementSibling ?? li?.previousElementSibling) as HTMLElement | null | undefined;
+    const target = sib?.querySelector<HTMLElement>('[data-action="remove"], [data-action="undo"]') ?? null;
+    setRemoved((rs) => rs.filter((x) => x.item.gameId !== gameId));
+    requestFocus({ get: () => (target && target.isConnected ? target : headingRef.current) });
+  };
+
+  /**
+   * DELETEs an item. Available games leave an inline "Removed … Undo" row in their place (focused, no time limit);
+   * unavailable ones can't be added back (404), so they are confirmed first and get no Undo.
+   */
+  const performRemove = async (item: CollectionItem, undoable: boolean) => {
     const c = collRef.current;
-    const item = c?.items[index];
-    if (!c || !item || removing.current.has(item.gameId)) return;
+    if (!c || removing.current.has(item.gameId)) return;
     const before = c.items.map((i) => i.gameId);
     const title = collectionItemTitle(item);
     removing.current.add(item.gameId);
+    if (!undoable) setConfirmBusy(true);
     try {
       const r = await api.deleteCollectionGame(c.id, item.gameId);
       const latest = collRef.current ?? c;
       const at = latest.items.findIndex((i) => i.gameId === item.gameId);
-      const neighbor = at >= 0 ? (latest.items[at + 1] ?? latest.items[at - 1]) : undefined;
+      const next = at >= 0 ? latest.items[at + 1] : undefined;
+      const neighbor = next ?? (at >= 0 ? latest.items[at - 1] : undefined);
       setData((prev) =>
         prev
           ? {
@@ -188,20 +260,28 @@ export function CollectionPage() {
             }
           : (prev as never),
       );
-      requestFocus({ get: () => (neighbor ? rowButton(neighbor.gameId, ["remove"]) : null) ?? headingRef.current });
+      if (undoable) {
+        setRemoved((rs) => [...rs.filter((x) => x.item.gameId !== item.gameId), { item, before, following: followersOf(item.gameId) }]);
+        requestFocus({ get: () => removedRow(item.gameId, "undo") ?? headingRef.current });
+      } else {
+        setConfirmRemove(null);
+        requestFocus({ get: () => (neighbor ? rowButton(neighbor.gameId, ["remove"]) : null) ?? headingRef.current });
+      }
       announce(`Removed ${title}`);
-      toast.show({
-        kind: "success",
-        title: "Removed from the collection",
-        message: title,
-        duration: COLLECTION_UNDO_MS,
-        action: { label: "Undo", onClick: () => void undo(item, before) },
-      });
     } catch (e) {
+      if (!undoable) setConfirmRemove(null);
       toast.error(`Couldn't remove ${title}`, errorMessage(e));
     } finally {
       removing.current.delete(item.gameId);
+      if (!undoable) setConfirmBusy(false);
     }
+  };
+
+  const remove = (index: number) => {
+    const item = collRef.current?.items[index];
+    if (!item) return;
+    if (item.game) void performRemove(item, true);
+    else setConfirmRemove(item);
   };
 
   const copyLink = async () => {
@@ -266,6 +346,8 @@ export function CollectionPage() {
   const isPublic = c.visibility === "public";
   const canReport = !!user && !c.isOwner && !c.canDelete;
   const titleId = `${uid}-games`;
+  const entries = listEntries(items, c.isOwner ? removed : []);
+  entriesRef.current = entries;
 
   return (
     <div className="pf-container pf-page pf-collection-page">
@@ -334,7 +416,7 @@ export function CollectionPage() {
         <h2 id={titleId} ref={headingRef} tabIndex={-1} className="pf-section-title">
           Games
         </h2>
-        {items.length === 0 ? (
+        {entries.length === 0 ? (
           c.isOwner ? (
             <EmptyState
               icon="📚"
@@ -354,18 +436,28 @@ export function CollectionPage() {
           // role="list": WebKit drops list semantics (and the native "n of m") under `list-style: none`.
           // eslint-disable-next-line jsx-a11y/no-redundant-roles
           <ol ref={listRef} className="pf-collection-items" role="list" aria-label="Games in this collection">
-            {items.map((item, i) => (
-              <CollectionItemRow
-                key={item.gameId}
-                item={item}
-                index={i}
-                count={items.length}
-                isOwner={c.isOwner}
-                onMove={(idx, dir) => void move(idx, dir)}
-                onSaveNote={saveNote}
-                onRemove={(idx) => void remove(idx)}
-              />
-            ))}
+            {entries.map((e) =>
+              e.kind === "item" ? (
+                <CollectionItemRow
+                  key={e.item.gameId}
+                  item={e.item}
+                  index={e.index}
+                  count={items.length}
+                  isOwner={c.isOwner}
+                  onMove={(idx, dir) => void move(idx, dir)}
+                  onSaveNote={saveNote}
+                  onRemove={remove}
+                />
+              ) : (
+                <RemovedRow
+                  key={`removed:${e.entry.item.gameId}`}
+                  entry={e.entry}
+                  busy={undoBusy.has(e.entry.item.gameId)}
+                  onUndo={() => void undo(e.entry)}
+                  onDismiss={() => dismissRemoved(e.entry.item.gameId)}
+                />
+              ),
+            )}
           </ol>
         )}
       </section>
@@ -391,6 +483,55 @@ export function CollectionPage() {
       >
         The games stay on the site; only this list is removed.
       </ConfirmDialog>
+      <ConfirmDialog
+        open={!!confirmRemove}
+        title="Remove this unavailable game?"
+        confirmLabel="Remove"
+        danger
+        busy={confirmBusy}
+        onConfirm={() => {
+          if (confirmRemove) void performRemove(confirmRemove, false);
+        }}
+        onCancel={() => setConfirmRemove(null)}
+      >
+        It was unpublished or removed by its creator, so you won't be able to add it back. Its note is removed too.
+      </ConfirmDialog>
     </div>
+  );
+}
+
+/** The inline row left in place of a removed game: "Removed {title}" with Undo and Dismiss (no time limit). */
+function RemovedRow({ entry, busy, onUndo, onDismiss }: { entry: RemovedEntry; busy: boolean; onUndo: () => void; onDismiss: () => void }) {
+  const title = collectionItemTitle(entry.item);
+  return (
+    <li className="pf-collection-removed" data-removed-id={entry.item.gameId}>
+      <span className="pf-collection-removed__icon" aria-hidden="true">
+        ↩
+      </span>
+      <p className="pf-collection-removed__text">
+        Removed <strong>{title}</strong> from the collection.
+      </p>
+      <button
+        type="button"
+        className="pf-btn pf-btn--sm pf-btn--ghost"
+        data-action="undo"
+        aria-label={`Undo remove: ${title}`}
+        aria-busy={busy || undefined}
+        onClick={() => {
+          if (!busy) onUndo();
+        }}
+      >
+        {busy ? <Spinner size={12} /> : null} Undo
+      </button>
+      <button
+        type="button"
+        className="pf-collection-removed__dismiss"
+        data-action="dismiss"
+        aria-label={`Dismiss: removed ${title}`}
+        onClick={onDismiss}
+      >
+        ×
+      </button>
+    </li>
   );
 }

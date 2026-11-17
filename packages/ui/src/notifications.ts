@@ -89,12 +89,12 @@ export function muteActionFor(n: Notification): MuteAction | null {
     case "heart":
     case "pinned":
       if (!threadId) return null;
-      return { target: "thread", id: threadId, label: `Mute notifications for this thread on ${title}` };
+      return { target: "thread", id: threadId, label: `Mute thread on ${title}` };
     case "comment":
     case "gamePublished":
     case "addedToCollection":
       if (!n.game || typeof n.game.id !== "string" || !n.game.id) return null;
-      return { target: "game", id: n.game.id, label: `Mute notifications for ${title}` };
+      return { target: "game", id: n.game.id, label: `Mute game: ${title}` };
     default:
       return null;
   }

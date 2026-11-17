@@ -1,8 +1,8 @@
 # F021: Collection activity: feed items and "added to a collection" notifications
 
 Status: **specced**. Size: **M** (backend medium: one migration with an `activity_events` rebuild, one activity writer, a third feed branch, one notification kind with a read-time filter; frontend small: one feed item, one feed tab, one notification text, one settings switch; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
-Contracts: `docs/API.md` § F021 additions (feed kind and types, notification kind, setting, triggers, visibility, withdrawal), `docs/ARCHITECTURE.md` § F021 additions (migration `0018_f021.sql` with the exact SQL, writer, feed branch, notification write and read paths), `docs/GAME_FORMAT.md` § F021 additions (no changes).
-Depends on: F002 (feed), F007 (notifications), F008 (collections) and F018 (no `notifications.kind` CHECK, mutes, group dedupe, `withdraw_pool`), all shipped. The migration is **`0018_f021.sql`** and runs after `0017_f018.sql`. **No new Rust or JS dependencies.**
+Contracts: `docs/API.md` § F021 additions (feed kind and types, notification kind, setting, triggers, visibility, withdrawal), `docs/ARCHITECTURE.md` § F021 additions (migration `0019_f021.sql` with the exact SQL, writer, feed branch, notification write and read paths), `docs/GAME_FORMAT.md` § F021 additions (no changes).
+Depends on: F002 (feed), F007 (notifications), F008 (collections) and F018 (no `notifications.kind` CHECK, mutes, group dedupe, `withdraw_pool`), all shipped. The migration is **`0019_f021.sql`** and runs after `0017_f018.sql`. **No new Rust or JS dependencies.**
 Unblocks: F015 (`screenshotPosted` feed kind) needs no `activity_events` rebuild after this one.
 
 ## 1. Goal and user stories
@@ -62,13 +62,13 @@ Non-goals (later items): announcing a collection when it changes from private to
   - `NotificationKind` += `"addedToCollection"`; `Notification.collection`; `NotificationSettings.collections`.
   - Trigger, recipient, group, dedupe, withdrawal, visibility, mute scope and path for the new kind.
   - No new endpoints and no new rate limits.
-- **ARCHITECTURE.md § F021 additions**: migration `0018_f021.sql` (exact SQL: `activity_events` rebuild without the kind CHECK, nullable `game_id`, `collection_id`, `game_ids`; `notifications.collection_id`; `notification_settings.collections`; two indexes), the writer, the third feed branch, the notification write and read paths.
+- **ARCHITECTURE.md § F021 additions**: migration `0019_f021.sql` (exact SQL: `activity_events` rebuild without the kind CHECK, nullable `game_id`, `collection_id`, `game_ids`; `notifications.collection_id`; `notification_settings.collections`; two indexes), the writer, the third feed branch, the notification write and read paths.
 - **GAME_FORMAT.md § F021 additions**: none.
 
 ## 4. Per-area tasks
 
 ### backend-dev (`backend/**`)
-1. **Migration** `backend/migrations/0018_f021.sql`: copy the SQL in ARCHITECTURE § F021 "Data" **verbatim** (order matters). Never edit `0001`–`0017`.
+1. **Migration** `backend/migrations/0019_f021.sql`: copy the SQL in ARCHITECTURE § F021 "Data" **verbatim** (order matters). Never edit `0001`–`0017`.
 2. **`src/activity.rs`**:
    - `pub const KIND_COLLECTION_UPDATED: &str = "collectionUpdated"`; `KINDS` becomes 5 entries. Update the module doc: `KINDS` is now the only guard on `activity_events.kind`.
    - `pub const COLLECTION_EVENT_GAMES_MAX: usize = 100`.

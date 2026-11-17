@@ -5539,6 +5539,58 @@ a.pf-tab {
   }
 }
 
+/* Review 6, M2: the inline "Removed … Undo" row left in place of a removed game (no time limit). */
+.pf-collection-removed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px dashed var(--pf-border-strong);
+  border-radius: var(--pf-radius);
+  background: var(--pf-bg-2);
+  color: var(--pf-text-2);
+  font-size: 0.92rem;
+}
+.pf-collection-removed__icon {
+  color: var(--pf-muted);
+  flex-shrink: 0;
+}
+.pf-collection-removed__text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-collection-removed__text strong {
+  color: var(--pf-text);
+}
+.pf-collection-removed__dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  border-radius: var(--pf-radius-sm);
+  color: var(--pf-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.pf-collection-removed__dismiss:hover {
+  color: var(--pf-text);
+  background: var(--pf-surface);
+}
+@media (max-width: 520px) {
+  .pf-collection-removed {
+    flex-wrap: wrap;
+  }
+  .pf-collection-removed__text {
+    flex-basis: calc(100% - 2rem);
+    white-space: normal;
+  }
+}
+
 /* ---------- F018: notification controls (mutes) ---------- */
 .pf-mute-btn {
   display: inline-flex;
@@ -5548,16 +5600,16 @@ a.pf-tab {
 .pf-mute-btn svg {
   flex-shrink: 0;
 }
-.pf-mute-btn[aria-pressed="true"] {
+.pf-mute-btn.is-on {
   background: var(--pf-surface-3);
   border-color: var(--pf-border-strong);
   color: var(--pf-text-2);
 }
-.pf-mute-btn[aria-pressed="true"]:hover:not(:disabled):not([aria-disabled="true"]) {
+.pf-mute-btn.is-on:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--pf-surface-2);
   color: var(--pf-text);
 }
-.pf-comment__mute[aria-pressed="true"] {
+.pf-comment__mute.is-on {
   color: var(--pf-text-2);
   text-decoration-style: dotted;
 }
@@ -5677,6 +5729,14 @@ a.pf-tab {
 }
 .pf-muted-list__unmute {
   flex-shrink: 0;
+}
+.pf-muted-list__game--gone {
+  color: var(--pf-text-2);
+  font-style: italic;
+  font-weight: 500;
+}
+.pf-muted-list__game--gone:hover {
+  text-decoration: none;
 }
 @media (max-width: 520px) {
   .pf-muted-list__row {

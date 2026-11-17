@@ -53,7 +53,7 @@ async function setup(props: Partial<CommentItemProps> & { comment: Comment }, op
   return { mute, unmute };
 }
 
-const muteBtn = () => screen.queryByRole("button", { name: /notifications for the thread by Alice/ });
+const muteBtn = () => screen.queryByRole("button", { name: /^(Un)?[Mm]ute thread by Alice$/ });
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -64,24 +64,24 @@ describe("CommentItem: Mute thread (F018)", () => {
     const { mute, unmute } = await setup({ comment: cm() });
     const b = muteBtn()!;
     expect(b.textContent).toBe("Mute thread");
-    expect(b.getAttribute("aria-label")).toBe("Mute notifications for the thread by Alice");
-    expect(b.getAttribute("aria-pressed")).toBe("false");
+    expect(b.getAttribute("aria-label")).toBe("Mute thread by Alice");
+    expect(b.hasAttribute("aria-pressed")).toBe(false);
     expect(b.className).toContain("pf-linkbtn");
     fireEvent.click(b);
     expect(mute).toHaveBeenCalledWith("c1");
     expect(muteBtn()!.textContent).toBe("Unmute thread");
-    expect(muteBtn()!.getAttribute("aria-label")).toBe("Unmute notifications for the thread by Alice");
+    expect(muteBtn()!.getAttribute("aria-label")).toBe("Unmute thread by Alice");
     expect(await screen.findByText("Thread muted. Replies, hearts and pins in it won't notify you.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(unmute).toHaveBeenCalledWith("c1");
     expect(await screen.findByText("Thread unmuted.")).toBeTruthy();
-    expect(muteBtn()!.getAttribute("aria-pressed")).toBe("false");
+    expect(muteBtn()!.textContent).toBe("Mute thread");
   });
 
-  it("starts pressed when threadMuted is true", async () => {
+  it("starts as Unmute thread when threadMuted is true", async () => {
     await setup({ comment: cm({ threadMuted: true }) });
     expect(muteBtn()!.textContent).toBe("Unmute thread");
-    expect(muteBtn()!.getAttribute("aria-pressed")).toBe("true");
+    expect(muteBtn()!.getAttribute("aria-label")).toBe("Unmute thread by Alice");
   });
 
   it("never shows on replies, without the field (older server) or for anonymous viewers", async () => {
@@ -103,6 +103,6 @@ describe("CommentItem: Mute thread (F018)", () => {
     await setup({ comment: cm() }, { muteFails: true });
     fireEvent.click(muteBtn()!);
     expect(await screen.findByText("Only whole threads can be muted")).toBeTruthy();
-    expect(muteBtn()!.getAttribute("aria-pressed")).toBe("false");
+    expect(muteBtn()!.textContent).toBe("Mute thread");
   });
 });

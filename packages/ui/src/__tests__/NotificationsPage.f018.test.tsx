@@ -62,12 +62,12 @@ describe("NotificationsPage: item mute (F018)", () => {
     await waitFor(() => expect(item("1")).toBeTruthy());
     const btn = (id: string) => within(item(id)).queryByRole("button");
     expect(btn("1")!.textContent).toBe("Mute game");
-    expect(btn("1")!.getAttribute("aria-label")).toBe("Mute notifications for Space Dodge");
+    expect(btn("1")!.getAttribute("aria-label")).toBe("Mute game: Space Dodge");
     for (const id of ["2", "3", "4"]) {
       expect(btn(id)!.textContent).toBe("Mute thread");
-      expect(btn(id)!.getAttribute("aria-label")).toBe("Mute notifications for this thread on Space Dodge");
+      expect(btn(id)!.getAttribute("aria-label")).toBe("Mute thread on Space Dodge");
     }
-    expect(btn("5")!.getAttribute("aria-label")).toBe("Mute notifications for Space Dodge");
+    expect(btn("5")!.getAttribute("aria-label")).toBe("Mute game: Space Dodge");
     expect(btn("6")).toBeNull();
     expect(btn("1")!.closest("a")).toBeNull();
     // The pinned summary renders with the pin glyph.
@@ -88,7 +88,7 @@ describe("NotificationsPage: item mute (F018)", () => {
     const { list, muteThread, unmuteThread } = await setup([page(items), after]);
     await waitFor(() => expect(item("2")).toBeTruthy());
     expect(list).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(item("2")).getByRole("button", { name: "Mute notifications for this thread on Space Dodge" }));
+    fireEvent.click(within(item("2")).getByRole("button", { name: "Mute thread on Space Dodge" }));
     expect(muteThread).toHaveBeenCalledWith("t1");
     expect(await screen.findByText("Thread muted. Replies, hearts and pins in it won't notify you.")).toBeTruthy();
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
@@ -104,7 +104,7 @@ describe("NotificationsPage: item mute (F018)", () => {
   it("mutes a game and shows the game toast", async () => {
     const { muteGame } = await setup([page(items), page(items.map((n) => ({ ...n, read: true })), 1)]);
     await waitFor(() => expect(item("1")).toBeTruthy());
-    fireEvent.click(within(item("1")).getByRole("button", { name: "Mute notifications for Space Dodge" }));
+    fireEvent.click(within(item("1")).getByRole("button", { name: "Mute game: Space Dodge" }));
     expect(muteGame).toHaveBeenCalledWith("g7");
     expect(await screen.findByText("Muted notifications for Space Dodge")).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId("unread").textContent).toBe("1"));
@@ -113,7 +113,7 @@ describe("NotificationsPage: item mute (F018)", () => {
   it("shows the server error and does not refetch on failure", async () => {
     const { list } = await setup([page(items)], { muteFails: true });
     await waitFor(() => expect(item("1")).toBeTruthy());
-    fireEvent.click(within(item("1")).getByRole("button", { name: "Mute notifications for Space Dodge" }));
+    fireEvent.click(within(item("1")).getByRole("button", { name: "Mute game: Space Dodge" }));
     expect(await screen.findByText("Game not found")).toBeTruthy();
     expect(list).toHaveBeenCalledTimes(1);
   });

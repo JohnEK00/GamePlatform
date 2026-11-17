@@ -223,3 +223,10 @@ backend-dev and frontend-dev can work in parallel against API § F018. frontend-
 ### F018 implementation notes (backend)
 - **Upgrade test, item 3 (corrected):** older migrations legitimately contain `_new` index names (`idx_games_pub_new`, `idx_games_owner_pub_new`, `idx_games_owner_new` from 0004). The test therefore asserts that the set of `_new` names is unchanged by 0017 and that no schema object mentions `notifications_new` or `notification_events_new`.
 - **Re-pinned after "mark all read":** "Mark all read" (`upTo`) and mark-read-on-mute also mark withdrawn (invisible) pinned rows as read. A comment re-pinned later restores that notification as read, consistent with "a read pinned notification is never changed".
+
+### Review-6 UI changes (supersede the labels in §§ 2.1–2.3)
+- **Mute game button:** visible text is "Mute notifications" / "Unmute notifications". No `aria-pressed`; the muted state is shown visually and in the text. The "Notifications muted" wording is no longer used.
+- **Mute thread button:** the label changes with state ("Mute thread by {name}" / "Unmute thread by {name}"), with no `aria-pressed`.
+- **Notification item actions:** "Mute game: {title}" / "Mute thread on {title}", so the accessible name contains the visible text (WCAG 2.5.3).
+- **Undo toasts:** toasts with an action stay at least 10 s, pause while hovered or focused, and return focus to where it came from when they close.
+- **Muted list:** mutes on unavailable games show as "Unavailable game" with an Unmute button.

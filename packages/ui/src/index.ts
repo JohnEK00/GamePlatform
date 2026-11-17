@@ -25,7 +25,7 @@ export { NotificationsProvider, useNotifications } from "./context/notifications
 export type { NotificationsState, NotificationsProviderProps } from "./context/notifications";
 export { AuthProvider, useAuth, TOKEN_STORAGE_KEY, readStoredToken } from "./context/auth";
 export type { AuthState } from "./context/auth";
-export { ToastProvider, useToast } from "./context/toast";
+export { TOAST_ACTION_MIN_MS, TOAST_RESUME_MIN_MS, ToastProvider, toastDuration, useToast } from "./context/toast";
 export type { ToastApi, ToastInput, ToastKind } from "./context/toast";
 
 // Components
@@ -350,7 +350,7 @@ export { FeedPage, FEED_TAB_KEY } from "./pages/FeedPage";
 export type { FeedTab } from "./pages/FeedPage";
 export { FollowListPage } from "./pages/FollowListPage";
 export { NotificationsPage, NOTIFICATIONS_PER_PAGE } from "./pages/NotificationsPage";
-export { CollectionPage, LINK_COPIED_MS, COLLECTION_UNDO_MS, COLLECTION_CONFLICT_MESSAGE } from "./pages/CollectionPage";
+export { CollectionPage, LINK_COPIED_MS, COLLECTION_CONFLICT_MESSAGE } from "./pages/CollectionPage";
 export { UserCollectionsPage, MyCollectionsRedirect, USER_COLLECTIONS_PER_PAGE } from "./pages/UserCollectionsPage";
 export { reportActions } from "./pages/AdminPage";
 export type { NotificationsFilter } from "./pages/NotificationsPage";

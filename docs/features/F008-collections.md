@@ -193,3 +193,8 @@ None.
 - **UI**: client methods, pure helpers, collection page owner/visitor/admin flows with focus and announcements, add dialog, profile section and game shelf, admin rows.
 - **Desktop**: green build and tests; manual share-link, focus and deep-link checks.
 - **Manual end to end**: user A creates a public collection from a game page, adds three games, reorders with the keyboard only, writes notes and copies the link; user B (signed out) opens the link, sees the order and notes, sees the shelf on each game page and the collection on A's profile, then reports it; the creator of one game unpublishes it (A sees "Unavailable game", B doesn't see it); A makes the collection private (B gets the not-found page, the shelves drop it); an admin resolves the report with Delete. Repeat the owner flow with NVDA or VoiceOver.
+
+### Review-6 UI changes (supersede § 2.5 remove/Undo behaviour)
+- **Removing an available game** replaces the row with an inline "Removed {title} from the collection." row with Undo and dismiss (×). It has no time limit, and focus moves to "Undo remove: {title}". There is no remove toast.
+- **Removing an unavailable game** first asks for confirmation ("Remove this unavailable game?", focus on Cancel), because it cannot be added back. There is no Undo.
+- **Move buttons** are named "Move up: {title}" / "Move down: {title}".

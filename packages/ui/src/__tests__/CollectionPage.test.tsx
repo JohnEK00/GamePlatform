@@ -164,10 +164,10 @@ describe("CollectionPage: owner", () => {
 
   it("boundary move buttons are hidden; the unavailable row only has Remove", async () => {
     await setup(owned(), { user: anaUser });
-    expect(queryBtn("Move Space Dodge up")).toBeNull();
-    expect(btn("Move Space Dodge down")).toBeTruthy();
-    expect(btn("Move Pixel Peaks up")).toBeTruthy();
-    expect(btn("Move Pixel Peaks down")).toBeTruthy();
+    expect(queryBtn("Move up: Space Dodge")).toBeNull();
+    expect(btn("Move down: Space Dodge")).toBeTruthy();
+    expect(btn("Move up: Pixel Peaks")).toBeTruthy();
+    expect(btn("Move down: Pixel Peaks")).toBeTruthy();
     const rows = within(screen.getByRole("list", { name: "Games in this collection" })).getAllByRole("listitem");
     const gone = rows[3];
     expect(within(gone).getByRole("heading").textContent).toBe("Unavailable game");
@@ -180,12 +180,12 @@ describe("CollectionPage: owner", () => {
     const { client } = await setup(owned(), { user: anaUser });
     const d = deferred<Collection>();
     const spy = vi.spyOn(client, "reorderCollection").mockReturnValue(d.promise);
-    const up = btn("Move Brick Breaker up");
+    const up = btn("Move up: Brick Breaker");
     up.focus();
     await act(async () => fireEvent.click(up));
     expect(spy).toHaveBeenCalledWith("c1", ["g2", "g1", "g3", "g4"]);
     // Another move while one is in flight is ignored.
-    await act(async () => fireEvent.click(btn("Move Pixel Peaks up")));
+    await act(async () => fireEvent.click(btn("Move up: Pixel Peaks")));
     expect(spy).toHaveBeenCalledTimes(1);
     await act(async () => d.resolve(reordered(owned(), ["g2", "g1", "g3", "g4"])));
     const titles = within(screen.getByRole("list", { name: "Games in this collection" }))
@@ -193,17 +193,17 @@ describe("CollectionPage: owner", () => {
       .map((h) => h.textContent);
     expect(titles).toEqual(["Brick Breaker", "Space Dodge", "Pixel Peaks", "Unavailable game"]);
     // "Move up" vanished at the top boundary: focus goes to the row's other move button.
-    expect(queryBtn("Move Brick Breaker up")).toBeNull();
-    expect(document.activeElement).toBe(btn("Move Brick Breaker down"));
+    expect(queryBtn("Move up: Brick Breaker")).toBeNull();
+    expect(document.activeElement).toBe(btn("Move down: Brick Breaker"));
     expect(screen.getByText("Moved Brick Breaker to position 1 of 4")).toBeTruthy();
   });
 
   it("Move down keeps focus on the same button of the moved row", async () => {
     const { client } = await setup(owned(), { user: anaUser });
     const spy = vi.spyOn(client, "reorderCollection").mockResolvedValue(reordered(owned(), ["g2", "g1", "g3", "g4"]));
-    await act(async () => fireEvent.click(btn("Move Space Dodge down")));
+    await act(async () => fireEvent.click(btn("Move down: Space Dodge")));
     expect(spy).toHaveBeenCalledWith("c1", ["g2", "g1", "g3", "g4"]);
-    expect(document.activeElement).toBe(btn("Move Space Dodge down"));
+    expect(document.activeElement).toBe(btn("Move down: Space Dodge"));
     expect(screen.getByText("Moved Space Dodge to position 2 of 4")).toBeTruthy();
   });
 
@@ -212,7 +212,7 @@ describe("CollectionPage: owner", () => {
     vi.spyOn(client, "reorderCollection").mockRejectedValue(new ApiError("conflict", "The collection has changed; reload and try again", 409));
     const calls = get.mock.calls.length;
     get.mockResolvedValue(owned({ items: [item("g3", "Pixel Peaks"), item("g1", "Space Dodge")] }));
-    await act(async () => fireEvent.click(btn("Move Space Dodge down")));
+    await act(async () => fireEvent.click(btn("Move down: Space Dodge")));
     await act(async () => {});
     expect(get.mock.calls.length).toBe(calls + 1);
     expect(screen.getByText(COLLECTION_CONFLICT_MESSAGE)).toBeTruthy();
@@ -262,14 +262,19 @@ describe("CollectionPage: owner", () => {
     expect(screen.getByRole("textbox", { name: "Note for Space Dodge" })).toBeTruthy();
   });
 
-  it("Remove: no confirmation, focus to the next row's Remove, announcement, and Undo restores the order", async () => {
+  it("Remove: an inline Undo row replaces the item and gets focus; Undo restores the order", async () => {
     const { client } = await setup(owned(), { user: anaUser });
     const rm: CollectionRemoveResponse = { removed: true, gameCount: 2, updatedAt: "2026-11-16T00:00:00Z" };
     const del = vi.spyOn(client, "deleteCollectionGame").mockResolvedValue(rm);
     await act(async () => fireEvent.click(btn("Remove Brick Breaker from collection")));
     expect(del).toHaveBeenCalledWith("c1", "g2");
     expect(queryBtn("Remove Brick Breaker from collection")).toBeNull();
-    expect(document.activeElement).toBe(btn("Remove Pixel Peaks from collection"));
+    // The removed row stays in place as "Removed … Undo", and focus is on its Undo button.
+    const list = screen.getByRole("list", { name: "Games in this collection" });
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows).toHaveLength(4);
+    expect(rows[1].textContent).toContain("Removed Brick Breaker from the collection.");
+    expect(document.activeElement).toBe(btn("Undo remove: Brick Breaker"));
     expect(screen.getByText("Removed Brick Breaker")).toBeTruthy();
     expect(screen.getByText("2 games · Updated", { exact: false })).toBeTruthy();
 
@@ -280,7 +285,7 @@ describe("CollectionPage: owner", () => {
       updatedAt: "2026-11-16T00:00:01Z",
     });
     const order = vi.spyOn(client, "reorderCollection").mockResolvedValue(owned());
-    await act(async () => fireEvent.click(btn("Undo")));
+    await act(async () => fireEvent.click(btn("Undo remove: Brick Breaker")));
     await act(async () => {});
     expect(put).toHaveBeenCalledWith("c1", "g2", { note: "" });
     expect(order).toHaveBeenCalledWith("c1", ["g1", "g2", "g3", "g4"]);
@@ -288,15 +293,21 @@ describe("CollectionPage: owner", () => {
       .getAllByRole("heading")
       .map((h) => h.textContent);
     expect(titles).toEqual(["Space Dodge", "Brick Breaker", "Pixel Peaks", "Unavailable game"]);
+    expect(queryBtn("Undo remove: Brick Breaker")).toBeNull();
     expect(document.activeElement).toBe(btn("Remove Brick Breaker from collection"));
   });
 
-  it("Remove: the last row moves focus to the previous row, the only row to the list heading", async () => {
+  it("Remove: Dismiss drops the Undo row and moves focus on; the last one to the list heading", async () => {
     const { client } = await setup(owned({ items: [item("g1", "Space Dodge"), item("g2", "Brick Breaker")] }), { user: anaUser });
     vi.spyOn(client, "deleteCollectionGame").mockResolvedValue({ removed: true, gameCount: 1, updatedAt: "x" });
     await act(async () => fireEvent.click(btn("Remove Brick Breaker from collection")));
+    expect(document.activeElement).toBe(btn("Undo remove: Brick Breaker"));
+    await act(async () => fireEvent.click(btn("Dismiss: removed Brick Breaker")));
+    expect(queryBtn("Undo remove: Brick Breaker")).toBeNull();
     expect(document.activeElement).toBe(btn("Remove Space Dodge from collection"));
     await act(async () => fireEvent.click(btn("Remove Space Dodge from collection")));
+    expect(document.activeElement).toBe(btn("Undo remove: Space Dodge"));
+    await act(async () => fireEvent.click(btn("Dismiss: removed Space Dodge")));
     expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: "Games" }));
     expect(screen.getByText(/Use/).textContent).toContain("+ Collection");
     expect(screen.getByRole("link", { name: "Browse games" })).toBeTruthy();

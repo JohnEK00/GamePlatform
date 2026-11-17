@@ -14,7 +14,34 @@ export const MUTES_PER_USER = 500;
 /** The "{total} of 500" line is shown from this many mutes on. */
 export const MUTES_COUNT_FROM = 400;
 
-const muteKey = (m: NotificationMute) => `${m.target}:${m.target === "thread" ? m.threadId : m.game.id}`;
+/** The label of a mute whose game the caller can no longer see (review 6, L3). */
+export const UNAVAILABLE_GAME_LABEL = "Unavailable game";
+
+/**
+ * A listed mute, normalised. Servers may list mutes of hidden / unpublished games (review 6, L3) with `game: null`,
+ * a game without a title, or `available: false`: those rows say "Unavailable game", link nowhere, and keep Unmute.
+ */
+type MuteRow = { m: NotificationMute; key: string; id: string; gameId: string; unavailable: boolean };
+
+function toRow(raw: unknown): MuteRow | null {
+  if (!raw || typeof raw !== "object") return null;
+  const m = raw as NotificationMute & { unavailable?: unknown };
+  if (m.target !== "game" && m.target !== "thread") return null;
+  const g = m.game && typeof m.game === "object" ? (m.game as NotificationMute["game"] & { available?: unknown }) : null;
+  const fromPath = typeof m.path === "string" ? /^\/games\/([^/?#]+)/.exec(m.path)?.[1] : undefined;
+  let gameId = g && typeof g.id === "string" && g.id ? g.id : "";
+  if (!gameId && fromPath) {
+    try {
+      gameId = decodeURIComponent(fromPath);
+    } catch {
+      gameId = "";
+    }
+  }
+  const unavailable = !g || m.unavailable === true || g.available === false || typeof g.title !== "string" || !g.title;
+  const id = m.target === "thread" ? (typeof m.threadId === "string" ? m.threadId : "") : gameId;
+  if (!id) return null;
+  return { m, key: `${m.target}:${id}`, id, gameId, unavailable };
+}
 
 /**
  * F018 § 2.4: Settings → Notifications → "Muted", with an Unmute button per row. Renders nothing against a server
@@ -25,7 +52,7 @@ export function MutedList() {
   const setMute = useSetMute();
   const toast = useToast();
   const resolve = useResolveUrl();
-  const [items, setItems] = useState<NotificationMute[] | null>(null);
+  const [items, setItems] = useState<MuteRow[] | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -40,7 +67,7 @@ export function MutedList() {
     let alive = true;
     setError(null);
     api.listNotificationMutes().then(
-      (l) => alive && setItems(Array.isArray(l?.items) ? l.items.filter((m) => m && m.game && typeof m.game.id === "string") : []),
+      (l) => alive && setItems(Array.isArray(l?.items) ? l.items.map(toRow).filter((r): r is MuteRow => r !== null) : []),
       (e) => {
         if (!alive) return;
         if (isApiError(e) && e.status === 404) setUnsupported(true);
@@ -63,23 +90,24 @@ export function MutedList() {
 
   if (unsupported) return null;
 
-  const unmute = async (m: NotificationMute) => {
-    const key = muteKey(m);
+  const unmute = async (row: MuteRow) => {
+    const { m, key, id, unavailable } = row;
     if (busyRef.current.has(key)) return;
     busyRef.current.add(key);
     setBusy(new Set(busyRef.current));
-    const id = m.target === "thread" ? m.threadId ?? "" : m.game.id;
     try {
       await setMute(m.target, id, false);
       setItems((xs) => {
         if (!xs) return xs;
-        const i = xs.findIndex((x) => muteKey(x) === key);
+        const i = xs.findIndex((x) => x.key === key);
         if (i < 0) return xs;
         const el = document.activeElement;
         if (el && listRef.current?.contains(el)) focusAt.current = i;
         return xs.filter((_, j) => j !== i);
       });
-      toast.success(m.target === "thread" ? muteToastText.threadUnmuted : muteToastText.gameUnmuted(m.game.title));
+      toast.success(
+        m.target === "thread" ? muteToastText.threadUnmuted : unavailable ? "Unmuted the unavailable game." : muteToastText.gameUnmuted(m.game.title),
+      );
     } catch (e) {
       toast.error("Couldn't unmute notifications", errorMessage(e));
     } finally {
@@ -109,24 +137,36 @@ export function MutedList() {
             </p>
           )}
           <ul className="pf-muted-list__items" ref={listRef}>
-            {items.map((m) => {
-              const key = muteKey(m);
-              const thumb = resolve(m.game.thumbnailUrl);
+            {items.map((row) => {
+              const { m, key, unavailable } = row;
+              const thumb = unavailable ? null : resolve(m.game.thumbnailUrl);
               const isThread = m.target === "thread";
+              const gameLabel = unavailable ? UNAVAILABLE_GAME_LABEL : m.game.title;
               return (
-                <li key={key} className="pf-muted-list__row">
+                <li key={key} className={`pf-muted-list__row${unavailable ? " pf-muted-list__row--gone" : ""}`}>
                   <span className="pf-muted-list__thumb" aria-hidden="true">
-                    {thumb ? <img src={thumb} alt="" width={24} height={24} loading="lazy" /> : <span className="pf-muted-list__thumb-ph">🎮</span>}
+                    {thumb ? (
+                      <img src={thumb} alt="" width={24} height={24} loading="lazy" />
+                    ) : (
+                      <span className="pf-muted-list__thumb-ph">{unavailable ? "?" : "🎮"}</span>
+                    )}
                   </span>
                   <span className="pf-muted-list__text">
-                    <Link to={`/games/${encodeURIComponent(m.game.id)}`} className="pf-muted-list__game">
-                      {m.game.title}
-                    </Link>
-                    {isThread && (
-                      <Link to={safeNotificationPath(m.path)} className="pf-muted-list__thread">
-                        Thread: “{m.excerpt ?? ""}”
+                    {unavailable ? (
+                      <span className="pf-muted-list__game pf-muted-list__game--gone">{UNAVAILABLE_GAME_LABEL}</span>
+                    ) : (
+                      <Link to={`/games/${encodeURIComponent(row.gameId)}`} className="pf-muted-list__game">
+                        {m.game.title}
                       </Link>
                     )}
+                    {isThread &&
+                      (unavailable ? (
+                        <span className="pf-muted-list__thread pf-muted pf-small">Thread</span>
+                      ) : (
+                        <Link to={safeNotificationPath(m.path)} className="pf-muted-list__thread">
+                          Thread: “{m.excerpt ?? ""}”
+                        </Link>
+                      ))}
                     <span className="pf-muted pf-small">
                       Muted <time dateTime={m.createdAt}>{formatDate(m.createdAt)}</time>
                     </span>
@@ -134,9 +174,9 @@ export function MutedList() {
                   <button
                     type="button"
                     className="pf-btn pf-btn--ghost pf-btn--sm pf-muted-list__unmute"
-                    aria-label={isThread ? `Unmute thread on ${m.game.title}` : `Unmute ${m.game.title}`}
+                    aria-label={isThread ? `Unmute thread on ${gameLabel}` : `Unmute ${gameLabel}`}
                     aria-busy={busy.has(key) || undefined}
-                    onClick={() => void unmute(m)}
+                    onClick={() => void unmute(row)}
                   >
                     Unmute
                   </button>

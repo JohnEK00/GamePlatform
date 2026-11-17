@@ -191,7 +191,7 @@ export function CollectionItemRow({ item, index, count, isOwner, onMove, onSaveN
         {isOwner && (
           <div className="pf-collection-item__controls">
             {g && index > 0 && (
-              <button type="button" className="pf-linkbtn" data-action="up" aria-label={`Move ${title} up`} onClick={() => onMove?.(index, "up")}>
+              <button type="button" className="pf-linkbtn" data-action="up" aria-label={`Move up: ${title}`} onClick={() => onMove?.(index, "up")}>
                 Move up
               </button>
             )}
@@ -200,7 +200,7 @@ export function CollectionItemRow({ item, index, count, isOwner, onMove, onSaveN
                 type="button"
                 className="pf-linkbtn"
                 data-action="down"
-                aria-label={`Move ${title} down`}
+                aria-label={`Move down: ${title}`}
                 onClick={() => onMove?.(index, "down")}
               >
                 Move down

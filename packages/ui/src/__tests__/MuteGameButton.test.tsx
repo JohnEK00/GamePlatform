@@ -38,7 +38,7 @@ async function setup(opts: { muted?: boolean; signedIn?: boolean; countStatus?: 
   return { mute, unmute };
 }
 
-const muteBtn = () => screen.queryByRole("button", { name: /Mute notifications|Notifications muted/ }) as HTMLButtonElement | null;
+const muteBtn = () => screen.queryByRole("button", { name: /^(Un)?[Mm]ute notifications$/ }) as HTMLButtonElement | null;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -65,30 +65,30 @@ describe("MuteGameButton", () => {
     const { mute, unmute } = await setup({ mute: () => new Promise((r) => (resolve = r)) });
     const b = muteBtn()!;
     expect(b.textContent).toBe("Mute notifications");
-    expect(b.getAttribute("aria-pressed")).toBe("false");
+    expect(b.hasAttribute("aria-pressed")).toBe(false);
     expect(b.title).toBe("Stop notifications about this game: comments, replies, hearts and pins");
     expect(screen.getByTestId("unread").textContent).toBe("9");
     fireEvent.click(b);
     expect(mute).toHaveBeenCalledWith("g1");
-    expect(muteBtn()!.textContent).toBe("Notifications muted");
-    expect(muteBtn()!.getAttribute("aria-pressed")).toBe("true");
+    expect(muteBtn()!.textContent).toBe("Unmute notifications");
+    expect(muteBtn()!.textContent).toBe("Unmute notifications");
     await act(async () => resolve({ muted: true, unread: 4 }));
     expect(screen.getByTestId("unread").textContent).toBe("4");
     expect(await screen.findByText("Muted notifications for Space Dodge")).toBeTruthy();
     expect(muteBtn()!.title).toBe("Click to get notifications about this game again");
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() => expect(unmute).toHaveBeenCalledWith("g1"));
-    await waitFor(() => expect(muteBtn()!.getAttribute("aria-pressed")).toBe("false"));
+    await waitFor(() => expect(muteBtn()!.textContent).toBe("Mute notifications"));
     expect(await screen.findByText("You'll get notifications for Space Dodge again")).toBeTruthy();
   });
 
   it("unmutes from the muted state", async () => {
     const { unmute } = await setup({ muted: true });
-    expect(muteBtn()!.textContent).toBe("Notifications muted");
+    expect(muteBtn()!.textContent).toBe("Unmute notifications");
     fireEvent.click(muteBtn()!);
     expect(unmute).toHaveBeenCalledWith("g1");
     expect(await screen.findByText("You'll get notifications for Space Dodge again")).toBeTruthy();
-    expect(muteBtn()!.getAttribute("aria-pressed")).toBe("false");
+    expect(muteBtn()!.textContent).toBe("Mute notifications");
   });
 
   it("reverts on error and shows the server message (cap)", async () => {
@@ -96,9 +96,9 @@ describe("MuteGameButton", () => {
       mute: async () => Promise.reject(new ApiError("validation", "You can mute at most 500 games and threads; unmute some in Settings", 422)),
     });
     fireEvent.click(muteBtn()!);
-    expect(muteBtn()!.getAttribute("aria-pressed")).toBe("true");
+    expect(muteBtn()!.textContent).toBe("Unmute notifications");
     expect(await screen.findByText("You can mute at most 500 games and threads; unmute some in Settings")).toBeTruthy();
-    expect(muteBtn()!.getAttribute("aria-pressed")).toBe("false");
+    expect(muteBtn()!.textContent).toBe("Mute notifications");
     expect(screen.getByTestId("unread").textContent).toBe("9");
   });
 });

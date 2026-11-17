@@ -27,8 +27,9 @@ function BellIcon({ off }: { off: boolean }) {
 }
 
 /**
- * F018 § 2.1: "Mute notifications" / "Notifications muted" on the game page. Signed-in users only, and only when
- * the server sends `notificationsMuted` and supports notifications.
+ * F018 § 2.1: "Mute notifications" / "Unmute notifications" on the game page. The visible text is the accessible
+ * name and changes with the state, so there is no `aria-pressed` (review 6, L1); the muted state is also styled.
+ * Signed-in users only, and only when the server sends `notificationsMuted` and supports notifications.
  */
 export function MuteGameButton({ gameId, gameTitle, muted: initial, className = "pf-btn pf-btn--ghost pf-btn--sm pf-mute-btn" }: MuteGameButtonProps) {
   const { user } = useAuth();
@@ -42,12 +43,11 @@ export function MuteGameButton({ gameId, gameTitle, muted: initial, className = 
     <button
       type="button"
       className={`${className}${muted ? " is-on" : ""}`}
-      aria-pressed={muted}
       title={muted ? "Click to get notifications about this game again" : "Stop notifications about this game: comments, replies, hearts and pins"}
       onClick={() => void toggle(!muted)}
     >
       <BellIcon off={muted} />
-      <span>{muted ? "Notifications muted" : "Mute notifications"}</span>
+      <span>{muted ? "Unmute notifications" : "Mute notifications"}</span>
     </button>
   );
 }

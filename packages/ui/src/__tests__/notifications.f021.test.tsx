@@ -51,7 +51,7 @@ describe("F021: addedToCollection notifications", () => {
   });
 
   it("muteActionFor → the game mute", () => {
-    expect(muteActionFor(added())).toEqual({ target: "game", id: "g7", label: "Mute notifications for Space Dodge" });
+    expect(muteActionFor(added())).toEqual({ target: "game", id: "g7", label: "Mute game: Space Dodge" });
     expect(muteActionFor(added({ game: null }))).toBeNull();
   });
 

@@ -52,7 +52,7 @@ describe("F018: muteActionFor", () => {
     expect(muteActionFor(notif({ id: "1", kind, game, threadId: "t1" }))).toEqual({
       target: "thread",
       id: "t1",
-      label: "Mute notifications for this thread on Space Dodge",
+      label: "Mute thread on Space Dodge",
     });
   });
   it.each(["reply", "heart", "pinned"] as const)("%s without a threadId (older server) → null", (kind) => {
@@ -60,7 +60,7 @@ describe("F018: muteActionFor", () => {
     expect(muteActionFor(notif({ id: "1", kind, game, threadId: null }))).toBeNull();
   });
   it.each(["comment", "gamePublished"] as const)("%s with a game → mute game", (kind) => {
-    expect(muteActionFor(notif({ id: "1", kind, game, threadId: null }))).toEqual({ target: "game", id: "g1", label: "Mute notifications for Space Dodge" });
+    expect(muteActionFor(notif({ id: "1", kind, game, threadId: null }))).toEqual({ target: "game", id: "g1", label: "Mute game: Space Dodge" });
   });
   it("comment / gamePublished without a game → null", () => {
     expect(muteActionFor(notif({ id: "1", kind: "comment", game: null }))).toBeNull();

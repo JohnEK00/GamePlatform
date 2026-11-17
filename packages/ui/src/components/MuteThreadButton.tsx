@@ -9,7 +9,10 @@ export type MuteThreadButtonProps = {
   authorName: string;
 };
 
-/** F018 § 2.2: link-style "Mute thread" / "Unmute thread" in a top-level comment's action row. */
+/**
+ * F018 § 2.2: link-style "Mute thread" / "Unmute thread" in a top-level comment's action row. The label changes
+ * with the state and starts with the visible text (WCAG 2.5.3), so there is no `aria-pressed` (review 6, L1).
+ */
 export function MuteThreadButton({ commentId, muted: initial, authorName }: MuteThreadButtonProps) {
   const { muted, toggle } = useMuteToggle("thread", commentId, initial, {
     muted: muteToastText.threadMuted,
@@ -21,8 +24,7 @@ export function MuteThreadButton({ commentId, muted: initial, authorName }: Mute
       type="button"
       id={`mute-btn-${commentId}`}
       className={`pf-linkbtn pf-comment__mute${on ? " is-on" : ""}`}
-      aria-pressed={on}
-      aria-label={`${on ? "Unmute" : "Mute"} notifications for the thread by ${authorName}`}
+      aria-label={`${on ? "Unmute thread" : "Mute thread"} by ${authorName}`}
       onClick={() => void toggle(!on)}
     >
       {on ? "Unmute thread" : "Mute thread"}
