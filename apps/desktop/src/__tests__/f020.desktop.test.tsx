@@ -230,7 +230,9 @@ describe("F020 desktop: edit page Comments panel", () => {
     const put = calls.filter((c) => c.method === "PUT");
     expect(put).toEqual([{ method: "PUT", url: `${SERVER}/api/games/g1/comment-settings`, body: { mode: "off", slowModeSecs: 300 } }]);
     await waitFor(() => (document.body.textContent?.includes("Comment settings saved") ? true : null), "saved message");
-    expect(save.disabled).toBe(true);
+    // Review 8 L3: Save is aria-disabled (never `disabled`) after saving, so focus isn't dropped.
+    expect(save.disabled).toBe(false);
+    expect(save.getAttribute("aria-disabled")).toBe("true");
     expect(window.location.hash).toBe("#/games/g1/edit");
   });
 });
