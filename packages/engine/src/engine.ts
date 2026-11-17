@@ -328,7 +328,7 @@ export class Engine {
   /** Host → game messages (only from window.parent). */
   private onMessage(e: MessageEvent): void {
     if (e.source !== window.parent) return;
-    const d = e.data as { type?: unknown; muted?: unknown; data?: unknown; requestId?: unknown; overrides?: unknown } | null;
+    const d = e.data as { type?: unknown; muted?: unknown; data?: unknown; requestId?: unknown; overrides?: unknown; gamepad?: unknown } | null;
     if (!d || typeof d !== 'object' || typeof d.type !== 'string') return;
     switch (d.type) {
       case 'webgame:pause':
@@ -336,6 +336,7 @@ export class Engine {
         break;
       case 'webgame:resume':
         this.setPaused('host', false);
+        this.input.latchGamepads(); // F016: a button held on resume (e.g. just captured) never fires `pressed`
         break;
       case 'webgame:mute':
         this.audio.muted = d.muted === undefined ? true : !!d.muted;
@@ -351,8 +352,10 @@ export class Engine {
       case 'webgame:screenshot-request':
         this.onScreenshotRequest(d.requestId);
         break;
-      case 'webgame:controls': // F009: replaces all previous overrides; applied at the next step
-        if (isOverridesObject(d.overrides)) this.input.setOverrides(d.overrides);
+      case 'webgame:controls': // F009/F016: replaces all previous key and gamepad overrides; applied at the next step
+        // A present but invalid `gamepad` rejects the whole message (keys are not applied either).
+        if (isOverridesObject(d.overrides) && (d.gamepad === undefined || isOverridesObject(d.gamepad)))
+          this.input.setOverrides(d.overrides, d.gamepad);
         break;
     }
   }

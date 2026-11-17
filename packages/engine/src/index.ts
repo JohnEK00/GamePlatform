@@ -21,12 +21,12 @@ export type { ScreenshotOptions, ShareScreenshotOptions, ScreenshotError, Captur
 export {
   Input, InputState, GamepadState, GamepadButtons, computeLetterbox, clientToGame, combineAxis,
 } from './input';
-export type { MouseState, TouchPoint, Letterbox, GamepadButtonKey } from './input';
+export type { MouseState, TouchPoint, Letterbox, GamepadButtonKey, InputDevice } from './input';
 export {
   BINDABLE_KEYS, GAMEPAD_BUTTON_NAMES, keyLabel, gamepadLabel, parseActions, applyOverrides, ActionMap,
   isBindableKey, isGamepadButtonName, MAX_ACTIONS, MAX_ACTION_KEYS, MAX_ACTION_GAMEPAD, ACTION_NAME_MAX, ACTION_ID_RE,
 } from './actions';
-export type { ControlAction, GamepadButtonName, ButtonSource, PadSource } from './actions';
+export type { ControlAction, GamepadButtonName, GamepadOverrides, ButtonSource, PadSource } from './actions';
 export { FixedTimestep } from './loop';
 export {
   Vec2, Rect, Color, Random, MathUtil, clamp, lerp, invLerp, remap, approach, wrap, degToRad, radToDeg, damp,

@@ -348,3 +348,250 @@ describe('webgame:controls message (F009)', () => {
     expect(input.actions.map((a) => a.keys)).toEqual([['KeyJ'], ['KeyE'], ['KeyI'], ['KeyK'], ['Space', 'KeyZ']]);
   });
 });
+
+// --- F016: gamepad remapping, lastDevice, actionLabel(device), resume latch --------------
+
+/** A mutable fake pad behind navigator.getGamepads (buttons by index, axes). */
+function livePad(): { set(buttons: PadButtons, axes?: number[]): void } {
+  let buttons: PadButtons = {};
+  let axes = [0, 0, 0, 0];
+  vi.stubGlobal('navigator', {
+    getGamepads: () => [{
+      connected: true, id: 'pad', axes,
+      buttons: Array.from({ length: 17 }, (_, k) => ({ pressed: !!buttons[k], value: buttons[k] ? 1 : 0 })),
+    }],
+  });
+  return { set(b, a = [0, 0, 0, 0]) { buttons = b; axes = a; } };
+}
+
+describe('gamepad overrides on Input (F016)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('an action remapped from A to B fires on B, no longer on A; edges stay action-level', () => {
+    const pad = livePad();
+    const i = makeInput(MOVE);
+    i.setOverrides({}, { fire: ['B', 'X'] });
+    expect(i.actions[4]!.gamepad).toEqual(['B', 'X']);
+    expect(i.defaultActions[4]!.gamepad).toEqual(['A']);
+    const read = (): [boolean, boolean, boolean] => [i.actionDown('fire'), i.actionPressed('fire'), i.actionReleased('fire')];
+    pad.set({ 0: true }); // A
+    expect(step(i, () => {}, read)).toEqual([false, false, false]);
+    pad.set({});
+    step(i, () => {}, read);
+    pad.set({ 1: true }); // B
+    expect(step(i, () => {}, read)).toEqual([true, true, false]);
+    pad.set({ 1: true, 2: true }); // X too while B is held: no second pressed
+    expect(step(i, () => {}, read)).toEqual([true, false, false]);
+    pad.set({ 2: true }); // B released, X still held
+    expect(step(i, () => {}, read)).toEqual([true, false, false]);
+    pad.set({});
+    expect(step(i, () => {}, read)).toEqual([false, false, true]);
+    // keys keep working alongside
+    expect(step(i, () => i.state.press('Space'), read)).toEqual([true, true, false]);
+  });
+
+  it('setOverrides without gamepad restores the gamepad defaults; [] unbinds the pad', () => {
+    const i = makeInput(MOVE);
+    i.setOverrides({ fire: ['KeyK'] }, { fire: ['B'] });
+    expect(i.actions[4]).toMatchObject({ keys: ['KeyK'], gamepad: ['B'] });
+    i.setOverrides({ fire: ['KeyK'] });
+    expect(i.actions[4]).toMatchObject({ keys: ['KeyK'], gamepad: ['A'] });
+    i.setOverrides({}, { fire: [] });
+    expect(i.actions[4]).toMatchObject({ keys: ['Space', 'KeyZ'], gamepad: [] });
+    i.setActions(MOVE); // new declarations clear both kinds of override
+    expect(i.actions[4]!.gamepad).toEqual(['A']);
+  });
+
+  it('actionLabel with each device value', () => {
+    const i = makeInput(parseActions([
+      { id: 'jump', name: 'Jump', keys: ['Space'], gamepad: ['A'] },
+      { id: 'fire', name: 'Fire', keys: ['Mouse0', 'KeyZ'] },
+      { id: 'pad', name: 'Pad', gamepad: ['Up'] },
+    ]).actions);
+    expect(i.lastDevice).toBe('keyboard');
+    expect([i.actionLabel('jump'), i.actionLabel('jump', 'keyboard'), i.actionLabel('jump', 'gamepad'), i.actionLabel('jump', 'auto')])
+      .toEqual(['Space', 'Space', 'A', 'Space']);
+    expect([i.actionLabel('fire', 'keyboard'), i.actionLabel('fire', 'gamepad'), i.actionLabel('fire', 'auto')]).toEqual(['Left click', '', 'Left click']);
+    expect([i.actionLabel('pad', 'keyboard'), i.actionLabel('pad', 'gamepad'), i.actionLabel('pad', 'auto'), i.actionLabel('pad')])
+      .toEqual(['', 'D-pad ↑', 'D-pad ↑', 'D-pad ↑']);
+
+    const pad = livePad();
+    pad.set({ 3: true });
+    step(i, () => {}, () => {});
+    expect(i.lastDevice).toBe('gamepad');
+    expect(i.actionLabel('jump', 'auto')).toBe('A');
+    expect(i.actionLabel('fire', 'auto')).toBe('Left click'); // no gamepad button: falls back to the key
+    expect(i.actionLabel('jump')).toBe('Space'); // no device: unchanged
+    i.setOverrides({}, { jump: ['B'] });
+    expect(i.actionLabel('jump', 'auto')).toBe('B'); // follows the remap
+    i.setOverrides({}, { jump: [] });
+    expect(i.actionLabel('jump', 'auto')).toBe('Space');
+    expect(i.actionLabel('jump', 'gamepad')).toBe('');
+  });
+
+  it('actionLabel with a device still warns once for unknown ids', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const i = makeInput(MOVE);
+    for (const d of [undefined, 'keyboard', 'gamepad', 'auto'] as const) expect(i.actionLabel('nope', d)).toBe('');
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('lastDevice becomes "gamepad" on a button edge or a stick crossing 0.5, not while held', () => {
+    const pad = livePad();
+    const i = makeInput(MOVE);
+    const dev = (): string => step(i, () => {}, () => i.lastDevice);
+    expect(dev()).toBe('keyboard'); // idle pad
+    pad.set({ 16: true }); // any button counts, Home included
+    expect(dev()).toBe('gamepad');
+    // a held button doesn't keep re-claiming the device
+    (i as unknown as { device: string }).device = 'keyboard';
+    expect(dev()).toBe('keyboard');
+    pad.set({});
+    expect(dev()).toBe('keyboard'); // a release is not activity
+    pad.set({}, [0.49, 0, 0, 0]);
+    expect(dev()).toBe('keyboard');
+    pad.set({}, [0.49, 0, 0, -0.5]); // right stick Y crosses
+    expect(dev()).toBe('gamepad');
+    (i as unknown as { device: string }).device = 'keyboard';
+    pad.set({}, [0.49, 0, 0, -0.9]); // already past 0.5: no crossing
+    expect(dev()).toBe('keyboard');
+    pad.set({}, [0, 0, 0, 0, 0.9]); // axes beyond the two sticks don't count
+    expect(dev()).toBe('keyboard');
+    pad.set({}, [-0.7, 0, 0, 0]);
+    expect(dev()).toBe('gamepad');
+  });
+
+  it('a gamepad edge in the same step as a key press wins', () => {
+    const pad = livePad();
+    const i = makeInput(MOVE);
+    pad.set({ 0: true });
+    (i as unknown as { device: string }).device = 'keyboard'; // as if a keydown arrived before this step
+    expect(step(i, () => {}, () => i.lastDevice)).toBe('gamepad');
+  });
+});
+
+describe('resume latch (F016)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('GamepadState.latch: the next poll reports held buttons as down without edges', () => {
+    const g = new GamepadState();
+    const pad = (a: boolean, b = false) =>
+      ({ connected: true, id: 'pad', axes: [0, 0], buttons: [{ pressed: a, value: 0 }, { pressed: b, value: 0 }] }) as unknown as Gamepad;
+    g.poll(pad(false));
+    g.latch();
+    g.poll(pad(true));
+    expect(g.isDown('A')).toBe(true);
+    expect(g.wasPressed('A')).toBe(false);
+    g.poll(pad(true, true)); // the latch lasts one poll only
+    expect(g.wasPressed('B')).toBe(true);
+    g.poll(pad(false, true));
+    expect(g.wasReleased('A')).toBe(true);
+    g.latch();
+    g.poll(pad(false, false)); // a release at the latched poll is not reported either
+    expect(g.wasReleased('B')).toBe(false);
+    g.latch();
+    g.poll(null); // a latch consumed by a disconnected poll does not linger
+    g.poll(pad(true));
+    expect(g.wasPressed('A')).toBe(true);
+  });
+
+  function fakeEngine(): { input: Input; send(data: unknown): void } {
+    const parent = {};
+    vi.stubGlobal('window', { parent });
+    const e = Object.create(Engine.prototype) as Engine;
+    const input = makeInput(MOVE);
+    Object.assign(e, { input, pauseReasons: new Set() });
+    const onMessage = (e as unknown as { onMessage(ev: { data: unknown; source: unknown }): void }).onMessage.bind(e);
+    return { input, send: (data) => onMessage({ data, source: parent }) };
+  }
+
+  it('a button held across webgame:resume is down but not pressed; a fresh press fires', () => {
+    const pad = livePad();
+    const { input: i, send } = fakeEngine();
+    step(i, () => {}, () => {});
+    pad.set({ 0: true }); // pressed while the panel was open (no step ran)
+    send({ type: 'webgame:resume' });
+    const read = (): boolean[] => [i.gamepad(0).isDown('A'), i.gamepad(0).wasPressed('A'), i.actionDown('fire'), i.actionPressed('fire')];
+    expect(step(i, () => {}, read)).toEqual([true, false, true, false]);
+    expect(step(i, () => {}, read)).toEqual([true, false, true, false]);
+    pad.set({});
+    expect(step(i, () => {}, () => [i.gamepad(0).wasReleased('A'), i.actionReleased('fire')])).toEqual([true, true]);
+    pad.set({ 0: true });
+    expect(step(i, () => {}, read)).toEqual([true, true, true, true]);
+  });
+
+  it('latchGamepads affects every pad and does not change lastDevice', () => {
+    const pad = livePad();
+    const i = makeInput(MOVE);
+    step(i, () => {}, () => {});
+    pad.set({ 1: true });
+    i.latchGamepads();
+    expect(step(i, () => {}, () => [i.anyPressed(), i.lastDevice])).toEqual([false, 'keyboard']);
+  });
+});
+
+describe('webgame:controls with gamepad (F016)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function fakeEngine(): { input: Input; send(data: unknown): void } {
+    const parent = {};
+    vi.stubGlobal('window', { parent });
+    const e = Object.create(Engine.prototype) as Engine;
+    const input = makeInput(MOVE);
+    Object.assign(e, { input });
+    const onMessage = (e as unknown as { onMessage(ev: { data: unknown; source: unknown }): void }).onMessage.bind(e);
+    return { input, send: (data) => onMessage({ data, source: parent }) };
+  }
+  const pads = (i: Input): string[][] => i.actions.map((a) => [...a.gamepad]);
+
+  it('applies gamepad overrides; absent gamepad means defaults', () => {
+    const { input, send } = fakeEngine();
+    send({ type: 'webgame:controls', overrides: {} });
+    expect(pads(input)).toEqual([['Left'], ['Right'], [], [], ['A']]);
+    send({ type: 'webgame:controls', overrides: { fire: ['KeyK'] }, gamepad: { fire: ['B'], left: ['LB', 'Home'], nope: ['A'] } });
+    expect(pads(input)).toEqual([['LB'], ['Right'], [], [], ['B']]);
+    expect(input.actions[4]!.keys).toEqual(['KeyK']);
+  });
+
+  it('a second message without gamepad clears the earlier gamepad overrides', () => {
+    const { input, send } = fakeEngine();
+    send({ type: 'webgame:controls', overrides: {}, gamepad: { fire: ['B'] } });
+    expect(input.actions[4]!.gamepad).toEqual(['B']);
+    send({ type: 'webgame:controls', overrides: { fire: ['KeyK'] } });
+    expect(input.actions[4]).toMatchObject({ keys: ['KeyK'], gamepad: ['A'] });
+  });
+
+  it('an invalid gamepad field ignores the whole message (keys are not applied either)', () => {
+    const { input, send } = fakeEngine();
+    send({ type: 'webgame:controls', overrides: { fire: ['KeyQ'] }, gamepad: { fire: ['X'] } });
+    const big: Record<string, string[]> = {};
+    for (let k = 0; k < 33; k++) big[`x${k}`] = [];
+    for (const gamepad of [[['B']], big, null, 'B', 5, new Map([['fire', ['B']]])])
+      send({ type: 'webgame:controls', overrides: { fire: ['KeyK'] }, gamepad });
+    expect(input.actions[4]).toMatchObject({ keys: ['KeyQ'], gamepad: ['X'] });
+    delete big.x0; // 32 keys is fine
+    big.fire = ['Y'];
+    expect(Object.keys(big)).toHaveLength(33);
+    send({ type: 'webgame:controls', overrides: { fire: ['KeyK'] }, gamepad: big });
+    expect(input.actions[4]).toMatchObject({ keys: ['KeyQ'], gamepad: ['X'] });
+    delete big.x1;
+    send({ type: 'webgame:controls', overrides: { fire: ['KeyK'] }, gamepad: big });
+    expect(input.actions[4]).toMatchObject({ keys: ['KeyK'], gamepad: ['Y'] });
+  });
+
+  it('an invalid overrides field ignores the gamepad too', () => {
+    const { input, send } = fakeEngine();
+    send({ type: 'webgame:controls', overrides: null, gamepad: { fire: ['B'] } });
+    send({ type: 'webgame:controls', gamepad: { fire: ['B'] } });
+    expect(input.actions[4]!.gamepad).toEqual(['A']);
+  });
+});

@@ -683,3 +683,14 @@ engine.input.actionLabel(id: string, device?: "keyboard" | "gamepad" | "auto"): 
 - Players can now remap gamepad buttons too. Read actions (`actionPressed("jump")`) instead of raw buttons (`gamepad(0).wasPressed("A")`) for everything you declared.
 - Use `actionLabel("jump", "auto")` in prompts so they show "Space" to keyboard players and "A" (or the player's remapped button) to controller players.
 - Menus built with `engine.ui` keep the fixed gamepad D-pad, `A` and `B` navigation fallbacks (F012), so a remap can never lock a player out of a menu.
+
+
+### F016 implementation notes (engine)
+- **Release at the latched poll:** the latched step has no edges, so a button released at exactly that poll doesn't report `wasReleased` either. Stick values are latched too, so a stick already pushed past 0.5 doesn't change `lastDevice`.
+- **Latch with no pad connected:** the next poll uses up the latch even when no pad is connected. A pad that connects later with a button already held does fire `pressed`.
+- **`lastDevice` sources:**
+  - Gamepad: any button index counts, including `Home` and indices above 16. Sticks count on axes 0–3 only.
+  - Mouse and touch: `mousedown` and `touchstart` count only on the canvas. Mouse events that the browser generates from touch are ignored.
+  - Gamepad input is checked when each step starts, so it wins a tie with keyboard or mouse input from the same step.
+- **Window `focus` latch:** registered when input is attached, alongside the `webgame:resume` latch.
+- **`setActions`:** clears gamepad overrides as well as key overrides.

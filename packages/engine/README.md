@@ -125,7 +125,7 @@ camera shake. Then a render pass clears to `background` and runs `game.render` �
 **Automatic behavior:**
 * **Visibility:** the game pauses while the tab or iframe is hidden.
 * **Audio unlock:** audio is unlocked on the first pointer or key gesture.
-* **Host messages:** the engine handles `webgame:pause`, `webgame:resume`, `webgame:mute {muted}` and `webgame:screenshot-request {requestId}` from the parent window.
+* **Host messages:** the engine handles `webgame:pause`, `webgame:resume`, `webgame:mute {muted}`, `webgame:screenshot-request {requestId}` and `webgame:controls {overrides, gamepad?}` from the parent window.
 * **Crashes:** if `update` or `render` throws, the loop stops, an error overlay appears, and `webgame:error` is posted. Uncaught errors and rejections are also posted.
 
 ## Debug overlay
@@ -205,14 +205,14 @@ Keys use `KeyboardEvent.code` (`"ArrowLeft"`, `"KeyA"`, `"Space"`). Mouse button
   * `connected`, `axes`, `leftX`, `leftY`, `rightX`, `rightY`
   * `isDown(b)`, `wasPressed(b)`, `wasReleased(b)`, where `b` is an index or a name: `A B X Y LB RB LT RT Back Start LS RS Up Down Left Right Home` (type `GamepadButtonKey`)
 * `axis('horizontal' | 'vertical')` returns -1..1 from the arrow keys, WASD, or the first gamepad (left stick with a deadzone, plus the d-pad). With movement actions it follows them instead (see below)
-* `actions`, `defaultActions`, `actionDown/actionPressed/actionReleased(id)`, `actionLabel(id)`, `keyLabel(code)`, `gamepadLabel(name)`: see [Actions and remapping](#actions-and-remapping-f009)
+* `actions`, `defaultActions`, `actionDown/actionPressed/actionReleased(id)`, `actionLabel(id, device?)`, `keyLabel(code)`, `gamepadLabel(name)`, `lastDevice`: see [Actions and remapping](#actions-and-remapping-f009)
 * `typed`: printable characters typed this step
 
 ## Actions and remapping (F009)
 
-Contract: docs/GAME_FORMAT.md § F009. Declare every control your game uses as a named **action** in game.json.
-Players see them in the player's ⌨ controls panel and can remap the keys (up to 3 per action); the change reaches the
-running game at once through `webgame:controls`.
+Contract: docs/GAME_FORMAT.md § F009 and § F016. Declare every control your game uses as a named **action** in game.json.
+Players see them in the player's ⌨ controls panel and can remap the keys (up to 3 per action) and, since F016, the
+gamepad buttons (up to 2 per action); the change reaches the running game at once through `webgame:controls`.
 
 ```json
 "actions": [
@@ -264,6 +264,36 @@ render(engine) {
 * **Read actions, not codes.** `isDown/wasPressed/wasReleased(code)`, `mouse`, `touches`, `gamepad(i)`, `anyPressed()` and
   `typed` still report the physical input and ignore remapping (useful for text entry and debug keys). A game that declares
   actions but checks `wasPressed('Space')` can't be remapped.
+### Gamepad remapping, device-aware prompts and the resume latch (F016)
+
+* **Gamepad buttons are remappable.** The parent's `webgame:controls` message may carry `gamepad: { [actionId]: GamepadButtonName[] }`;
+  each value replaces that action's buttons (valid names only, no `Home`, de-duplicated, first 2; `[]` = no buttons, keys still apply).
+  Every message replaces both the key and the gamepad overrides, so a message without `gamepad` restores the gamepad defaults.
+  A `gamepad` field that is present but not a plain object with at most 32 keys makes the engine ignore the whole message.
+  `input.actions` shows both kinds of override; `input.defaultActions` is unchanged.
+* So **read actions, not buttons**: `input.actionPressed('jump')`, never `input.gamepad(0).wasPressed('A')`, for anything
+  you declared. `gamepad(i)` keeps reporting the physical buttons and ignores remapping, like raw keys.
+* `input.lastDevice`: `"keyboard"` (initial), `"mouse"`, `"touch"` or `"gamepad"`, the kind of device the player pressed last.
+  A non-repeat keydown, a mouse button, a touch / pen contact, or (checked at the start of each fixed step) a gamepad button
+  edge or a stick axis crossing 0.5. Mouse movement, the wheel, key repeat and cancelled releases don't change it; a gamepad
+  edge wins over DOM events that arrived before the same step.
+* `input.actionLabel(id, device?)`: without `device`, as above. `"keyboard"`: the first key (mouse codes included) or `""`.
+  `"gamepad"`: the first gamepad button or `""`. `"auto"`: the gamepad button when `lastDevice === "gamepad"` and the action has
+  one, otherwise the no-argument label. Use `"auto"` in prompts:
+
+```js
+render(engine) {
+  // "Press Space" for keyboard players; "Press A" (or the remapped button) once they touch a controller.
+  engine.renderer.drawText(`Press ${engine.input.actionLabel('jump', 'auto')} to start`, 10, 10);
+}
+```
+
+* **Resume latch:** on host `webgame:resume` and on window `focus`, the engine latches every gamepad (`input.latchGamepads()`).
+  A button held at that moment, such as the one the player just captured in the controls panel, reports `isDown` and
+  `actionDown` but not `wasPressed` / `actionPressed`; letting go reports `wasReleased` as usual, and the next press fires.
+* Menus built with `engine.ui` (F012) keep their fixed gamepad D-pad / `A` / `B` navigation fallbacks, so a remap can never
+  lock a player out of a menu.
+
 * The dev harness (`index.html`, `studio.html`) has a ⌨ button with a small remapping panel that sends `webgame:controls`
   (persisted in localStorage on `index.html`, in memory on `studio.html`).
 

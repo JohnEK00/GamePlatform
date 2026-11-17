@@ -128,18 +128,26 @@ export const GamepadButtons = {
 /** Every standard button name including `Home` (actions use the narrower `GamepadButtonName`). */
 export type GamepadButtonKey = keyof typeof GamepadButtons;
 
+/** Stick threshold for `lastDevice` (F016): an axis crossing it counts as gamepad input. */
+const STICK_ACTIVITY = 0.5;
+
 export class GamepadState {
   connected = false;
   id = '';
   axes: number[] = [];
   private prev: boolean[] = [];
   private cur: boolean[] = [];
+  private prevAxes: number[] = [];
+  private latched = false;
   /** Analog values 0..1 per button (triggers). */
   values: number[] = [];
 
   /** Engine-internal: refresh from a navigator Gamepad snapshot. */
   poll(gp: Gamepad | null | undefined): void {
     this.prev = this.cur;
+    this.prevAxes = this.axes;
+    const latched = this.latched;
+    this.latched = false;
     if (!gp || !gp.connected) {
       this.connected = false;
       this.cur = [];
@@ -152,6 +160,32 @@ export class GamepadState {
     this.axes = Array.from(gp.axes);
     this.cur = gp.buttons.map((b) => b.pressed);
     this.values = gp.buttons.map((b) => b.value);
+    if (latched) {
+      // F016 resume latch: what is held now counts as already held (no edges this poll).
+      this.prev = [...this.cur];
+      this.prevAxes = [...this.axes];
+    }
+  }
+  /**
+   * Engine-internal (F016 resume latch): the next `poll` copies the new pressed state into the
+   * previous one, so a button held at that moment reports `isDown` but not `wasPressed`.
+   */
+  latch(): void {
+    this.latched = true;
+  }
+  /**
+   * Engine-internal (F016 `lastDevice`): a button went down this poll, or a left/right stick axis
+   * (0..3) crossed from below 0.5 to 0.5 or more in absolute value.
+   */
+  active(): boolean {
+    if (!this.connected) return false;
+    for (let i = 0; i < this.cur.length; i++) if (this.cur[i] && !this.prev[i]) return true;
+    for (let i = 0; i < 4; i++) {
+      const now = Math.abs(this.axes[i] ?? 0);
+      const before = Math.abs(this.prevAxes[i] ?? 0);
+      if (now >= STICK_ACTIVITY && before < STICK_ACTIVITY) return true;
+    }
+    return false;
   }
   private idx(b: number | GamepadButtonKey): number {
     return typeof b === 'number' ? b : GamepadButtons[b];
@@ -214,6 +248,9 @@ export interface MouseState {
   inside: boolean;
 }
 
+/** The kind of device the player used last (F016 `input.lastDevice`). */
+export type InputDevice = 'keyboard' | 'mouse' | 'touch' | 'gamepad';
+
 const PREVENT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'PageUp', 'PageDown', 'Home', 'End', 'Backspace']);
 
 /** DOM-attached input. Keys use KeyboardEvent.code ("ArrowLeft", "KeyA", "Space"); mouse buttons are "Mouse0/1/2". */
@@ -232,6 +269,8 @@ export class Input {
   private defaults: readonly ControlAction[] = Object.freeze([]);
   private effective: readonly ControlAction[] = Object.freeze([]);
   private overrides: unknown = {};
+  private gamepadOverrides: unknown = undefined;
+  private device: InputDevice = 'keyboard';
   /** Map used by the action queries; swapped for `next` at the next beginStep. */
   private map = new ActionMap([]);
   private next: ActionMap | null = null;
@@ -257,7 +296,10 @@ export class Input {
 
     on(window, 'keydown', (e) => {
       if ((PREVENT.has(e.code) || (this.next ?? this.map).boundKeys.has(e.code)) && !e.ctrlKey && !e.metaKey) e.preventDefault();
-      if (!e.repeat) this.state.press(e.code);
+      if (!e.repeat) {
+        this.state.press(e.code);
+        this.device = 'keyboard';
+      }
       if (e.key.length === 1) this.typedAcc += e.key;
     });
     on(window, 'keyup', (e) => this.state.release(e.code));
@@ -265,6 +307,8 @@ export class Input {
       this.state.releaseAll();
       this.mouse.down = false;
     });
+    // F016 resume latch: a gamepad button held while the page was unfocused never fires `pressed`.
+    on(window, 'focus', () => this.latchGamepads());
 
     const pos = (e: PointerEvent | WheelEvent): { x: number; y: number } =>
       clientToGame(e.clientX, e.clientY, c.getBoundingClientRect(), this.gameW, this.gameH);
@@ -282,6 +326,8 @@ export class Input {
       } catch {
         /* ignore */
       }
+      if (e.pointerType === 'mouse') this.device = 'mouse';
+      else if (e.pointerType === 'touch' || e.pointerType === 'pen') this.device = 'touch';
       const p = pos(e);
       if (e.pointerType === 'touch') {
         const t: TouchPoint = { id: e.pointerId, x: p.x, y: p.y, startX: p.x, startY: p.y, pressed: true, released: false };
@@ -322,6 +368,12 @@ export class Input {
     };
     on(window, 'pointerup', (e: PointerEvent) => up(e, false));
     on(window, 'pointercancel', (e: PointerEvent) => up(e, true));
+    // F016 lastDevice: legacy mouse / touch events (a touch's compatibility mousedown doesn't count).
+    on(c, 'mousedown', (e: MouseEvent) => {
+      const caps = (e as MouseEvent & { sourceCapabilities?: { firesTouchEvents?: boolean } | null }).sourceCapabilities;
+      if (!caps?.firesTouchEvents) this.device = 'mouse';
+    });
+    on(c, 'touchstart', () => void (this.device = 'touch'), { passive: true });
     on(c, 'pointerenter', () => void (this.mouse.inside = true));
     on(c, 'pointerleave', () => void (this.mouse.inside = false));
     on(c, 'contextmenu', (e: MouseEvent) => e.preventDefault());
@@ -352,6 +404,8 @@ export class Input {
     this.touches = Array.from(this.touchMap.values());
     const list = this.readGamepads();
     for (let i = 0; i < this.pads.length; i++) this.pads[i]!.poll(list[i] ?? null);
+    // Gamepads are checked when the step starts, after that step's DOM events: they win a tie.
+    if (this.pads.some((p) => p.active())) this.device = 'gamepad';
     this.updateActions();
   }
 
@@ -370,15 +424,20 @@ export class Input {
   setActions(defaults: readonly ControlAction[]): void {
     this.defaults = Object.freeze([...defaults]);
     this.overrides = {};
+    this.gamepadOverrides = undefined;
     this.rebuild();
   }
-  /** Engine-internal: player key overrides (`webgame:controls`); replaces the previous overrides. */
-  setOverrides(overrides: unknown): void {
-    this.overrides = overrides;
+  /**
+   * Engine-internal: player overrides (`webgame:controls`: F009 `overrides` keys, F016 `gamepad`).
+   * Replaces both previous sets; an absent `gamepad` restores the gamepad defaults. Applied at the next step.
+   */
+  setOverrides(keys: unknown, gamepad?: unknown): void {
+    this.overrides = keys;
+    this.gamepadOverrides = gamepad;
     this.rebuild();
   }
   private rebuild(): void {
-    this.effective = Object.freeze(applyOverrides(this.defaults, this.overrides));
+    this.effective = Object.freeze(applyOverrides(this.defaults, this.overrides, this.gamepadOverrides));
     // Takes effect at the next step; per-id `down` carries over so a held action does not re-fire.
     this.next = new ActionMap(this.effective, this.next ?? this.map);
   }
@@ -411,13 +470,39 @@ export class Input {
   actionReleased(id: string): boolean {
     return this.known(id) && this.map.released(id);
   }
-  /** Label of the action's first effective key, else its first gamepad button, else "". */
-  actionLabel(id: string): string {
+  /**
+   * Label of an action's effective binding (GAME_FORMAT § F009, § F016):
+   * - no `device`: the first key, else the first gamepad button, else "";
+   * - `"keyboard"`: the first key (mouse codes included), else "";
+   * - `"gamepad"`: the first gamepad button, else "";
+   * - `"auto"`: like `"gamepad"` when `lastDevice` is `"gamepad"` and the action has a gamepad
+   *   button, otherwise like no `device`.
+   */
+  actionLabel(id: string, device?: 'keyboard' | 'gamepad' | 'auto'): string {
     if (!this.known(id)) return '';
     const a = this.effective.find((x) => x.id === id)!;
-    if (a.keys[0]) return defaultKeyLabel(a.keys[0]);
-    if (a.gamepad[0]) return gamepadLabel(a.gamepad[0]);
-    return '';
+    const key = a.keys[0] ? defaultKeyLabel(a.keys[0]) : '';
+    const pad = a.gamepad[0] ? gamepadLabel(a.gamepad[0]) : '';
+    if (device === 'keyboard') return key;
+    if (device === 'gamepad') return pad;
+    if (device === 'auto' && this.device === 'gamepad' && pad) return pad;
+    return key || pad;
+  }
+  /**
+   * The kind of device the player used last (F016): `"keyboard"` (initial), `"mouse"`, `"touch"`
+   * or `"gamepad"`. Only player presses change it (not mouse movement, the wheel, key repeat or
+   * synthetic releases); gamepads are checked at the start of each fixed step.
+   */
+  get lastDevice(): InputDevice {
+    return this.device;
+  }
+  /**
+   * Latch every gamepad (F016 resume latch): on the next poll, buttons held at that moment report
+   * `isDown` but not `wasPressed`, and actions bound to them don't fire `actionPressed`. The engine
+   * calls this on host `webgame:resume` and on window `focus`.
+   */
+  latchGamepads(): void {
+    for (const p of this.pads) p.latch();
   }
   /** Default (US layout) label of a code; an unknown code returns the code. */
   keyLabel(code: string): string {

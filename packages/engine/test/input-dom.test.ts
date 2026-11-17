@@ -122,3 +122,105 @@ describe('cancelled releases (review 5 M2)', () => {
     i.endStep();
   });
 });
+
+describe('lastDevice from DOM events and the focus latch (F016)', () => {
+  let input: Input | null = null;
+  let win: EventTarget;
+  let buttons: boolean[] = [];
+  afterEach(() => {
+    input?.detach();
+    input = null;
+    vi.unstubAllGlobals();
+  });
+  function setup(): { i: Input; canvas: HTMLCanvasElement } {
+    win = new EventTarget();
+    vi.stubGlobal('window', Object.assign(win, { focus() {} }));
+    buttons = [];
+    vi.stubGlobal('navigator', {
+      getGamepads: () => [{ connected: true, id: 'pad', axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, (_, k) => ({ pressed: !!buttons[k], value: 0 })) }],
+    });
+    const canvas = fakeCanvas();
+    input = new Input(canvas, 320, 180);
+    input.setActions(parseActions([{ id: 'jump', name: 'Jump', keys: ['Space'], gamepad: ['A'] }]).actions);
+    input.attach();
+    return { i: input, canvas };
+  }
+  const ptr = (type: string, pointerType: string, init: Record<string, unknown> = {}): Event =>
+    Object.assign(new Event(type, { cancelable: true }), { pointerId: 1, pointerType, button: 0, isPrimary: true, clientX: 5, clientY: 5, ...init });
+  const step = (i: Input): void => {
+    i.beginStep();
+    i.endStep();
+  };
+
+  it('starts as "keyboard" and follows presses from each device', () => {
+    const { i, canvas } = setup();
+    expect(i.lastDevice).toBe('keyboard');
+    canvas.dispatchEvent(ptr('pointerdown', 'mouse'));
+    expect(i.lastDevice).toBe('mouse');
+    win.dispatchEvent(ptr('pointerup', 'mouse'));
+    win.dispatchEvent(keyEvent('keydown', 'KeyQ')); // any code, bound or not
+    expect(i.lastDevice).toBe('keyboard');
+    canvas.dispatchEvent(ptr('pointerdown', 'touch'));
+    expect(i.lastDevice).toBe('touch');
+    win.dispatchEvent(ptr('pointerup', 'touch'));
+    canvas.dispatchEvent(new Event('mousedown'));
+    expect(i.lastDevice).toBe('mouse');
+    canvas.dispatchEvent(ptr('pointerdown', 'pen'));
+    expect(i.lastDevice).toBe('touch');
+    win.dispatchEvent(ptr('pointerup', 'pen'));
+    canvas.dispatchEvent(new Event('mousedown'));
+    canvas.dispatchEvent(new Event('touchstart'));
+    expect(i.lastDevice).toBe('touch');
+    // a touch's compatibility mousedown is not a mouse press
+    canvas.dispatchEvent(Object.assign(new Event('mousedown'), { sourceCapabilities: { firesTouchEvents: true } }));
+    expect(i.lastDevice).toBe('touch');
+    step(i);
+    buttons[0] = true;
+    step(i);
+    expect(i.lastDevice).toBe('gamepad');
+  });
+
+  it('key repeat, movement, the wheel and releases never change it', () => {
+    const { i, canvas } = setup();
+    win.dispatchEvent(keyEvent('keydown', 'Space'));
+    canvas.dispatchEvent(ptr('pointerdown', 'mouse'));
+    expect(i.lastDevice).toBe('mouse');
+    win.dispatchEvent(keyEvent('keydown', 'Space', { repeat: true }));
+    win.dispatchEvent(keyEvent('keyup', 'Space'));
+    win.dispatchEvent(ptr('pointermove', 'mouse'));
+    canvas.dispatchEvent(Object.assign(new Event('wheel', { cancelable: true }), { deltaY: 10, clientX: 0, clientY: 0 }));
+    win.dispatchEvent(ptr('pointerup', 'mouse'));
+    win.dispatchEvent(ptr('pointercancel', 'mouse', { button: -1 }));
+    win.dispatchEvent(new Event('blur'));
+    expect(i.lastDevice).toBe('mouse');
+  });
+
+  it('DOM events and a gamepad edge before the same step: gamepad wins', () => {
+    const { i } = setup();
+    step(i);
+    buttons[1] = true;
+    win.dispatchEvent(keyEvent('keydown', 'KeyQ'));
+    expect(i.lastDevice).toBe('keyboard');
+    i.beginStep();
+    expect(i.lastDevice).toBe('gamepad');
+    i.endStep();
+  });
+
+  it('window focus latches the gamepads: a held button is down but not pressed', () => {
+    const { i } = setup();
+    step(i);
+    buttons[0] = true; // pressed while the page was unfocused
+    win.dispatchEvent(new Event('focus'));
+    i.beginStep();
+    expect([i.gamepad(0).isDown('A'), i.gamepad(0).wasPressed('A'), i.actionDown('jump'), i.actionPressed('jump')]).toEqual([true, false, true, false]);
+    i.endStep();
+    buttons[0] = false;
+    i.beginStep();
+    expect(i.actionReleased('jump')).toBe(true);
+    i.endStep();
+    buttons[0] = true;
+    i.beginStep();
+    expect(i.actionPressed('jump')).toBe(true);
+    i.endStep();
+  });
+});

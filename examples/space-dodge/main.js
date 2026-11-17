@@ -503,7 +503,7 @@ const game = {
       for (let i = 0; i < this.lives; i++)
         r.drawSprite(this.tex.ship, W - 30 - i * 30, 28, { w: 24, h: 24, originX: 0.5, originY: 0.5 });
       if (p.triple > 0) r.drawText(`TRIPLE ${p.triple.toFixed(1)}s`, W - 16, 52, { size: 13, align: 'right', color: '#ffe14c' });
-      if (engine.audio.muted) r.drawText(`MUTED (${engine.input.actionLabel('mute') || 'M'})`, W / 2, 14, { size: 12, align: 'center', color: '#8899aa' });
+      if (engine.audio.muted) r.drawText(`MUTED (${engine.input.actionLabel('mute', 'auto') || 'M'})`, W / 2, 14, { size: 12, align: 'center', color: '#8899aa' });
       if (this.state === 'over') this.renderGameOver(engine);
     });
   },
@@ -516,8 +516,10 @@ const game = {
     r.drawText('Blast rocks. Dodge saucers. Grab power-ups.', W / 2, H / 2 - 30, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });
     if (Math.floor(t * 2) % 2 === 0)
       r.drawText('PRESS ANY KEY OR TAP TO START', W / 2, H - 110, { size: 20, align: 'center', baseline: 'middle', color: '#ffe14c' });
-    const L = (id) => engine.input.actionLabel(id) || '—';
-    r.drawText(`${L('up')}${L('left')}${L('down')}${L('right')} move  ·  ${L('fire')} fire  ·  Mouse/touch: hold to fly  ·  ${L('mute')} mute`, W / 2, H - 60, { size: 14, align: 'center', baseline: 'middle', color: '#7f8db0' });
+    // F016: "auto" labels follow the device the player used last (keys, or the remappable gamepad buttons).
+    const L = (id) => engine.input.actionLabel(id, 'auto') || '—';
+    const move = engine.input.lastDevice === 'gamepad' ? 'Stick' : `${L('up')}${L('left')}${L('down')}${L('right')}`;
+    r.drawText(`${move} move  ·  ${L('fire')} fire  ·  Mouse/touch: hold to fly  ·  ${L('mute')} mute`, W / 2, H - 60, { size: 14, align: 'center', baseline: 'middle', color: '#7f8db0' });
     if (this.best > 0) r.drawText(`BEST ${this.best}`, W / 2, 40, { size: 18, align: 'center', color: '#8ea2ff' });
   },
 
@@ -559,7 +561,7 @@ const game = {
     r.drawText(`SCORE ${this.score}`, W / 2, y0 + 70, { size: 30, align: 'center', baseline: 'middle', color: '#fff' });
     if (this.newBest || this.serverBest) r.drawText('NEW BEST!', W / 2, y0 + 110, { size: 22, align: 'center', baseline: 'middle', color: '#ffe14c' });
     if (this.capturePrompt > 0)
-      r.drawText(`Press ${engine.input.actionLabel('photo') || 'P'} to capture`, W / 2, y0 + 133, { size: 15, align: 'center', baseline: 'middle', color: '#4cf2ff', alpha: Math.min(1, this.capturePrompt * 2) });
+      r.drawText(`Press ${engine.input.actionLabel('photo', 'auto') || 'P'} to capture`, W / 2, y0 + 133, { size: 15, align: 'center', baseline: 'middle', color: '#4cf2ff', alpha: Math.min(1, this.capturePrompt * 2) });
     if (b) this.renderBoard(r, b, 265);
     if (this.overTime > 1 && Math.floor(engine.time * 2) % 2 === 0)
       r.drawText('PRESS ANY KEY OR TAP TO PLAY AGAIN', W / 2, b ? H - 40 : H / 2 + 100, { size: 18, align: 'center', baseline: 'middle', color: '#cfe3ff' });

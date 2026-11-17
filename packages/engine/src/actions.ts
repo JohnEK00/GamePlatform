@@ -167,19 +167,36 @@ export function parseActions(raw: unknown): { actions: ControlAction[]; warnings
   return { actions, warnings };
 }
 
+/** Player gamepad overrides (`webgame:controls` `gamepad`, F016): action id → button names. */
+export type GamepadOverrides = Record<string, GamepadButtonName[]>;
+
 /**
- * Effective actions = defaults with player overrides applied. For each known action id with an
- * array value, `keys` becomes the valid, de-duplicated bindable codes (first 3). Unknown ids,
- * non-array values and invalid codes are ignored; `gamepad` is never overridden.
+ * Effective actions = defaults with player overrides applied (GAME_FORMAT § F009, § F016).
+ * Keys: for each known action id with an array value in `keyOverrides`, `keys` becomes the valid,
+ * de-duplicated bindable codes (first 3). Gamepad: likewise for `gamepadOverrides`, `gamepad`
+ * becomes the valid (`isGamepadButtonName`, so no `Home`), de-duplicated names (first 2). `[]`
+ * clears that kind of binding. Non-object override maps, unknown ids, non-array values and invalid
+ * entries are ignored; an absent `gamepadOverrides` leaves every gamepad default in place.
  */
-export function applyOverrides(defaults: readonly ControlAction[], overrides: unknown): ControlAction[] {
-  const o = isObject(overrides) ? overrides : {};
+export function applyOverrides(defaults: readonly ControlAction[], keyOverrides: unknown, gamepadOverrides?: unknown): ControlAction[] {
+  const ko = isObject(keyOverrides) ? keyOverrides : {};
+  const go = isObject(gamepadOverrides) ? gamepadOverrides : {};
+  const own = (o: Record<string, unknown>, id: string): unknown => (Object.prototype.hasOwnProperty.call(o, id) ? o[id] : undefined);
   return defaults.map((a) => {
-    const v = Object.prototype.hasOwnProperty.call(o, a.id) ? o[a.id] : undefined;
-    if (!Array.isArray(v)) return a;
-    const keys: string[] = [];
-    for (const c of v) if (isBindableKey(c) && !keys.includes(c) && keys.length < MAX_ACTION_KEYS) keys.push(c);
-    return freezeAction({ id: a.id, name: a.name, keys, gamepad: [...a.gamepad] });
+    const kv = own(ko, a.id);
+    const gv = own(go, a.id);
+    if (!Array.isArray(kv) && !Array.isArray(gv)) return a;
+    let keys = [...a.keys];
+    if (Array.isArray(kv)) {
+      keys = [];
+      for (const c of kv) if (isBindableKey(c) && !keys.includes(c) && keys.length < MAX_ACTION_KEYS) keys.push(c);
+    }
+    let gamepad = [...a.gamepad];
+    if (Array.isArray(gv)) {
+      gamepad = [];
+      for (const b of gv) if (isGamepadButtonName(b) && !gamepad.includes(b) && gamepad.length < MAX_ACTION_GAMEPAD) gamepad.push(b);
+    }
+    return freezeAction({ id: a.id, name: a.name, keys, gamepad });
   });
 }
 

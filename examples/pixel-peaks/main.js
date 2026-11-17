@@ -245,8 +245,11 @@ class TitleScene {
       for (let i = 0; i < 31; i++) r.drawSprite(art.sheet, i * 16 - ((this.cam.x * 2) % 16), 152, { frame: F.grass });
       for (let i = 0; i < 31; i++) for (let j = 1; j < 8; j++) r.drawSprite(art.sheet, i * 16 - ((this.cam.x * 2) % 16), 152 + j * 16, { frame: F.dirt });
       // The menu buttons are drawn by the engine's UI layer after this render.
-      const L = (id) => engine.input.actionLabel(id) || '—';
-      r.drawText(`${L('left')}${L('right')} move · ${L('jump')} jump · stomp slimes · reach the flag`, W / 2, 232, { size: 10, align: 'center', baseline: 'middle', color: '#e8e8ff' });
+      // F016: "auto" labels show the keys to keyboard players and the (remappable) gamepad buttons once
+      // the player touches a controller; the left stick always moves, so the hint names it then.
+      const L = (id) => engine.input.actionLabel(id, 'auto') || '—';
+      const move = engine.input.lastDevice === 'gamepad' ? 'Stick' : `${L('left')}${L('right')}`;
+      r.drawText(`${move} move · ${L('jump')} jump · stomp slimes · reach the flag`, W / 2, 232, { size: 10, align: 'center', baseline: 'middle', color: '#e8e8ff' });
       if (run.best > 0) r.drawText(`BEST ${run.best}`, W / 2, 252, { font: 'pixel', size: 8, align: 'center', baseline: 'middle', color: '#fee761' });
     });
   }

@@ -99,6 +99,28 @@ describe('gamepad polling fallback', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('F016: a blocked Gamepad API never sets lastDevice; latchGamepads and "auto" labels still work', () => {
+    vi.stubGlobal('navigator', { getGamepads: () => { throw new DOMException('blocked', 'SecurityError'); } });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const input = new Input(fakeCanvas(), 320, 180);
+    input.latchGamepads();
+    expect(() => input.beginStep()).not.toThrow();
+    expect(input.lastDevice).toBe('keyboard');
+    expectNoPads(input);
+  });
+
+  it('F016: the latch from before a pad connects is consumed, so its first press after connecting fires', () => {
+    vi.stubGlobal('navigator', { getGamepads: () => [null] });
+    const input = new Input(fakeCanvas(), 320, 180);
+    input.latchGamepads();
+    input.beginStep();
+    input.endStep();
+    vi.stubGlobal('navigator', { getGamepads: () => [fakePad(true)] });
+    input.beginStep();
+    expect(input.gamepad(0).wasPressed('A')).toBe(true);
+    expect(input.lastDevice).toBe('gamepad');
+  });
+
   it('no navigator at all: no throw, no pads', () => {
     vi.stubGlobal('navigator', undefined);
     const input = new Input(fakeCanvas(), 320, 180);

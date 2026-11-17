@@ -166,7 +166,7 @@ describe('applyOverrides', () => {
   it('de-duplicates and keeps the first 3', () => {
     expect(applyOverrides(defaults, { fire: ['KeyA', 'KeyA', 'KeyB', 'KeyC', 'KeyD'] })[0]!.keys).toEqual(['KeyA', 'KeyB', 'KeyC']);
   });
-  it('never overrides gamepad and tolerates non-objects', () => {
+  it('a "gamepad" key inside the key overrides is not a gamepad override; tolerates non-objects', () => {
     expect(applyOverrides(defaults, { fire: ['KeyK'], gamepad: ['B'] })[0]!.gamepad).toEqual(['A', 'RT']);
     expect(applyOverrides(defaults, null)).toEqual(defaults);
     expect(applyOverrides(defaults, ['x'])).toEqual(defaults);
@@ -174,6 +174,47 @@ describe('applyOverrides', () => {
   it('ignores inherited properties', () => {
     const o = Object.create({ fire: ['KeyK'] }) as object;
     expect(applyOverrides(defaults, o)[0]!.keys).toEqual(['Space', 'KeyZ']);
+    expect(applyOverrides(defaults, {}, o)[0]!.gamepad).toEqual(['A', 'RT']);
+  });
+});
+
+describe('applyOverrides with gamepad (F016)', () => {
+  const defaults = [act('fire', ['Space', 'KeyZ'], ['A', 'RT']), act('jump', ['ArrowUp'], ['A'])];
+
+  it('replaces the gamepad buttons and keeps the keys', () => {
+    const r = applyOverrides(defaults, {}, { fire: ['B'] });
+    expect(r[0]).toEqual(act('fire', ['Space', 'KeyZ'], ['B']));
+    expect(r[1]).toBe(defaults[1]);
+    expect(Object.isFrozen(r[0])).toBe(true);
+    expect(Object.isFrozen(r[0]!.gamepad)).toBe(true);
+  });
+  it('[] clears the gamepad buttons (keys still apply)', () => {
+    expect(applyOverrides(defaults, {}, { jump: [] })[1]).toEqual(act('jump', ['ArrowUp'], []));
+  });
+  it('ignores unknown ids, non-array values, Home and invalid names', () => {
+    const r = applyOverrides(defaults, {}, { nope: ['B'], jump: 'B', fire: ['Home', 'Triangle', 7, null, 'X'] });
+    expect(r.map((a) => a.id)).toEqual(['fire', 'jump']);
+    expect(r[0]!.gamepad).toEqual(['X']);
+    expect(r[1]).toBe(defaults[1]);
+    expect(applyOverrides(defaults, {}, { fire: ['Home'] })[0]!.gamepad).toEqual([]);
+  });
+  it('keeps the first 2 and removes duplicates', () => {
+    expect(applyOverrides(defaults, {}, { fire: ['B', 'X', 'Y'] })[0]!.gamepad).toEqual(['B', 'X']);
+    expect(applyOverrides(defaults, {}, { fire: ['B', 'B', 'X', 'Y'] })[0]!.gamepad).toEqual(['B', 'X']);
+  });
+  it('keys and gamepad overrides are independent', () => {
+    const r = applyOverrides(defaults, { fire: ['KeyK'] }, { jump: ['Y'] });
+    expect(r[0]).toEqual(act('fire', ['KeyK'], ['A', 'RT']));
+    expect(r[1]).toEqual(act('jump', ['ArrowUp'], ['Y']));
+    const both = applyOverrides(defaults, { fire: [] }, { fire: ['LB'] });
+    expect(both[0]).toEqual(act('fire', [], ['LB']));
+  });
+  it('absent or non-object gamepad overrides leave the defaults', () => {
+    for (const g of [undefined, null, 'B', ['B'], 5]) {
+      const r = applyOverrides(defaults, {}, g);
+      expect(r.map((a) => a.gamepad)).toEqual([['A', 'RT'], ['A']]);
+    }
+    expect(applyOverrides(defaults, { fire: ['KeyK'] })[0]!.gamepad).toEqual(['A', 'RT']);
   });
 });
 
