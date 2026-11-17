@@ -209,7 +209,7 @@ const captionOf = (s: Screenshot) => (typeof s.caption === "string" ? s.caption.
  * F015 § 2.1: "{actor} posted {n} screenshots of {game}", up to four thumbnails, "+N more", and the lightbox.
  * Deletes are local: the shot leaves this item, and the item renders nothing once its last shot is gone.
  */
-function ScreenshotFeedItem({ item, onEmptied }: { item: FeedItemData; onEmptied?: () => HTMLElement | null }) {
+function ScreenshotFeedItem({ item, onEmptied, onRemoved }: { item: FeedItemData; onEmptied?: () => HTMLElement | null; onRemoved?: () => void }) {
   const api = useApi();
   const initial = feedScreenshots(item);
   // Local copy for deletes; re-derived when the item object changes (a reload).
@@ -230,6 +230,8 @@ function ScreenshotFeedItem({ item, onEmptied }: { item: FeedItemData; onEmptied
   const more = count - items.length;
 
   const onDeleted = (s: Screenshot) => {
+    // The last shot of the item: tell the page, so the item stops counting (L3: the tab's empty state can show).
+    if (items.every((x) => x.id === s.id)) onRemoved?.();
     setLocal((cur) => {
       const d = cur.src === item ? cur.data : initial;
       if (!d) return cur;
@@ -240,7 +242,8 @@ function ScreenshotFeedItem({ item, onEmptied }: { item: FeedItemData; onEmptied
     setOpen(null);
   };
 
-  // § 0.12: the thumbnail now at the deleted one's position, else the last one, else the game link, else the page's pick.
+  // § 0.12: the thumbnail now at the deleted one's position, else the last one (the previous), else the game link,
+  // else the page's pick. After a delete this wins over the opener (ScreenshotLightbox `preferReturnFocus`).
   const returnFocus = () => {
     const buttons = listRef.current?.querySelectorAll<HTMLElement>(".pf-feed-shots__item");
     if (buttons && buttons.length) return buttons[Math.min(lastOpen.current, buttons.length - 1)];
@@ -336,16 +339,21 @@ export type FeedItemProps = {
    * closes, so it sees the updated DOM). FeedPage returns the next item's first link, else "Load more", else the panel.
    */
   onEmptied?: () => HTMLElement | null;
+  /**
+   * F015: called when the last screenshot of this item was deleted locally (the item then renders nothing). FeedPage
+   * stops counting the item, so the tab's empty state shows once every loaded item is gone.
+   */
+  onRemoved?: () => void;
 };
 
 /** One activity-feed row: actor avatar, sentence, time, and a compact link to the game. Unknown kinds render nothing. */
-export function FeedItem({ item, onEmptied }: FeedItemProps) {
+export function FeedItem({ item, onEmptied, onRemoved }: FeedItemProps) {
   if (!isKnownFeedItem(item)) return null;
   if (item.kind === "collectionUpdated") {
     const collection = feedCollection(item);
     return collection ? <CollectionFeedItem item={item} collection={collection} /> : null;
   }
-  if (item.kind === "screenshotPosted") return <ScreenshotFeedItem item={item} onEmptied={onEmptied} />;
+  if (item.kind === "screenshotPosted") return <ScreenshotFeedItem item={item} onEmptied={onEmptied} onRemoved={onRemoved} />;
   const text = sentence(item);
   if (text === null) return null;
   const ach = item.kind === "achievementUnlocked" ? item.achievement : null;

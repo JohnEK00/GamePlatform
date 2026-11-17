@@ -1,4 +1,4 @@
-import { useId, useState, type KeyboardEvent } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
 import type { Game, Screenshot } from "../api/types";
 import { useApi } from "../context/config";
@@ -16,7 +16,7 @@ export type ScreenshotLightboxProps<T extends Screenshot = Screenshot> = {
   onIndex: (i: number) => void;
   onClose: () => void;
   onDeleted: (s: T) => void;
-  /** Focus target when the opener is gone after a delete (see `useModal`). */
+  /** Focus target after a delete (it wins over the opener, F015 § 0.12) or when the opener is gone (see `useModal`). */
   returnFocus: () => HTMLElement | null;
   /** Title of the screenshot's game (alt text, view link). */
   gameTitle: (s: T) => string;
@@ -44,7 +44,10 @@ export function ScreenshotLightbox<T extends Screenshot = Screenshot>({
   const uid = useId();
   const [confirm, setConfirm] = useState<null | "delete" | "thumb">(null);
   const [busy, setBusy] = useState(false);
-  const ref = useModal<HTMLDivElement>(true, onClose, { canClose: !busy, returnFocus });
+  // F015 § 0.12: after a delete, focus goes to `returnFocus` (the thumbnail now at the deleted shot's position, …)
+  // even when the thumbnail that opened the lightbox still exists (the user may have arrowed to another shot).
+  const deleted = useRef(false);
+  const ref = useModal<HTMLDivElement>(true, onClose, { canClose: !busy, returnFocus, preferReturnFocus: () => deleted.current });
   const s = items[index];
   if (!s) return null;
   const who = s.author.displayName || s.author.username;
@@ -67,6 +70,7 @@ export function ScreenshotLightbox<T extends Screenshot = Screenshot>({
       await api.deleteScreenshot(s.id);
       toast.success("Screenshot deleted");
       setConfirm(null);
+      deleted.current = true;
       onDeleted(s);
     } catch (e) {
       toast.error("Couldn't delete the screenshot", errorMessage(e));

@@ -24,7 +24,8 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Response;
-use tauri::State;
+use tauri::utils::config::WindowConfig;
+use tauri::{App, AppHandle, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 
 /// Label of the app's only window (tauri.conf.json, capabilities/default.json).
@@ -225,6 +226,41 @@ fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
+/// The main window's config. It has `create: false` in tauri.conf.json, so Tauri doesn't build it and
+/// [`setup`] must; an error here means the app would start without a window.
+fn main_window_config(config: &tauri::Config) -> Result<WindowConfig, String> {
+    let conf = config
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == MAIN_WINDOW)
+        .ok_or("tauri.conf.json has no main window")?;
+    if conf.create {
+        // Tauri would build it before `setup` without the new-window handler, and `setup` would then fail
+        // with "a webview with label `main` already exists".
+        return Err("the main window must have `create: false` (it is built in setup)".into());
+    }
+    Ok(conf.clone())
+}
+
+/// Builds the main window from its tauri.conf.json config, with the new-window handler (otherwise
+/// `target="_blank"` links silently do nothing in the webview).
+fn build_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::Error>> {
+    let conf = main_window_config(app.config())?;
+    let policy = external::Policy::new(app.config().build.dev_url.as_ref());
+    tauri::WebviewWindowBuilder::from_config(app, &conf)?
+        .on_new_window(move |url, _features| {
+            external::handle_new_window(&url, &policy, external::open_in_browser)
+        })
+        .build()?;
+    Ok(())
+}
+
+/// `Builder::setup`: everything that needs the running app.
+fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn std::error::Error>> {
+    build_main_window(app.handle())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -243,23 +279,7 @@ pub fn run() {
         .manage(save::LastImageDir::default())
         .menu(menu::build)
         .on_menu_event(menu::handle)
-        // The main window has `create: false` in tauri.conf.json and is built here from that same config, so it
-        // gets the new-window handler (otherwise `target="_blank"` links silently do nothing in the webview).
-        .setup(|app| {
-            let conf = app
-                .config()
-                .app
-                .windows
-                .iter()
-                .find(|w| w.label == MAIN_WINDOW)
-                .cloned()
-                .ok_or("tauri.conf.json has no main window")?;
-            let throttle = external::Throttle::default();
-            tauri::WebviewWindowBuilder::from_config(app.handle(), &conf)?
-                .on_new_window(move |url, _features| external::handle_new_window(&url, &throttle))
-                .build()?;
-            Ok(())
-        })
+        .setup(setup)
         .invoke_handler(tauri::generate_handler![
             pick_file,
             read_picked,
@@ -326,6 +346,64 @@ mod tests {
         );
         assert_eq!(store.0.lock().unwrap().len(), MAX_PENDING);
         assert!(rest.iter().all(|t| store.take(t).is_some()));
+    }
+
+    fn app_config() -> tauri::Config {
+        serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json parses")
+    }
+
+    #[test]
+    fn setup_builds_the_main_window_from_the_config() {
+        // A unit test can't call `setup` (naming `tauri::Wry` links window code, and the test executable then
+        // can't start on Windows without the app's Common Controls v6 manifest), so the wiring is pinned by source:
+        // `run` registers `setup`, `setup` builds the main window, and that window gets the new-window handler.
+        let src = include_str!("lib.rs");
+        let body = |sig: &str| {
+            let start = src.find(sig).unwrap_or_else(|| panic!("{sig} not found"));
+            &src[start..start + src[start..].find("\n}\n").unwrap()]
+        };
+        assert!(body("pub fn run()").contains(".setup(setup)"));
+        assert!(body("fn setup<R: Runtime>").contains("build_main_window(app.handle())"));
+        let build = body("fn build_main_window<R: Runtime>");
+        for part in [
+            "main_window_config(app.config())?",
+            "WebviewWindowBuilder::from_config(app, &conf)?",
+            ".on_new_window(",
+            "external::handle_new_window(&url, &policy, external::open_in_browser)",
+            ".build()?;",
+        ] {
+            assert!(build.contains(part), "build_main_window lost {part}");
+        }
+
+        let config = app_config();
+        let main = main_window_config(&config).expect("setup finds the main window");
+        assert_eq!(main.label, MAIN_WINDOW);
+        assert!(!main.create, "Tauri must leave the main window to setup");
+        assert_eq!(
+            config.app.windows.iter().filter(|w| !w.create).count(),
+            1,
+            "setup builds only the main window"
+        );
+    }
+
+    #[test]
+    fn main_window_config_rejects_missing_or_auto_created_windows() {
+        let mut config = app_config();
+        config.app.windows[0].create = true;
+        assert!(main_window_config(&config).is_err());
+        config.app.windows.clear();
+        assert!(main_window_config(&config).is_err());
+    }
+
+    #[test]
+    fn dev_url_pages_stay_in_the_app() {
+        let config = app_config();
+        let dev = config.build.dev_url.as_ref().expect("devUrl is set");
+        let policy = external::Policy::new(Some(dev));
+        assert!(policy.is_app_url(&"http://localhost:1420/#/games/g1".parse().unwrap()));
+        assert!(policy.is_app_url(&"http://tauri.localhost/#/games/g1".parse().unwrap()));
+        let api = "http://localhost:8080/media/screenshots/s1.png";
+        assert!(!policy.is_app_url(&api.parse().unwrap()));
     }
 
     #[test]

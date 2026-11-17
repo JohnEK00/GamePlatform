@@ -38,6 +38,12 @@ export type UseModalOptions = {
    * closes, so it can look at the updated DOM. Without it (or when it returns null) focus would drop to <body>.
    */
   returnFocus?: () => HTMLElement | null | undefined;
+  /**
+   * Read when the dialog closes: when it returns true, `returnFocus` wins over the opener (e.g. after a delete, the
+   * opener may still exist but no longer be the right place, F015 § 0.12). If `returnFocus` gives nothing usable,
+   * the normal opener rule applies.
+   */
+  preferReturnFocus?: () => boolean;
 };
 
 // Open modals, innermost last: only the top one reacts to Escape / Tab.
@@ -117,6 +123,13 @@ export function useModal<T extends HTMLElement = HTMLElement>(open: boolean, onC
       document.removeEventListener("focusin", onFocusIn);
       const i = stack.indexOf(token);
       if (i >= 0) stack.splice(i, 1);
+      if (latest.current.opts.preferReturnFocus?.()) {
+        const target = latest.current.opts.returnFocus?.();
+        if (target && target.isConnected) {
+          target.focus();
+          return;
+        }
+      }
       // Nested dialogs closing in one commit (e.g. a confirm inside a lightbox): if another dialog's cleanup has
       // already put focus on a live element outside this one, leave it there (review 4, L8).
       const active = document.activeElement;

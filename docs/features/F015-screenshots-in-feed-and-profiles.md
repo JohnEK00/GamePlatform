@@ -301,3 +301,16 @@ As listed in § 4 frontend-dev task 10.
 5. The owner of Kiln Clash, following A, deletes another from the feed lightbox.
 6. A posts a fourth shot the next UTC day, which creates a new, separate item.
 7. On desktop, the same flows work under the hash router.
+
+## Review-fix additions (REVIEW-2026-11-17-9)
+- **Focus after a delete in the lightbox (L2, replaces § 0.12 where they differ).** After a delete in the lightbox (on the feed, a profile or the game page), focus goes to a fallback, even if the thumbnail that opened the lightbox still exists. The fallback, in order:
+  1. The thumbnail now at the deleted shot's position (the next one).
+  2. Otherwise, the last remaining thumbnail (the previous one).
+  3. Otherwise, the fallback for that page:
+     - **Feed:** the game title link in the item's sentence. If the whole item disappears, the next item's first link; otherwise the "Load more" button; otherwise the tab panel.
+     - **Profile and game page:** the section heading (`tabIndex={-1}`).
+
+  If the delete fails, or the lightbox is closed without a delete, focus returns to the thumbnail that opened it. This uses the `useModal` option `preferReturnFocus`.
+- **Emptied items (L3):** feed items whose last shot was deleted aren't rendered or counted, so the empty state appears. The list of emptied items resets when the feed reloads or the tab changes. If more pages exist, the list stays and focus goes to "Load more".
+- **Focus ring (L4):** focus-target headings hide their outline only for `:focus:not(:focus-visible)`.
+- **Desktop (L1):** in-app links (`http(s)://tauri.localhost`, `tauri://localhost` and the `devUrl` origin) opened as a new window are denied and never sent to the system browser.

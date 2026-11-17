@@ -28,6 +28,7 @@ import { FEED_TAB_KEY } from "@webgame/ui";
 import { App } from "../App";
 import { SERVER_STORAGE_KEY } from "../server";
 import confRaw from "../../src-tauri/tauri.conf.json?raw";
+import libRs from "../../src-tauri/src/lib.rs?raw";
 
 const SERVER = "http://192.168.1.5:8080";
 const conf = JSON.parse(confRaw) as { app: { windows: Array<Record<string, unknown>>; security: { csp: Record<string, string> } } };
@@ -294,5 +295,22 @@ describe("F015 desktop: new-window links reach Rust's handler", () => {
   it("the main window is built in Rust (create: false) so on_new_window applies", () => {
     const main = conf.app.windows.find((w) => w.label === "main");
     expect(main?.create).toBe(false);
+  });
+
+  it("setup builds that window with the new-window handler (else the app starts with no window)", () => {
+    const fnBody = (sig: string) => {
+      const start = libRs.indexOf(sig);
+      expect(start, sig).toBeGreaterThanOrEqual(0);
+      return libRs.slice(start, libRs.indexOf("\n}\n", start));
+    };
+    expect(fnBody("pub fn run()")).toContain(".setup(setup)");
+    expect(fnBody("fn setup<R: Runtime>")).toContain("build_main_window(app.handle())");
+    const build = fnBody("fn build_main_window<R: Runtime>");
+    expect(build).toContain("WebviewWindowBuilder::from_config(app, &conf)?");
+    expect(build).toContain(".on_new_window(");
+    expect(build).toContain("external::handle_new_window(&url, &policy, external::open_in_browser)");
+    expect(build).toContain(".build()?;");
+    // The app's own pages (Ctrl/Shift/middle-click on in-app links) and the dev server are kept in.
+    expect(build).toContain("Policy::new(app.config().build.dev_url.as_ref())");
   });
 });

@@ -4024,7 +4024,8 @@ a.pf-tab {
 
 /* ---------- F005: screenshots ---------- */
 /* Programmatic focus target after a delete (review 3, L1c). */
-.pf-shots > .pf-panel__title:focus {
+/* Focus target after a delete: keep the global focus-visible ring for keyboard users (review 9, L4). */
+.pf-shots > .pf-panel__title:focus:not(:focus-visible) {
   outline: none;
 }
 .pf-iconbtn:disabled,
@@ -4288,7 +4289,8 @@ a.pf-tab {
   margin-top: 28px;
 }
 /* Programmatic focus target after a delete (§ 0.12). */
-.pf-profile-shots .pf-section-title:focus {
+/* Focus target after a delete: keep the global focus-visible ring for keyboard users (review 9, L4). */
+.pf-profile-shots .pf-section-title:focus:not(:focus-visible) {
   outline: none;
 }
 .pf-profile-shots__cell {

@@ -145,7 +145,8 @@ describe("Collections routes", () => {
       </WebGameProviders>,
     );
     await screen.findByRole("heading", { level: 1, name: "My collections" });
-    expect(spy).toHaveBeenCalledWith("ana", { page: 1, perPage: 24 });
+    // The heading can be found (MutationObserver) before the page's passive fetch effect has run: wait for the call.
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("ana", { page: 1, perPage: 24 }));
     expect((await screen.findByRole("link", { name: "Cozy games" })).getAttribute("href")).toBe("/c/c1");
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /Ana/ })));
     expect(screen.getByRole("menuitem", { name: "Collections" }).getAttribute("href")).toBe("/collections");

@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError } from "../api/client";
 import type { Collection, CollectionItemResponse, CollectionRemoveResponse, User } from "../api/types";
-import { COLLECTION_CONFLICT_MESSAGE, CollectionPage } from "../pages/CollectionPage";
+import { COLLECTION_CONFLICT_MESSAGE, CollectionPage, LINK_COPIED_MS } from "../pages/CollectionPage";
 import { WebGameProviders } from "../WebGameApp";
 import { adminUser, anaUser, collection, deferred, item, samUser } from "./collectionFixtures";
 
@@ -92,12 +92,26 @@ describe("CollectionPage: visitor", () => {
     const writeText = vi.fn(async () => {});
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
     await setup(collection());
-    await act(async () => fireEvent.click(btn("Copy link")));
-    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/c/c1`);
-    expect(btn("Link copied")).toBeTruthy();
-    expect(document.querySelector(".pf-collection-page > p[role=status]")!.textContent).toBe("Link copied");
-    expect(screen.queryByRole("textbox", { name: "Copy this link" })).toBeNull();
-    await waitFor(() => expect(btn("Copy link")).toBeTruthy(), { timeout: 3000 });
+    // Fake timers from here on (review 9, L6): the 2 s "Link copied" timer is advanced, never waited for.
+    vi.useFakeTimers();
+    try {
+      await act(async () => fireEvent.click(btn("Copy link")));
+      expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/c/c1`);
+      expect(btn("Link copied")).toBeTruthy();
+      expect(document.querySelector(".pf-collection-page > p[role=status]")!.textContent).toBe("Link copied");
+      expect(screen.queryByRole("textbox", { name: "Copy this link" })).toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(LINK_COPIED_MS - 100);
+      });
+      expect(btn("Link copied")).toBeTruthy();
+      await act(async () => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(btn("Copy link")).toBeTruthy();
+      expect(queryBtn("Link copied")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("Copy link: falls back to a focused, selected read-only input when the Clipboard API is missing or rejects", async () => {

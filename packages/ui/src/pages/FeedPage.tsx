@@ -53,9 +53,11 @@ type FeedState = {
   error: unknown;
   loadingMore: boolean;
   moreError: unknown;
+  /** F015: ids of items whose last screenshot was deleted locally. They render nothing and don't count (review 9, L3). */
+  emptied: string[];
 };
 
-const INITIAL: FeedState = { items: [], nextCursor: null, loading: true, error: null, loadingMore: false, moreError: null };
+const INITIAL: FeedState = { items: [], nextCursor: null, loading: true, error: null, loadingMore: false, moreError: null, emptied: [] };
 
 function appendUnique(prev: FeedItemData[], next: FeedItemData[]): FeedItemData[] {
   const seen = new Set(prev.map((i) => i.id));
@@ -167,7 +169,12 @@ export function FeedPage() {
     setReloadKey((k) => k + 1);
   };
 
-  const empty = !state.loading && !state.error && state.items.length === 0;
+  // Locally emptied items don't count. When every loaded item was emptied but there are more pages, the list stays
+  // (with "Load more") instead of claiming the feed is empty.
+  const visible = state.emptied.length ? state.items.filter((i) => !state.emptied.includes(i.id)) : state.items;
+  const allEmptied = visible.length === 0 && state.items.length > 0;
+  const empty = !state.loading && !state.error && visible.length === 0 && !(allEmptied && state.nextCursor);
+  const markEmptied = (id: string) => setState((s) => (s.emptied.includes(id) ? s : { ...s, emptied: [...s.emptied, id] }));
 
   const listRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
@@ -250,8 +257,8 @@ export function FeedPage() {
       ) : (
         <>
           <div className="pf-feed__list" ref={listRef}>
-            {state.items.map((item) => (
-              <FeedItem key={item.id} item={item} onEmptied={() => focusAfter(item.id)} />
+            {visible.map((item) => (
+              <FeedItem key={item.id} item={item} onEmptied={() => focusAfter(item.id)} onRemoved={() => markEmptied(item.id)} />
             ))}
           </div>
           {state.moreError != null && <LoadError message={`Couldn't load more: ${errorMessage(state.moreError)}`} onRetry={loadMore} />}
