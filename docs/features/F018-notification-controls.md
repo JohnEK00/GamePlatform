@@ -1,6 +1,6 @@
 # F018: Notification controls: mutes, shared polling and "pinned" notifications
 
-Status: **specced**. Size: **M** (backend medium: one migration with a table rebuild, five endpoints and write-path changes; frontend medium: tab coordination, mute actions, settings and a new kind; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
+Status: **shipped**. Size: **M** (backend medium: one migration with a table rebuild, five endpoints and write-path changes; frontend medium: tab coordination, mute actions, settings and a new kind; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
 Contracts: `docs/API.md` § F018 additions (types, five endpoints, validation order, mute scopes, `pinned` kind, `pins` setting, rate limits), `docs/ARCHITECTURE.md` § F018 additions (migration `0017_f018.sql` with the exact rebuild SQL, write-path and read-path changes, tab coordination), `docs/GAME_FORMAT.md` § F018 additions (no changes; noted for completeness).
 Depends on: F007 (notifications, shipped and hardened in reviews 4 and 5) and F017 (pin endpoints and the `// F018:` hook, shipped). The migration is **`0017_f018.sql`** and runs after `0016_f008.sql`. **No new Rust or JS dependencies.**
 Unblocks: F021 (collection notifications), which needs a new `notifications.kind` value without a table rebuild.

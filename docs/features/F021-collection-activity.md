@@ -1,6 +1,6 @@
 # F021: Collection activity: feed items and "added to a collection" notifications
 
-Status: **specced**. Size: **M** (backend medium: one migration with an `activity_events` rebuild, one activity writer, a third feed branch, one notification kind with a read-time filter; frontend small: one feed item, one feed tab, one notification text, one settings switch; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
+Status: **shipped**. Size: **M** (backend medium: one migration with an `activity_events` rebuild, one activity writer, a third feed branch, one notification kind with a read-time filter; frontend small: one feed item, one feed tab, one notification text, one settings switch; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
 Contracts: `docs/API.md` § F021 additions (feed kind and types, notification kind, setting, triggers, visibility, withdrawal), `docs/ARCHITECTURE.md` § F021 additions (migration `0019_f021.sql` with the exact SQL, writer, feed branch, notification write and read paths), `docs/GAME_FORMAT.md` § F021 additions (no changes).
 Depends on: F002 (feed), F007 (notifications), F008 (collections) and F018 (no `notifications.kind` CHECK, mutes, group dedupe, `withdraw_pool`), all shipped. The migration is **`0019_f021.sql`** and runs after `0018_review6.sql`. **No new Rust or JS dependencies.**
 Unblocks: F015 (`screenshotPosted` feed kind) needs no `activity_events` rebuild after this one.

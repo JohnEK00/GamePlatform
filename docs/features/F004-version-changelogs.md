@@ -1,6 +1,6 @@
 # F004: Version changelogs and an "Updated" badge
 
-Status: **specced**. Size: **S** (backend + frontend, one round). Areas: backend, frontend. Engine: no changes. Desktop: verification only.
+Status: **shipped**. Size: **S** (backend + frontend, one round). Areas: backend, frontend. Engine: no changes. Desktop: verification only.
 Contracts: `docs/API.md` § F004 additions, `docs/GAME_FORMAT.md` § F004 additions, `docs/ARCHITECTURE.md` § F004 additions.
 Depends on: F002 (shipped: `activity_events`, `gameUpdated`) and the review-fix bundle replace serialisation (REVIEW-2026-11-14-1 R1: per-game `bundle_locks` claim plus the `WHERE id = ? AND version = ?` check). Migration `0007_f004.sql` runs after F003's `0006_f003.sql`. See "Sequencing".
 

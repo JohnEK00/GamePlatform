@@ -694,3 +694,163 @@ engine.input.actionLabel(id: string, device?: "keyboard" | "gamepad" | "auto"): 
   - Gamepad input is checked when each step starts, so it wins a tie with keyboard or mouse input from the same step.
 - **Window `focus` latch:** registered when input is attached, alongside the `webgame:resume` latch.
 - **`setActions`:** clears gamepad overrides as well as key overrides.
+
+
+## F019 additions
+Engine UI widgets 2 (spec: `docs/features/F019-ui-widgets-2.md`). **No changes** to the bundle format, game.json, the boot options or the game ↔ parent messages. Everything below is engine API. All F012 `engine.ui` rules (ids, phases, the per-step command list, drawing, pointer and navigation) still apply unless this section changes them. Existing games keep working unchanged: `ui.button` behaves exactly as before, and nothing below happens unless a game calls a new widget.
+
+### Model
+- The new widgets are **value in, value out**: the game owns the value, passes it in every step and stores what comes back. The engine keeps only interaction state (pointer drag, list cursor and scroll, text caret).
+- `ui.changed(id)` and `ui.committed(id)` report what happened to a widget in the current step (§ "Change signals").
+- All widget kinds share one id namespace: a `button` and a `slider` with the same id in one step are duplicates.
+
+### Types
+```ts
+type SliderOptions = {
+  min?: number;            // default 0
+  max?: number;            // default 1; needs finite min < max
+  step?: number;           // default 0 = continuous; > 0 snaps the value
+  keyStep?: number;        // keyboard/gamepad increment; default step > 0 ? step : (max - min) / 20
+  disabled?: boolean;
+  nav?: boolean;           // default true
+}
+type ToggleOptions = { disabled?: boolean; nav?: boolean; font?: string; textSize?: number; textColor?: ColorLike }
+type TextFieldOptions = {
+  maxLength?: number;      // in code points; default 24; integers 1–256
+  placeholder?: string;    // shown when empty and not editing
+  allow?: (ch: string) => boolean;   // called per code point; false rejects it
+  disabled?: boolean; nav?: boolean; font?: string; textSize?: number; textColor?: ColorLike;
+}
+type ListOptions = {
+  rowHeight?: number;      // default 16; integers 4–256
+  selected?: number;       // the "current" row, drawn highlighted; default -1 (none)
+  disabled?: boolean; nav?: boolean; font?: string; textSize?: number; textColor?: ColorLike;
+}
+type TextEvent =
+  | { kind: "text"; text: string }   // one or more code points (typed or pasted), already filtered
+  | { kind: "key"; key: "Backspace" | "Delete" | "ArrowLeft" | "ArrowRight" | "Home" | "End" }
+```
+`UiTheme` gains (defaults after the colon):
+```ts
+  trackColor: ColorLike;        // "#0e1224"  slider track, toggle switch when off, scrollbar track
+  fillColor: ColorLike;         // "#5a6bc0"  slider fill, toggle switch when on, scrollbar thumb
+  knobColor: ColorLike;         // "#ffffff"  slider knob, toggle knob
+  fieldColor: ColorLike;        // "#0e1224"  text field and list background
+  fieldBorder: ColorLike;       // "#5a6bc0"  text field and list 1-unit border
+  caretColor: ColorLike;        // "#ffd166"
+  placeholderColor: ColorLike;  // "#5d6488"
+  rowHoverColor: ColorLike;     // "#2a3358"
+  rowSelectedColor: ColorLike;  // "#3a4780"
+  track: NineSlice | null;      // null = flat trackColor/fillColor bars
+  knob: NineSlice | null;       // null = flat knobColor square
+  field: NineSlice | null;      // null = flat fieldColor + fieldBorder (text field and list frame)
+```
+9-slices are drawn at `theme.nineSliceScale`, as for panels and buttons.
+
+### Widgets
+- `ui.slider(id: string, value: number, x, y, w, h, opts?: SliderOptions): number`
+  - Returns the new value. A non-finite `value` is treated as `min`. The return value is always clamped to `[min, max]` and, when `step > 0`, snapped: `min + Math.round((v - min) / step) * step`, clamped again, then `Number(v.toFixed(10))`. Clamping or snapping the game's value is not a change (`changed` stays `false`).
+  - Invalid range (`min`/`max` not finite, or `max <= min`): drawn disabled, returns `value` unchanged, with the warning `slider "{id}" needs finite min < max; it is drawn disabled` (once per id). A `step` or `keyStep` that is not a finite number > 0 falls back to its default without a warning.
+  - **Pointer**: a press inside the rect makes the slider `active` (and clears `focus`, as in F012). While it is active, every step sets `t = clamp((mouse.x - (x + h / 2)) / max(1, w - h), 0, 1)` and `v = min + t · (max - min)` (then snapped), so the knob follows the pointer even outside the rect. The press step already applies the value under the pointer. Any release (cancelled or not) ends the drag.
+  - **Keys** (when focused): "left"/"right" subtract/add `keyStep` (then clamp and snap) and **do not move focus**. "up"/"down" move focus as in F012. "activate" does nothing.
+  - Drawing: a bar of height `max(2, round(h / 3))`, vertically centred, across the full width (`theme.track` 9-slice, or `trackColor`); the part from `x` to the knob centre in `fillColor`; a knob `h × h` centred at `x + h / 2 + t · (w - h)` (`theme.knob` 9-slice, or a `knobColor` square). There is no label or value text: draw those with `ui.label`.
+- `ui.toggle(id: string, on: boolean, label: string, x, y, w, h, opts?: ToggleOptions): boolean`
+  - Returns the new state. It flips on a pointer click (F012 button rules: press and release on it; cancelled releases never flip) or on "activate" while focused. "left"/"right" move focus, as for buttons.
+  - Drawing: the label left-aligned at `x` and vertically centred (`font`/`textSize`/`textColor` from opts or the theme). A switch of width `sw = min(w, 2h)` and height `h`, right-aligned in the rect: the track in `fillColor` when on and `trackColor` when off (or `theme.track`), and a knob `(h - 4) × (h - 4)` inset 2 units from the left (off) or right (on) end, in `knobColor` (or `theme.knob`). There is no animation.
+- `ui.textField(id: string, text: string, x, y, w, h, opts?: TextFieldOptions): string`
+  - Returns the new text. A non-string `text` is treated as `String(text ?? "")`. The text is not cut to `maxLength` unless the player edits it.
+  - A `maxLength` that is not an integer from 1 to 256 is clamped into that range after `Math.floor` (`NaN` → 24), with the warning `textField "{id}" maxLength must be an integer from 1 to 256` (once per id).
+  - Editing: § "Text editing".
+  - Drawing: the frame (`theme.field` 9-slice, or `fieldColor` with a 1-unit `fieldBorder`); the text left-aligned at `x + 4` and vertically centred; the placeholder in `placeholderColor` when the text is empty and the field is not editing; while editing, a solid caret 1 unit wide and as tall as the text, in `caretColor` (no blinking). When the text is wider than `w - 8`, the field shows a contiguous run of code points that contains the caret and fits in `w - 8`; when the caret leaves the run, the run moves by the minimum amount. Nothing is drawn outside the rect.
+- `ui.list(id: string, items: readonly (string | number)[], x, y, w, h, opts?: ListOptions): number`
+  - Returns the index of the row activated in this step, else `-1`. At most 1000 items are used; more give the warning `list "{id}" has more than 1000 items; only the first 1000 are shown` (once per id). An invalid `rowHeight` falls back to 16 with the warning `list "{id}" rowHeight must be an integer from 4 to 256` (once per id).
+  - `visibleRows = max(1, floor(h / rowHeight))`. Rows scroll by whole rows; `scroll` (the first visible row) stays within `[0, max(0, count - visibleRows)]`.
+  - **Pointer**: a press on a row makes the list `active` and remembers the row and the pointer y. A release on the **same row** activates it, sets the cursor to it and returns its index, unless the pointer moved more than 4 units vertically while pressed. In that case the press became a **drag scroll** (`scroll = clamp(pressScroll + round((pressY - mouse.y) / rowHeight))` every step while pressed) and never activates. The row under the pointer is drawn in `rowHoverColor`. The wheel (`mouse.wheel ≠ 0` while the pointer is over the list) scrolls by `sign(wheel) · max(1, round(|wheel| / 100))` rows.
+  - **Keys** (when focused): the cursor (−1 = none) is set when the list gains focus: `selected` if it is a valid index; otherwise row 0 when focus arrived with "next" or through `ui.focus = id`, and the last row when it arrived with "previous". "up"/"down" move the cursor by one row and scroll it into view. A **fresh press** (not a hold repeat) of "up" on row 0 moves focus to the previous widget, and of "down" on the last row to the next widget. "left"/"right" move focus, as for buttons. "activate" returns the cursor index.
+  - An empty list, or a disabled one, is drawn but skipped by navigation and never activates.
+  - Drawing: the frame as for the text field; each visible row's text left-aligned at `x + 4` and vertically centred in its row, truncated with `...` to fit; the `selected` row's background in `rowSelectedColor`; the cursor row, while the list is focused, with a 1-unit `focusColor` outline inside the row. When `count > visibleRows`, a 3-unit scrollbar inside the right edge (`trackColor`, with a `fillColor` thumb of height `max(4, h · visibleRows / count)`); row text then fits in `w - 12` instead of `w - 8`. The scrollbar is not interactive.
+- Helpers:
+  - `ui.changed(id: string): boolean` and `ui.committed(id: string): boolean` (§ "Change signals").
+  - `ui.listCursor(id: string): number`: the list's cursor, or `-1` (no cursor, an unknown id, or not a list).
+  - `ui.editing: string | null` (read/write): the text field being edited. Setting it to an id focuses that id and starts editing in the next step, with the caret at the end, if that step declares an enabled text field with that id; otherwise it is cleared at the end of that step. Setting it to `null` stops editing with **commit**.
+
+### Navigation (updated)
+F012 navigation is unchanged for buttons. The intents are computed as in F012 ("previous" = up **or** left, "next" = down **or** right). The new rule is that the focused widget decides what each intent does:
+
+| Focused widget | "left" / "right" | "up" / "down" | "activate" | `Escape` / pad `B` |
+|---|---|---|---|---|
+| none, `button`, `toggle` | previous / next focus (F012) | previous / next focus | button: activate; toggle: flip | clear focus |
+| `slider` | −/+ `keyStep` (hold repeats) | previous / next focus | nothing | clear focus |
+| `list` | previous / next focus | cursor −/+ 1 (hold repeats); a fresh press past the first/last row leaves the list | activate the cursor row | clear focus |
+| `textField`, not editing | previous / next focus | previous / next focus | start editing | clear focus |
+| `textField`, editing | ignored (raw `ArrowLeft`/`ArrowRight` move the caret through `textEvents`) | commit, then previous / next focus; raw `ArrowUp`/`ArrowDown` also count | raw `Enter`/`NumpadEnter`, the declared `confirm` action (gamepad or mouse only, because of capture) or gamepad 0 `A`: commit and stop editing (focus kept) | revert and stop editing (focus kept) |
+
+- Each single intent follows F012: "left" is action `left` if declared, else `ArrowLeft`, plus gamepad 0 `Left`; "right", "up" and "down" likewise; "activate" is action `confirm` if declared, else `Enter`/`NumpadEnter`/`Space`, plus gamepad 0 `A`. While editing, keyboard keys don't reach actions (keyboard capture), so only the raw keys named in the table act on the keyboard side.
+- When both intents of a pair are pressed in the same step, that pair does nothing (F012 rule).
+- **Hold repeat** (slider adjustment and list cursor only): while the intent stays held (`actionDown` of the declared action, else `isDown` of the fallback key, or gamepad 0 `isDown` of the D-pad direction), it repeats after 0.4 s and then every 0.08 s of step time (the sum of fixed-step `dt`). The timer restarts when the held intent or the focus changes. Moving focus between widgets never repeats (F012 unchanged), and a repeat never leaves a list.
+- Navigation order: every valid, enabled widget with `nav !== false`, in call order, from the previous step (F012). Panels and labels are never in it; empty lists are skipped.
+
+### Text editing
+- **Start editing**:
+  - a pointer press on an enabled text field (the caret goes to the code-point boundary nearest the pointer);
+  - "activate" while it is focused (caret at the end);
+  - `ui.editing = id` (caret at the end);
+  - while it is focused and not editing, a step with at least one `text` event: editing starts, that step's events are applied, and no navigation or activation happens in that step. This takes precedence over "activate", so `Space` on a focused field starts editing and inserts a space.
+- **While editing**, the step's `textEvents` are applied in order:
+  - `text`: each code point is inserted at the caret, unless `allow` returns `false` for it (or throws: treated as `false`, one warning per id) or the text already has `maxLength` code points (then the rest of the event is dropped).
+  - `Backspace` / `Delete` remove the code point before / after the caret. `ArrowLeft` / `ArrowRight` move the caret by one code point. `Home` / `End` move it to the start / end.
+- The return value is the edited text in every step (live). The engine stores the text as it was when editing started (the **original**).
+- **Stop editing**:
+  - **commit**: raw `Enter`/`NumpadEnter`, the `confirm` action or gamepad 0 `A` (together "**submit**"), leaving with "up"/"down", a pointer press outside the field, `ui.editing = null`, or `ui.focus` set to another id. Focus stays on the field for a submit and for `ui.editing = null`.
+  - **revert**: `Escape` or gamepad 0 `B`. The field returns the original text in that step, and focus stays on it.
+  - **dropped**: the field is not declared, or is disabled, in a step. Editing ends at the end of that step, with no signal.
+- Only one field edits at a time. `Tab` is never used. Paste works. Copy, selection, undo, IME composition and an on-screen keyboard are **not** supported.
+
+### Change signals
+`ui.changed(id)` and `ui.committed(id)` are true only in the step where it happens, and only **after** the widget's call in that step. Before the call, or for an id not declared in the step, they return `false`.
+
+| Widget | `changed(id)` | `committed(id)` |
+|---|---|---|
+| slider | the player changed the returned value (pointer or keys) | the step of the release that ends a drag during which the value changed; every keyboard/gamepad adjustment step that changed the value |
+| toggle | it flipped | it flipped |
+| textField | the returned text differs from the text passed in (an edit or a revert) | the step it stops editing with **commit**: always for a submit, otherwise only when the text differs from the original |
+| list | the cursor moved (keys or a click) | a row was activated |
+| button | it activated | it activated |
+
+Use `committed` to save settings once, instead of on every drag step.
+
+### Phases, ids and disabled state
+- Outside a fixed step, the new widgets draw at the call site and return their input unchanged (`value`, `on`, `text`, `-1`), with the warning `{kind} "{id}" was called outside update; it is drawn but never changes (call widgets from update)` once per id. `{kind}` is `slider`, `toggle`, `textField` or `list`. The F012 `button` wording is unchanged.
+- An invalid id gives `{kind} id {json} must be a string of 1–64 characters; it never changes`, and a duplicate gives `{kind} id "{id}" is used twice in one step; the second one never changes` (once per id each; `{json}` is `JSON.stringify(String(id))`). Such a widget is drawn and returns its input unchanged.
+- Disabled widgets are drawn at alpha 0.5 (text in `disabledTextColor`). They are never hot, active, focused or editing, and return their input (a slider's clamped and snapped).
+- Each widget is one command toward the 256-commands-per-step cap.
+- Interaction state (list cursor and scroll, the text caret and visible run, a slider drag) is kept per id and **discarded at the end of a step that does not declare that id**. A list that reappears starts scrolled so that `selected` is visible, or at the top.
+- All warnings use the F012 prefix `[pixelforge] ui: `.
+
+### Input additions
+```ts
+engine.input.textEvents: readonly TextEvent[]   // this step's typing, in order; [] when none
+engine.input.keyboardCaptured: boolean          // read-only
+```
+- **`textEvents`** is collected from window events and handed over at the start of each step (like `typed`). At most 64 events per step are kept; extras are dropped.
+  - A `keydown` with `isComposing === false`, an `e.key` of exactly one code point, and neither `ctrlKey` nor `metaKey` (unless both `ctrlKey` and `altKey` are set, which is AltGr on Windows) → `{ kind: "text", text: e.key }`. Key repeats count.
+  - A `keydown` whose `e.key` is `Backspace`, `Delete`, `ArrowLeft`, `ArrowRight`, `Home` or `End`, without `ctrlKey`/`metaKey`/`altKey` → `{ kind: "key", key: e.key }`. Key repeats count.
+  - A `paste` on the window → `{ kind: "text", text }` from `clipboardData.getData("text/plain")`. `\r\n`, `\r`, `\n` and `\t` become spaces, and the text is cut to 256 code points. The event's default is prevented. An empty result adds nothing.
+  - Every `text` event is filtered: code points below U+0020, U+007F–U+009F and lone surrogates are removed, and an event that becomes empty is dropped.
+  - Events that arrived while the engine was paused are discarded when it resumes (host `webgame:resume` or the end of an author pause), so keys typed under the ⌨ panel never reach a field.
+  - `typed` is unchanged (F009 raw input).
+- **`keyboardCaptured`** is `true` while a `ui.textField` is editing. The UI sets it at the end of each step, and it applies from the next step. While it is `true`:
+  - `actionDown/actionPressed/actionReleased` and `axis()` ignore keyboard codes. Mouse codes (`Mouse0`…) and gamepad buttons still count.
+  - An action that was down only through keyboard keys reports `actionReleased` in the first captured step.
+  - When capture ends, keyboard keys that are still held don't count for actions until they are released.
+  - `keydown` events that produce a `textEvents` entry, and `Space`, have their default prevented (so Firefox quick find and page scrolling never trigger), except `Ctrl`/`Meta` + `V`, which must reach the browser to fire `paste`.
+  - Raw input (`isDown/wasPressed/wasReleased(code)`, `anyPressed`, `typed`, `mouse`, `touches`, `gamepad(i)`) is unchanged. The F3 debug key still works.
+
+### Frame order
+Unchanged from F012. The new widgets are part of the UI layer, before the F005 capture point, so screenshots include them (and the caret while editing).
+
+### For creators
+- Keep the value in your own state and pass it back every step: `s.volume = ui.slider("vol", s.volume, 120, 80, 160, 12, { step: 0.05 })`. Save on `ui.committed("vol")`.
+- While `engine.ui.editing` is set, your keyboard actions pause (`input.keyboardCaptured`), so typing a name never moves the player. Gamepad and mouse still work. If you read raw keys or `typed` for gameplay, check `engine.ui.editing` yourself.
+- Text fields need a physical keyboard. On touch devices, and for controller-only players, offer a fallback (for example preset names in a `ui.list`). An on-screen keyboard is a later roadmap item (F023).
+- Labels and value read-outs are plain `ui.label` calls, so you choose the wording and the format.

@@ -1,6 +1,6 @@
 # F008: Collections (curated game lists)
 
-Status: **specced**. Size: **M** (backend medium, frontend medium, desktop small; one round). Areas: backend, frontend, desktop. No engine changes.
+Status: **shipped**. Size: **M** (backend medium, frontend medium, desktop small; one round). Areas: backend, frontend, desktop. No engine changes.
 Contracts: `docs/API.md` § F008 additions (types, ten endpoints, report changes, validation order, limits, rate limit), `docs/ARCHITECTURE.md` § F008 additions (migration `0016_f008.sql` incl. the `reports` rebuild, query shapes, share URLs, decisions), `docs/GAME_FORMAT.md` § F008 additions (no changes; noted for completeness).
 Depends on: nothing unshipped. Reuses `fetch_visible_game`/`GameRow::visible_to`, `GAME_SELECT`, `parse_paging`, `limit_user`, the v2 report flow (F005 rebuild pattern), `useModal`, `ConfirmDialog`, `GameCard`, `ReportButton`. The migration is **`0016_f008.sql`** and runs after `0015_f017.sql`. **No new Rust or JS dependencies.**
 

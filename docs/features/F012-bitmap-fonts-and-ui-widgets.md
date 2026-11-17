@@ -1,6 +1,6 @@
 # F012: Engine bitmap fonts, 9-slice and UI widgets
 
-Status: **specced**. Size: **M** (engine is the main area; frontend small to medium; backend and desktop small; one round). Areas: engine (+ examples), frontend, backend, desktop.
+Status: **shipped**. Size: **M** (engine is the main area; frontend small to medium; backend and desktop small; one round). Areas: engine (+ examples), frontend, backend, desktop.
 Contracts: `docs/GAME_FORMAT.md` § F012 additions (the `.fnt` bundle extension, the BMFont formats and limits, the built-in `pixel` font, `drawText` with bitmap fonts, `NineSlice`/`drawNineSlice`, `engine.ui`, the frame order), `docs/API.md` § F012 additions (the bundle allowlist and the files `Content-Type`), `docs/ARCHITECTURE.md` § F012 additions (engine modules, the font registry, the frame order, the allowlist copies, ownership).
 Depends on: nothing unshipped. It reuses `Texture`/`SpriteSheet`, the renderer's batching and atlas pages, the F009 action map (for menu navigation) and the F005 capture point. **No migration, no new endpoints, no rate limit changes, no new Rust or JS dependencies.**
 

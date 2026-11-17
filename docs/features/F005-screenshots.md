@@ -1,6 +1,6 @@
 # F005: Screenshot capture and share
 
-Status: **specced**. Size: **M** (engine + frontend main; backend medium; desktop small; one round). Areas: engine (+ examples), backend, frontend, desktop.
+Status: **shipped**. Size: **M** (engine + frontend main; backend medium; desktop small; one round). Areas: engine (+ examples), backend, frontend, desktop.
 Contracts: `docs/GAME_FORMAT.md` § F005 additions (engine API, messages), `docs/API.md` § F005 additions (endpoints, types, limits), `docs/ARCHITECTURE.md` § F005 additions (capture pipeline, storage, migration `0009_f005.sql`).
 Depends on: nothing unshipped. It builds on the F001 request/reply pattern, `validate_image` and the N5 `Limit::Image` pattern (review round 2), `useModal`, `platform.saveFile`, and the moderation queue. The migration is **`0009_f005.sql`** and runs after the review-fix `0008_review2.sql`.
 

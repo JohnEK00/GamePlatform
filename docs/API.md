@@ -1413,3 +1413,7 @@ type ControlBindingsResponse = { bindings: ControlBindings | null; updatedAt: st
   - Authentication (401) comes first.
   - For signed-in callers, the body limit (413) and malformed JSON (400) come next, then visibility (404), then the rate limit (429).
   - Requests that fail before the rate-limit check don't use up rate-limit tokens.
+
+
+## F019 additions
+Engine UI widgets 2 (spec: `docs/features/F019-ui-widgets-2.md`). **No changes**: no new or changed endpoints, types, status codes, migrations, rate limits or bundle extensions. The feature is engine API only (GAME_FORMAT.md § F019 additions). The repacked example bundles must still pass the existing upload validation (`actions`, allowlist, size), which the backend suites already check.

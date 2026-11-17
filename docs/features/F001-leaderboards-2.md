@@ -1,6 +1,6 @@
 # F001: Leaderboards 2.0
 
-Status: **specced**. Size: **M**. Areas: engine (+ examples), backend, frontend, desktop (verify only).
+Status: **shipped**. Size: **M**. Areas: engine (+ examples), backend, frontend, desktop (verify only).
 Contracts: `docs/API.md` § F001 additions, `docs/GAME_FORMAT.md` § F001 additions, `docs/ARCHITECTURE.md` § F001 additions.
 
 ## 1. Goal and user stories

@@ -1,6 +1,6 @@
 # F002: Follow creators and an activity feed
 
-Status: **specced**. Size: **M**. Areas: backend, frontend, desktop (menu entry). Engine: no changes.
+Status: **shipped**. Size: **M**. Areas: backend, frontend, desktop (menu entry). Engine: no changes.
 Contracts: `docs/API.md` § F002 additions, `docs/GAME_FORMAT.md` § F002 additions, `docs/ARCHITECTURE.md` § F002 additions.
 Depends on: **F001** (backend) for `ScoreSubmitResult.personalBest` and `Game.leaderboard`. See "Sequencing".
 

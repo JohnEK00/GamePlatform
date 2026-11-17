@@ -1,6 +1,6 @@
 # F007: In-app notifications
 
-Status: **specced**. Size: **M** (backend medium, frontend medium, desktop small; one round). Areas: backend, frontend, desktop. No engine changes.
+Status: **shipped**. Size: **M** (backend medium, frontend medium, desktop small; one round). Areas: backend, frontend, desktop. No engine changes.
 Contracts: `docs/API.md` § F007 additions (types, endpoints, triggers, validation, rate limits, env), `docs/ARCHITECTURE.md` § F007 additions (fan-out on write, migration `0013_f007.sql`, upsert, read/count queries, pruning, polling, desktop OS notifications), `docs/GAME_FORMAT.md` § F007 additions (no changes; noted for completeness).
 Depends on: F006 (backend committed; frontend in progress). It wires the two `// F007:` hook points in `backend/src/routes/comments.rs`, plus hooks in `routes/follows.rs` (follow) and `routes/games.rs` (first publish). It reuses F006 permalinks `/games/{id}?comment={commentId}`. The migration is **`0013_f007.sql`** and runs after `0012_f006.sql`. **No new JS dependencies and no `npm install`.** One new optional Rust crate on desktop (`tauri-plugin-notification`, § 4 desktop-dev); none on the backend.
 

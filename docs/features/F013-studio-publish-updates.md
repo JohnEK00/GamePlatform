@@ -1,6 +1,6 @@
 # F013: Studio: publish updates to an existing game
 
-Status: **specced**. Size: **M** (frontend main; small backend and desktop parts; one round). Areas: frontend, backend, desktop. Engine: no changes.
+Status: **shipped**. Size: **M** (frontend main; small backend and desktop parts; one round). Areas: frontend, backend, desktop. Engine: no changes.
 Contracts: `docs/API.md` § F013 additions, `docs/GAME_FORMAT.md` § F013 additions, `docs/ARCHITECTURE.md` § F013 additions.
 Depends on: **F004** (in progress): `notes` and `expectedVersion` on `PUT /api/games/{id}/bundle`, `Game.latestVersion`, and the `ReleaseNotesField` component. No migration: F013 changes no tables (the `0008` slot stays unused by F013).
 

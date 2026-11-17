@@ -38,9 +38,10 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F018 | Notification controls: mutes, shared polling, "pinned" notifications | M | shipped |
 | F021 | Collection activity: feed items and "added to a collection" notifications | M | shipped |
 | F016 | Gamepad remapping, synced control bindings and device-aware prompts | M | shipped |
-| F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
+| F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | M | specced |
 | F020 | Game comment settings: turn comments off, slow mode | S | proposed |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
+| F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | proposed |
 | F022 | Announce a collection when it goes public | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
@@ -200,10 +201,15 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration, five mute endpoints, write-path mute check and group dedupe, `pinned` kind, `threadId`, `Game.notificationsMuted`, `Comment.threadMuted`), frontend (tab coordinator, mute buttons, item mute action, Muted list, `pins` switch, `pinned` text), desktop (verification only). No engine changes.
 - **Depends on**: F007 and F017 (shipped). Unblocks F021.
 
-### F019: Engine UI widgets 2 (S, proposed; after F012)
-- **Pitch**: `ui.slider` (volume, difficulty), `ui.toggle`, a single-line `ui.textField` (uses `input.typed`, for name entry), and `ui.list` (a vertical list with keyboard and gamepad scrolling), all following the F012 theme, phase and navigation rules. Left and right adjust a focused slider.
-- **User value**: settings and name-entry screens without custom code, completing the F012 menu toolkit.
-- **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.
+### F019: Engine UI widgets 2: slider, toggle, text field and list (M, specced → [spec](features/F019-ui-widgets-2.md))
+- **Pitch**:
+  - `ui.slider` (drag, or left/right with hold repeat), `ui.toggle` (a labelled switch), a single-line `ui.textField` (caret, paste, `maxLength`, an `allow` filter) and `ui.list` (rows with a cursor, wheel and drag scrolling, and keyboard/gamepad movement that leaves the list at its ends). All follow the F012 theme, phase and navigation rules; the focused widget decides what each navigation intent does.
+  - Value in, value out (`v = ui.slider(id, v, …)`), plus `ui.changed(id)` / `ui.committed(id)` so games save once per drag or per name entry.
+  - `input.textEvents` (typed and pasted text, editing keys with repeat) and `input.keyboardCaptured`: while a field is editing, actions and `axis()` ignore the keyboard, so typing a name never moves the player or opens the pause menu.
+  - The Menu & HUD template gets a SETTINGS screen with all four widgets; Ember Garden's settings use toggles and a new volume slider.
+- **User value**: settings and name-entry screens without custom code, completing the F012 menu toolkit; controller and keyboard players get the same settings screens as mouse players.
+- **Areas**: engine (`ui.ts`, new pure `uitext.ts`, `input.ts` capture, Ember Garden settings), frontend (template, docs subsection), backend and desktop (verification only). No migration, endpoints or messages.
+- **Depends on**: F012, F009, F016 (all shipped). Resized from S to M: text input and keyboard capture are most of the work. Follow-up: F023 (on-screen keyboard).
 
 ### F021: Collection activity: feed items and notifications (M, shipped → [spec](features/F021-collection-activity.md))
 - **Pitch**:
@@ -224,3 +230,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: when a collection changes from private to public with at least one published game, followers get one `collectionShared` feed item ("Mia shared *Cozy games*: 8 games") instead of nothing, and creators of the games in it get the F021 `addedToCollection` notification (deduped per collection and game, so re-toggling never re-notifies).
 - **User value**: the common "curate privately, then publish" flow reaches followers, which F021 deliberately skips.
 - **Areas**: backend (one more activity kind, no rebuild; hook in `PATCH /api/collections/{id}`; a once-per-collection guard), frontend (feed item). No engine or desktop changes.
+
+### F023: Engine on-screen keyboard for `ui.textField` (S, proposed; after F019)
+- **Pitch**: an engine-drawn, gamepad- and touch-navigable keyboard panel (`ui.keyboard` or an automatic one when a field starts editing with `lastDevice` `"touch"`/`"gamepad"`), feeding the F019 `textEvents` path, with A–Z, 0–9, space, backspace and done keys, respecting the field's `allow` filter.
+- **User value**: controller and phone players can enter names too, which F019 leaves to each game.
+- **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.

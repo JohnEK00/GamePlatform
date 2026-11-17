@@ -1,6 +1,6 @@
 # F017: Creator comment tools: pin, lock and "Top" sort
 
-Status: **specced**. Size: **S** (backend small, frontend small to medium; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
+Status: **shipped**. Size: **S** (backend small, frontend small to medium; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
 Contracts: `docs/API.md` § F017 additions (type fields, `sort`, four endpoints, validation order, rate limit), `docs/ARCHITECTURE.md` § F017 additions (migration `0015_f017.sql`, query changes, notification decision), `docs/GAME_FORMAT.md` § F017 additions (no changes; noted for completeness).
 Depends on: F006 (threads, hearts, permalinks, `remove_comment`) and F007 (notification hooks), both shipped. The migration is **`0015_f017.sql`** and runs after `0014_review4.sql`. **No new Rust or JS dependencies.**
 

@@ -1,6 +1,6 @@
 # F009: Controls overlay and key remapping
 
-Status: **specced**. Size: **M** (engine and frontend main; backend small to medium; desktop small; one round). Areas: engine (+ examples), backend, frontend, desktop.
+Status: **shipped**. Size: **M** (engine and frontend main; backend small to medium; desktop small; one round). Areas: engine (+ examples), backend, frontend, desktop.
 Contracts: `docs/GAME_FORMAT.md` § F009 additions (the `actions` and `controls` keys in game.json, the engine action API, the `webgame:controls` message, the key tables), `docs/API.md` § F009 additions (`Game.actions`, `Game.controlsHint`, validation), `docs/ARCHITECTURE.md` § F009 additions (data flow, migration `0010_f009.sql`, startup backfill, override storage).
 Depends on: nothing unshipped. It reuses the v2 `hello`/`load` handshake, the host pause message, `useModal`, the F005 "window CustomEvent from the host" pattern (`PLAYER_SCREENSHOT_EVENT`) and the desktop `FORWARDED` menu ids. The migration is **`0010_f009.sql`** and runs after `0009_f005.sql`. **No new Rust or JS dependencies.**
 

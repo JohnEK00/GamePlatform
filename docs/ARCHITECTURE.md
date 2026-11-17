@@ -1280,3 +1280,24 @@ These rules replace the F016 frontend implementation notes above where the two d
 - Uploads requested in the meantime collapse into one waiting upload. When it runs, it reads the latest device bindings. It is skipped if the entry is no longer unsynced for that user.
 - The keepalive flush on unmount or `pagehide` goes out at once when nothing is in flight. Otherwise it waits for the current request, then sends the latest bindings with `keepalive`. If the page is gone by then, the marker stays and the next session uploads the change.
 - The marker is cleared only when the device bindings equal what the successful `PUT` sent.
+
+
+## F019 additions
+Engine UI widgets 2 (spec: `docs/features/F019-ui-widgets-2.md`). Engine-only. **No migration** (the latest stays `0020_f016.sql`; the next free number is still `0021`), no endpoints, no messages and no new Rust or JS dependencies.
+- **Engine modules** (engine-dev, `packages/engine/src/`):
+  - `ui.ts` gains `slider`, `toggle`, `textField`, `list`, `changed`, `committed`, `listCursor` and `editing`. The command union gains `slider`, `toggle`, `field` and `list` entries; `exec` draws them. Widget state lives in one `Map<string, WidgetState>` keyed by id (`{ kind, cursor, scroll, caret, runStart, original, pressRow, pressY, pressScroll, dragChanged }`), pruned in `endStep` to the ids declared in that step.
+  - `uitext.ts` (new, pure, no DOM): code-point editing (`insertText`, `applyTextEvent`), the visible-run window, caret-from-x and `truncateToWidth`, all taking a `measure(text) → width` function so they are testable in node.
+  - `input.ts`: the `textEvents` queue (keydown + `paste` listeners), `keyboardCaptured`, `setKeyboardCapture(on)` (engine-internal), `clearTextEvents()` (engine-internal) and a keyboard-filtering `ButtonSource` wrapper passed to `ActionMap.update` while captured (with the first-step synthetic release and the end-of-capture key latch).
+  - `engine.ts`: passes the fixed-step `dt` to `ui.beginStep(dt)` (for hold repeat), and calls `input.clearTextEvents()` when a pause ends.
+  - `UiInput` gains `actionDown`, `isDown`, `mouse.wheel`, `textEvents`, `gamepad(i).isDown` and an optional `setKeyboardCapture`. `UiRenderer` gains `measureText`. Both stay injected, so all rules are node-testable.
+- **Step order** (unchanged hooks, one new hand-off):
+  ```
+  input.beginStep (textEvents handed over; capture state applied to actions) → ui.beginStep(dt)
+      → game/scene update (widgets) → ui.endStep (commit list, prune state, input.setKeyboardCapture(editing !== null))
+      → input.endStep
+  ```
+  Capture therefore lags editing by exactly one step on both ends, which is what makes the first-step `actionReleased` and the end-of-capture latch well defined.
+- **Why keyboard capture lives in `Input`**, not in games: a name field on a game-over screen must not also trigger the game's `confirm`/`left`/`jump` actions bound to letter keys. Filtering at the `ActionMap` input keeps one rule for actions, `axis()` and F012 menu navigation, and leaves raw input untouched for games that need it.
+- **No platform involvement.** Text typed into a field stays inside the sandboxed, opaque-origin game iframe. There is no new message, no host keyboard handling and no clipboard permission: `paste` events only fire on a user paste gesture into the iframe document.
+- **Studio and docs** (frontend-dev): the `menu-hud` template gains a settings screen using all four widgets; the docs page section 16 gains a "Settings and text entry" subsection. Desktop: verification only.
+- **Ownership**: `ui.ts`, `uitext.ts`, `input.ts`, `engine.ts`, the engine README and the Ember Garden settings scene belong to engine-dev; `templates.ts` and `DocsPage.tsx` to frontend-dev.

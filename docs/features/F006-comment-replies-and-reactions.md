@@ -1,6 +1,6 @@
 # F006: Comment replies and reactions
 
-Status: **specced**. Size: **M** (backend medium, frontend medium; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
+Status: **shipped**. Size: **M** (backend medium, frontend medium; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
 Contracts: `docs/API.md` § F006 additions (types, endpoints, validation, rate limits), `docs/ARCHITECTURE.md` § F006 additions (migration `0012_f006.sql`, queries, delete cascade, F007 hook points), `docs/GAME_FORMAT.md` § F006 additions (no changes; noted for completeness).
 Depends on: nothing unshipped. It extends the v1 comments endpoints, the v2 moderation flow (reports on comments, admin resolve) and the v2 `Limit::Comment` bucket. The migration is **`0012_f006.sql`** and runs after `0011_review3.sql`. **No new Rust or JS dependencies.**
 

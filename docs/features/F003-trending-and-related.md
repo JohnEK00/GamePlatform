@@ -1,6 +1,6 @@
 # F003: Trending and "More like this" discovery
 
-Status: **specced**. Size: **S** (backend + frontend, one round). Areas: backend, frontend. Engine: no changes. Desktop: verification only.
+Status: **shipped**. Size: **S** (backend + frontend, one round). Areas: backend, frontend. Engine: no changes. Desktop: verification only.
 Contracts: `docs/API.md` § F003 additions, `docs/GAME_FORMAT.md` § F003 additions, `docs/ARCHITECTURE.md` § F003 additions.
 Depends on: the review-fix play dedupe (REVIEW-2026-11-14-1 R2: `Limit::Play` plus `PlayDedupe`, one counted play per viewer and game per 10 minutes). Migration `0006_f003.sql` runs after `0004_perf_indices.sql` (review fix) and `0005_f002.sql` (F002). See "Sequencing".
 

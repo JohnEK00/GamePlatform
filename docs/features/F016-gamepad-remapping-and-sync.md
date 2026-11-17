@@ -1,6 +1,6 @@
 # F016: Gamepad remapping and synced control bindings
 
-Status: **specced**. Size: **M** (engine and frontend main; backend small; desktop verification only; one round). Areas: engine (+ examples), backend, frontend, desktop.
+Status: **shipped**. Size: **M** (engine and frontend main; backend small; desktop verification only; one round). Areas: engine (+ examples), backend, frontend, desktop.
 Contracts: `docs/GAME_FORMAT.md` § F016 additions (the `gamepad` field of `webgame:controls`, gamepad override rules, `input.lastDevice`, `actionLabel(id, device)`, the resume latch, parent capture rules), `docs/API.md` § F016 additions (`ControlBindings`, `GET`/`PUT /api/games/{id}/controls`, validation, `Limit::Controls`, body limit), `docs/ARCHITECTURE.md` § F016 additions (migration `0020_f016.sql`, the sync algorithm, the extended on-device entry, ownership).
 Depends on: F009 (shipped): actions, overrides store, `ControlsPanel`, `webgame:controls`. Reuses the cloud-save pattern (`fetch_visible_game`, per-user per-game row, debounced `PUT` with `keepalive`), the F009 pause reasons and `useModal`. The migration is **`0020_f016.sql`** and runs after `0019_f021.sql`. **No new Rust or JS dependencies.**
 
