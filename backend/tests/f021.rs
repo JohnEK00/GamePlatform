@@ -476,6 +476,12 @@ async fn migration_upgrade_from_0018() {
 
 #[tokio::test]
 async fn feed_item_coalesces_per_collection_and_day() {
+    same_utc_day(feed_item_coalesces_per_collection_and_day_body).await;
+}
+
+/// The adds must share one UTC day, and `yesterday` is the day before it (L5: run through
+/// `same_utc_day`).
+async fn feed_item_coalesces_per_collection_and_day_body() {
     let w = world().await;
     let t = &w.t;
     let mut games = Vec::new();

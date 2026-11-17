@@ -255,6 +255,11 @@ async fn migration_adds_profile_index_and_leaves_activity_events_untouched() {
 
 #[tokio::test]
 async fn feed_item_coalesces_per_day_and_follows_only() {
+    same_utc_day(feed_item_coalesces_per_day_and_follows_only_body).await;
+}
+
+/// Six real posts that must land on one UTC day (L5: run through `same_utc_day`).
+async fn feed_item_coalesces_per_day_and_follows_only_body() {
     let t = setup().await;
     let (owner, _) = t.register("olga").await;
     let (ana, ana_id) = t.register("ana").await;
@@ -360,6 +365,10 @@ async fn owner_shots_are_announced_and_other_kinds_have_null_screenshots() {
 
 #[tokio::test]
 async fn unpublished_game_writes_nothing_and_hides_the_item() {
+    same_utc_day(unpublished_game_writes_nothing_and_hides_the_item_body).await;
+}
+
+async fn unpublished_game_writes_nothing_and_hides_the_item_body() {
     let t = setup().await;
     let (owner, _) = t.register("olga").await;
     let (fan, _) = t.register("fan").await;
@@ -456,6 +465,10 @@ async fn items_are_split_by_utc_day() {
 
 #[tokio::test]
 async fn deleted_screenshots_disappear_at_read_time() {
+    same_utc_day(deleted_screenshots_disappear_at_read_time_body).await;
+}
+
+async fn deleted_screenshots_disappear_at_read_time_body() {
     let t = setup().await;
     let (owner, _) = t.register("olga").await;
     let (ana, _) = t.register("ana").await;

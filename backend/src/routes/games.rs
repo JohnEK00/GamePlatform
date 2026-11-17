@@ -454,14 +454,26 @@ fn parse_int(v: Option<&str>, name: &str, default: i64) -> AppResult<i64> {
     }
 }
 
+/// Highest `page` any offset-paged list accepts; larger values are clamped to it (as
+/// `page < 1` is clamped to 1). With `perPage <= 100` the offset stays far below `i64::MAX`.
+pub const MAX_PAGE: i64 = 1_000_000;
+
 pub fn parse_paging(
     page: Option<&str>,
     per_page: Option<&str>,
     default_per: i64,
 ) -> AppResult<(i64, i64)> {
-    let page = parse_int(page, "page", 1)?.max(1);
+    let page = parse_int(page, "page", 1)?.clamp(1, MAX_PAGE);
     let per = parse_int(per_page, "perPage", default_per)?.clamp(1, 100);
     Ok((page, per))
+}
+
+/// SQL `OFFSET` for a 1-based `page`. Saturates instead of overflowing, so it is safe even
+/// for values that did not come through `parse_paging`.
+pub fn page_offset(page: i64, per_page: i64) -> i64 {
+    page.max(1)
+        .saturating_sub(1)
+        .saturating_mul(per_page.max(0))
 }
 
 fn like_pattern(s: &str) -> String {
@@ -562,7 +574,7 @@ pub async fn list_games(
     }
 
     let sql = format!("{GAME_SELECT} {where_sql} ORDER BY {order} LIMIT ? OFFSET ?");
-    let offset = (page - 1) * per_page;
+    let offset = page_offset(page, per_page);
     let mut q = sqlx::query(&sql);
     for b in &binds {
         q = q.bind(b);

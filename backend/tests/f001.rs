@@ -304,6 +304,12 @@ fn period_bounds_are_utc_day_and_iso_week() {
 
 #[tokio::test]
 async fn period_filtering() {
+    same_utc_day(period_filtering_body).await;
+}
+
+/// The expected bounds come from this test's clock read and the server reads its own, so both
+/// must fall on one UTC day (L5: run through `same_utc_day`).
+async fn period_filtering_body() {
     let t = setup().await;
     let (owner, _) = t.register("owner").await;
     let (_, w_id) = t.register("weekstart").await;

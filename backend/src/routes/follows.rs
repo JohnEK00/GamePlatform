@@ -13,7 +13,7 @@ use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
 use crate::notifications::{self as notif, Dedupe, Kind, NewNotification};
 use crate::ratelimit::Limit;
 use crate::routes::comments::PageQuery;
-use crate::routes::games::{limit_user, parse_paging};
+use crate::routes::games::{limit_user, page_offset, parse_paging};
 
 /// A user may follow at most this many users.
 pub const FOLLOW_CAP: i64 = 2000;
@@ -180,7 +180,7 @@ async fn list_side(
     ))
     .bind(&user_id)
     .bind(per_page)
-    .bind((page - 1) * per_page)
+    .bind(page_offset(page, per_page))
     .fetch_all(&state.db)
     .await?;
     let items = rows

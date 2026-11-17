@@ -14,7 +14,7 @@ use crate::error::{AppError, AppResult};
 use crate::extract::{ApiMultipart, ApiPath, ApiQuery};
 use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
 use crate::ratelimit::Limit;
-use crate::routes::games::{fetch_visible_game, limit_user, parse_paging};
+use crate::routes::games::{fetch_visible_game, limit_user, page_offset, parse_paging};
 use crate::screenshots::{
     image_url, process_screenshot, remove_screenshot_files, thumb_url, write_screenshot_files,
 };
@@ -203,7 +203,7 @@ pub async fn list_screenshots(
     ))
     .bind(&game_id)
     .bind(per_page)
-    .bind((page - 1) * per_page)
+    .bind(page_offset(page, per_page))
     .fetch_all(&state.db)
     .await?;
     let items = rows
@@ -250,7 +250,7 @@ pub async fn list_user_screenshots(
         .bind(&author)
         .bind(viewer.id())
         .bind(per_page)
-        .bind((page - 1) * per_page)
+        .bind(page_offset(page, per_page))
         .fetch_all(&state.db)
         .await?;
     let items = rows

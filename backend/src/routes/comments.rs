@@ -20,7 +20,7 @@ use crate::models::{
 };
 use crate::notifications::{self as notif, Dedupe, Kind, NewNotification};
 use crate::ratelimit::{ClientIp, Limit, key_for};
-use crate::routes::games::{fetch_visible_game, limit_user, parse_paging};
+use crate::routes::games::{fetch_visible_game, limit_user, page_offset, parse_paging};
 use crate::routes::screenshots::is_admin;
 
 pub const COMMENT_MAX: usize = 2000;
@@ -333,7 +333,7 @@ pub async fn list_comments(
     .bind(viewer.admin_flag())
     .bind(&game_id)
     .bind(per_page)
-    .bind((page - 1) * per_page)
+    .bind(page_offset(page, per_page))
     .fetch_all(&state.db)
     .await?;
     let pinned_row = sqlx::query(&format!(
@@ -725,7 +725,7 @@ pub async fn list_replies(
     .bind(viewer.admin_flag())
     .bind(&id)
     .bind(per_page)
-    .bind((page - 1) * per_page)
+    .bind(page_offset(page, per_page))
     .fetch_all(&state.db)
     .await?;
     Ok(Json(Page {

@@ -48,7 +48,15 @@ async fn r1_concurrent_replaces_one_wins_files_intact() {
 
     let za = bundle_with("export default { a: 1 };", 4 << 20);
     let zb = bundle_with("export default { b: 2 };", 4 << 20);
-    let (ra, rb) = tokio::join!(replace(&t, &tok, id, &za), replace(&t, &tok, id, &zb));
+    // The gate parks the first claimer while it holds the claim, so the two replaces always
+    // overlap. A bare `join!` let one finish before the other started under load (both 200).
+    let gate = t.state.bundle_locks.install_gate();
+    let (ra, rb) = tokio::join!(replace(&t, &tok, id, &za), async {
+        gate.entered().await;
+        let rb = replace(&t, &tok, id, &zb).await;
+        gate.release();
+        rb
+    });
     let mut statuses = [ra.status.as_u16(), rb.status.as_u16()];
     statuses.sort();
     assert_eq!(statuses, [200, 409], "{} / {}", ra.text(), rb.text());

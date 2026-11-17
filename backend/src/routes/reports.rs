@@ -15,7 +15,9 @@ use crate::models::{Page, UserRef, now_rfc3339, user_ref_from_row};
 use crate::ratelimit::Limit;
 use crate::routes::collections::{load_collection, remove_collection};
 use crate::routes::comments::remove_comment;
-use crate::routes::games::{fetch_visible_game, limit_user, parse_paging, remove_game};
+use crate::routes::games::{
+    fetch_visible_game, limit_user, page_offset, parse_paging, remove_game,
+};
 use crate::routes::screenshots::{is_admin, remove_screenshot};
 use crate::screenshots::{image_url, thumb_url};
 
@@ -254,7 +256,7 @@ pub async fn admin_list_reports(
     ))
     .bind(&status)
     .bind(per_page)
-    .bind((page - 1) * per_page)
+    .bind(page_offset(page, per_page))
     .fetch_all(&state.db)
     .await?;
     let items = rows

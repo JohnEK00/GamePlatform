@@ -1574,3 +1574,6 @@ type UserScreenshot = Screenshot & { game: ScreenshotGameRef }
 - **Emptied profile section:** if a delete empties the section on someone else's profile (for example the game owner or an admin deleting), it keeps showing its heading so focus has somewhere to land. On first load, the section stays hidden for another user's profile while loading, when it is empty, and after an error.
 - **Load-more errors on a profile:** shown inline as "Couldn't load more: …" with a Retry button.
 - **React key:** the profile screenshots section uses the key `shots:{username}`, so it doesn't clash with ProfileCollections.
+
+## Review-fix additions (REVIEW-2026-11-17-9)
+- **Huge `page` values (L7):** on every paginated endpoint, `page` is clamped to 1–1,000,000. A larger number returns 200 with the correct `total`, `items: []` and `page: 1000000`. A value too large to parse as a 64-bit integer still returns 400 `page must be an integer`. The offset is computed so it can't overflow.

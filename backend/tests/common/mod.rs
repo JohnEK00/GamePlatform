@@ -330,3 +330,32 @@ pub fn png_bytes() -> Vec<u8> {
     v.extend_from_slice(&[0u8; 32]);
     v
 }
+
+/// Runs a test body that needs all of its real-time writes and reads to fall on one UTC day
+/// (per-day coalescing in the feed, the `day` leaderboard period). The server reads the wall
+/// clock itself, so these tests can't pin the date. If the body fails *and* the UTC date
+/// changed while it ran, the failure is put down to midnight and the body is run once more
+/// from scratch; it builds its own app, so nothing carries over. Any other failure, or a
+/// second failure, is re-raised unchanged, so the assertions are as strict as before.
+/// (A week or month boundary is also a day boundary, so this covers those periods too.)
+pub async fn same_utc_day<F, Fut>(body: F)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    for attempt in 1..=2 {
+        let start = chrono::Utc::now().date_naive();
+        let result = tokio::spawn(body()).await;
+        let crossed = chrono::Utc::now().date_naive() != start;
+        match result {
+            Ok(()) => return,
+            Err(e) if attempt == 1 && crossed && e.is_panic() => {
+                eprintln!("the UTC day changed while the test ran; running it again");
+            }
+            Err(e) => match e.try_into_panic() {
+                Ok(payload) => std::panic::resume_unwind(payload),
+                Err(e) => panic!("test task failed: {e}"),
+            },
+        }
+    }
+}

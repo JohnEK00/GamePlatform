@@ -677,7 +677,10 @@ async fn n3_purge_uses_partial_index_and_keeps_window_keys() {
         .as_str()
         .unwrap()
         .to_string();
-    let today = Utc::now().date_naive();
+    // One clock read for both the rows' ages and the refresh (L5), so the 7-day purge
+    // boundary can't move between them at midnight.
+    let now = Utc::now();
+    let today = now.date_naive();
     for (age, key) in [(0, "u:a"), (6, "u:b"), (7, "u:c"), (30, "u:d")] {
         let day = (today - chrono::Duration::days(age))
             .format("%Y-%m-%d")
@@ -694,7 +697,7 @@ async fn n3_purge_uses_partial_index_and_keeps_window_keys() {
         .await
         .unwrap();
     }
-    trending::refresh(&t.state.db, Utc::now()).await.unwrap();
+    trending::refresh(&t.state.db, now).await.unwrap();
     let keys: Vec<String> = sqlx::query_scalar(
         "SELECT viewer_key FROM play_events WHERE viewer_key IS NOT NULL ORDER BY viewer_key",
     )

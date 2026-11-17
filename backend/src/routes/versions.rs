@@ -10,7 +10,9 @@ use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::models::{GameVersion, Page};
 use crate::ratelimit::Limit;
-use crate::routes::games::{fetch_owned_game, fetch_visible_game, limit_user, parse_paging};
+use crate::routes::games::{
+    fetch_owned_game, fetch_visible_game, limit_user, page_offset, parse_paging,
+};
 use crate::versions::{parse_notes, parse_positive};
 
 pub const VERSIONS_PER_PAGE: i64 = 20;
@@ -41,7 +43,7 @@ pub async fn list_versions(
     )
     .bind(&id)
     .bind(per_page)
-    .bind((page - 1) * per_page)
+    .bind(page_offset(page, per_page))
     .fetch_all(&state.db)
     .await?;
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM game_versions WHERE game_id = ?")

@@ -10,7 +10,7 @@ use crate::error::AppResult;
 use crate::extract::{ApiPath, ApiQuery};
 use crate::models::{GAME_SELECT, GameSummary, Page, game_row_from_row, now_rfc3339};
 use crate::routes::comments::PageQuery;
-use crate::routes::games::{fetch_visible_game, parse_paging};
+use crate::routes::games::{fetch_visible_game, page_offset, parse_paging};
 
 #[derive(Serialize)]
 pub struct FavoriteResponse {
@@ -92,7 +92,7 @@ pub async fn my_favorites(
     ))
     .bind(&user.id)
     .bind(per_page)
-    .bind((page - 1) * per_page)
+    .bind(page_offset(page, per_page))
     .fetch_all(&state.db)
     .await?;
     let items = rows

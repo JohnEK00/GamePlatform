@@ -15,7 +15,7 @@ use crate::ratelimit::Limit;
 use crate::routes::auth::load_user;
 use crate::routes::follows::{follow_counts, is_following};
 use crate::routes::games::limit_user;
-use crate::routes::games::parse_paging;
+use crate::routes::games::{page_offset, parse_paging};
 use crate::storage::validate_image;
 
 #[derive(Serialize)]
@@ -65,7 +65,7 @@ pub async fn get_user(
     let rows = sqlx::query(&sql)
         .bind(&user.user_ref.id)
         .bind(per_page)
-        .bind((page - 1) * per_page)
+        .bind(page_offset(page, per_page))
         .fetch_all(&state.db)
         .await?;
     let games = rows

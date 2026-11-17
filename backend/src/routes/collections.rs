@@ -39,7 +39,7 @@ use crate::models::{
 };
 use crate::notifications::{self as notif, Dedupe, Kind, NewNotification};
 use crate::ratelimit::Limit;
-use crate::routes::games::{fetch_visible_game, limit_user, parse_paging};
+use crate::routes::games::{fetch_visible_game, limit_user, page_offset, parse_paging};
 use crate::routes::screenshots::is_admin;
 use crate::versions::is_bidi_control;
 
@@ -879,7 +879,7 @@ pub async fn list_user_collections(
     .bind(viewer.id())
     .bind(is_self)
     .bind(per_page)
-    .bind((page - 1) * per_page)
+    .bind(page_offset(page, per_page))
     .fetch_all(&state.db)
     .await?;
     let rows = collections_from_rows(&rows)?;

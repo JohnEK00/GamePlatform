@@ -457,6 +457,11 @@ async fn game_updated_coalesces_and_needs_published() {
 
 #[tokio::test]
 async fn personal_best_events() {
+    same_utc_day(personal_best_events_body).await;
+}
+
+/// The second PB must land on the first one's UTC day (L5: run through `same_utc_day`).
+async fn personal_best_events_body() {
     let t = setup().await;
     let (owner, _) = t.register("owner").await;
     let (sam, sam_id) = t.register("sam").await;
@@ -526,6 +531,10 @@ async fn personal_best_events() {
 
 #[tokio::test]
 async fn achievement_events_coalesce_and_follow_definitions() {
+    same_utc_day(achievement_events_coalesce_and_follow_definitions_body).await;
+}
+
+async fn achievement_events_coalesce_and_follow_definitions_body() {
     let t = setup().await;
     let (owner, _) = t.register("owner").await;
     let (sam, _) = t.register("sam").await;
