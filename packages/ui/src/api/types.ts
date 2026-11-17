@@ -86,6 +86,30 @@ export type Game = GameSummary & {
    * Older servers omit it: hide the mute button.
    */
   notificationsMuted?: boolean;
+  /** F020: who can comment and slow mode (the same for every viewer). Older servers omit it: hide the settings UI. */
+  commentSettings?: CommentSettings;
+};
+
+/** F020: who may post new comments on a game. */
+export type CommentMode = "on" | "repliesOnly" | "off";
+
+/** F020: slow-mode interval in seconds; 0 = slow mode off. */
+export type SlowModeSecs = 0 | 30 | 60 | 300 | 900 | 3600;
+
+/** F020: `PUT /api/games/{id}/comment-settings` body and response, and `Game.commentSettings`. */
+export type CommentSettings = {
+  /** "on" by default. */
+  mode: CommentMode;
+  /** 0 by default. */
+  slowModeSecs: SlowModeSecs;
+};
+
+/** F020: `CommentListPage.settings`, viewer-specific. */
+export type CommentSettingsView = CommentSettings & {
+  /** The viewer is the game's current owner or an admin: may change the settings, exempt from mode and slow mode. */
+  canManage: boolean;
+  /** Whole seconds until the viewer may post again under slow mode (0..slowModeSecs). Relative to the server's clock. */
+  waitSecs: number;
 };
 
 /** F009: gamepad buttons an action can use (the engine's `GamepadButtons` names without `Home`). */
@@ -229,6 +253,11 @@ export type CommentListPage = Page<CommentThread> & {
    * it (treat as null).
    */
   pinned: CommentThread | null;
+  /**
+   * F020: the game's comment settings as seen by the viewer, on every page (read it from page 1). Older servers omit
+   * it: read the page through `normalizeCommentListPage` (defaults `on` / 0 / false / 0).
+   */
+  settings: CommentSettingsView;
 };
 
 /** F006: `GET /api/comments/{id}`. `thread.id === comment.id` when the comment is top-level. */
@@ -257,6 +286,8 @@ export type ApiErrorCode =
   | "payload_too_large"
   /** 429, with a Retry-After header (seconds). */
   | "rate_limited"
+  /** F020: 429 on `POST …/comments` while the poster waits under slow mode; with Retry-After (seconds). */
+  | "slow_mode"
   | "internal"
   /** 503, e.g. engine runtime not built. */
   | "unavailable"

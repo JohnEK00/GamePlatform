@@ -39,7 +39,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F021 | Collection activity: feed items and "added to a collection" notifications | M | shipped |
 | F016 | Gamepad remapping, synced control bindings and device-aware prompts | M | shipped |
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | M | shipped |
-| F020 | Game comment settings: comments on / replies only / off, slow mode | S | specced |
+| F020 | Game comment settings: comments on / replies only / off, slow mode | S | shipped |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
 | F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | proposed |
 | F022 | Announce a collection when it goes public | S | proposed |
@@ -221,7 +221,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration, `record_collection_added`, a third feed branch, notification kind, read-time collection filter, hooks in the add/remove endpoints), frontend (feed item and tab, notification text, OS text without the title, setting), desktop (verification only). No engine changes.
 - **Depends on**: F002, F007, F008, F018 (all shipped).
 
-### F020: Game comment settings: comments on / replies only / off, slow mode (S, specced → [spec](features/F020-game-comment-settings.md))
+### F020: Game comment settings: comments on / replies only / off, slow mode (S, shipped → [spec](features/F020-game-comment-settings.md))
 - **Pitch**:
   - Per-game "Who can comment": everyone (default), replies only (no new threads; F017 locks still apply) or off. Existing comments always stay visible; hearts, delete, report, pin and lock keep working.
   - Optional slow mode: one comment or reply per user per game every 30 s, 1 min, 5 min, 15 min or 1 h. A rejected post never uses the slot, deleting a comment never resets it, and concurrent posts can't both get through.

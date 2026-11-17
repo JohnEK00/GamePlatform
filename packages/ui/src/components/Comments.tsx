@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { isApiError } from "../api/client";
 import {
+  formatWait,
   isF017CommentPage,
+  isF020CommentPage,
   normalizeComment,
   normalizeCommentListPage,
+  normalizeCommentSettingsView,
   normalizeThread,
   readCommentSort,
+  slowModeInterval,
+  slowModeShort,
   writeCommentSort,
 } from "../api/comments";
-import type { Comment, CommentSort, CommentThread, ThreadState, UserRef } from "../api/types";
+import type { Comment, CommentMode, CommentSettings, CommentSettingsView, CommentSort, CommentThread, ThreadState, UserRef } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
@@ -17,6 +22,7 @@ import { errorMessage } from "../util";
 import { Alert, ConfirmDialog, Skeleton, Spinner } from "./common";
 import { CommentForm } from "./CommentForm";
 import { CommentItem, displayName } from "./CommentItem";
+import { CommentSettingsDialog } from "./CommentSettingsDialog";
 import { CommentSortToggle } from "./CommentSortToggle";
 import type { HeartState } from "./HeartButton";
 
@@ -37,6 +43,27 @@ type ThreadView = CommentThread & {
 
 /** F017 § 2.5: the hint above a moderator's reply form in a locked thread. */
 const LOCKED_MODERATOR_HINT = "This thread is locked. Only you and moderators can reply.";
+
+/** F020 § 2.4: closed notes (non-managers) and manager notices. */
+const CLOSED_NOTE_REPLIES_ONLY = "New comments are turned off for this game.";
+const CLOSED_NOTE_OFF = "Comments are turned off for this game.";
+const MANAGER_NOTICE_REPLIES_ONLY = "New comments are turned off for players. Only you and moderators can start threads.";
+const MANAGER_NOTICE_OFF = "Comments are turned off for players. Only you and moderators can post.";
+
+/** F020 § 2.6: the server's mode rejections (422 `validation`). */
+const MODE_ERRORS: Record<string, CommentMode> = {
+  "Comments are turned off for this game": "off",
+  "New comments are turned off for this game": "repliesOnly",
+};
+
+/** F020: the mode a 422 mode rejection reports, or null for any other error. */
+function modeFromError(e: unknown): CommentMode | null {
+  if (!isApiError(e) || e.status !== 422) return null;
+  return MODE_ERRORS[e.message.trim().replace(/\.$/, "")] ?? null;
+}
+
+/** Monotonic milliseconds (the slow-mode deadline never depends on the wall clock). */
+const monoNow = () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());
 
 /**
  * The three slots of the list (F017 § 2.2): the server's pinned thread, the permalink's linked thread, and the
@@ -155,6 +182,8 @@ function mergeReplies(existing: Comment[], more: Comment[]): Comment[] {
 }
 
 function postErrorMessage(e: unknown): string {
+  // F020: slow mode is a 429 too, but it has its own message (checked before the generic rate limit).
+  if (isApiError(e) && e.code === "slow_mode") return e.message;
   if (isApiError(e) && (e.status === 429 || e.code === "rate_limited")) {
     return e.retryAfter
       ? `You're commenting too fast, try again in ${e.retryAfter}s.`
@@ -221,6 +250,14 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [live, setLive] = useState<{ n: number; text: string }>({ n: 0, text: "" });
 
+  /** F020: the game's comment settings as seen by the viewer (page 1; defaults on older servers). */
+  const [settings, setSettings] = useState<CommentSettingsView>(() => normalizeCommentSettingsView(undefined));
+  /** F020: the server sends `settings` (badges and the ⚙ Settings button). */
+  const [f020, setF020] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** F020: whole seconds left under slow mode (0 = may post). */
+  const [waitLeft, setWaitLeft] = useState(0);
+
   // Latest values for async continuations (read when they settle, never captured at call time).
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
@@ -243,6 +280,75 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
   }, []);
 
   const announce = useCallback((text: string) => setLive((l) => ({ n: l.n + 1, text })), []);
+
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
+  // ---------- Slow mode (F020 § 2.5): one monotonic deadline, one timer for the whole component ----------
+  const deadlineRef = useRef<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const tick = useCallback(() => {
+    timerRef.current = null;
+    const deadline = deadlineRef.current;
+    if (deadline === null) return;
+    const ms = deadline - monoNow();
+    if (ms <= 0) {
+      deadlineRef.current = null;
+      setWaitLeft(0);
+      announce("You can post again.");
+      return;
+    }
+    setWaitLeft(Math.ceil(ms / 1000));
+    // Wake up when the displayed second changes (re-derived from the deadline, so throttled timers catch up).
+    timerRef.current = setTimeout(tick, ms % 1000 || 1000);
+  }, [announce]);
+
+  /** Starts (or restarts) the countdown at `secs` seconds from now. */
+  const startWait = useCallback(
+    (secs: number) => {
+      if (!(secs > 0) || !Number.isFinite(secs)) return;
+      const s = Math.ceil(secs);
+      deadlineRef.current = monoNow() + s * 1000;
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
+      setWaitLeft(s);
+      timerRef.current = setTimeout(tick, 1000);
+    },
+    [tick],
+  );
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
+      timerRef.current = null;
+      deadlineRef.current = null;
+    },
+    [],
+  );
+
+  /** After a successful post by a non-manager under slow mode, the next one waits a full interval. */
+  const afterPost = () => {
+    const s = settingsRef.current;
+    if (!s.canManage && s.slowModeSecs > 0) startWait(s.slowModeSecs);
+  };
+
+  /** F020 § 2.5/2.6: slow-mode and mode rejections of a post. Returns true when handled (no form error, no toast). */
+  const handleSettingsRejection = (err: unknown): boolean => {
+    if (isApiError(err) && err.code === "slow_mode") {
+      const secs = err.retryAfter ?? settingsRef.current.slowModeSecs;
+      if (!(secs > 0)) return false;
+      startWait(secs);
+      announce(`Slow mode is on. You can post again in ${formatWait(secs)}.`);
+      return true;
+    }
+    const mode = modeFromError(err);
+    if (mode) {
+      setSettings((s) => ({ ...s, mode }));
+      if (!settingsRef.current.canManage) requestFocus({ id: "pf-comments-closed" });
+      return true;
+    }
+    return false;
+  };
 
   // Move focus after the DOM has the target (runs after every commit; reads the latest request).
   useEffect(() => {
@@ -268,7 +374,13 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
         if (!alive) return;
         const p = normalizeCommentListPage(raw);
         setLegacy(typeof (raw as { totalAll?: unknown }).totalAll !== "number");
-        if (page === 1) setF017(isF017CommentPage(raw));
+        if (page === 1) {
+          setF017(isF017CommentPage(raw));
+          setF020(isF020CommentPage(raw));
+          setSettings(p.settings);
+          // Server-relative, so client clock skew doesn't matter.
+          if (p.settings.waitSecs > 0 && !p.settings.canManage) startWait(p.settings.waitSecs);
+        }
         setThreads((prev) => {
           if (page === 1) {
             // The page-1 `pinned` fills the pinned slot (later pages repeat it and are ignored for it).
@@ -305,7 +417,7 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
     return () => {
       alive = false;
     };
-  }, [api, gameId, page, sort]);
+  }, [api, gameId, page, sort, startWait]);
 
   /** Loads a whole thread (≤ 200 replies) and returns its replies and count, or null on failure. */
   const fetchAllReplies = useCallback(
@@ -404,8 +516,9 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
       setTotalAll((n) => n + 1);
       setBody("");
       announce("Comment posted");
+      afterPost();
     } catch (err) {
-      setPostError(postErrorMessage(err));
+      if (!handleSettingsRejection(err)) setPostError(postErrorMessage(err));
     } finally {
       setPosting(false);
     }
@@ -481,9 +594,12 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
       });
       setReplyForm(null);
       announce("Reply posted");
+      afterPost();
       requestFocus({ id: `comment-${created.id}` });
     } catch (err) {
-      if (isApiError(err) && err.status === 404) {
+      if (handleSettingsRejection(err)) {
+        /* F020: countdown started, or the mode changed (open reply forms close per § 2.4) */
+      } else if (isApiError(err) && err.status === 404) {
         removeThreadLocally(form.threadId);
         setReplyForm(null);
         setNotice({ kind: "error", text: "This comment was deleted" });
@@ -602,6 +718,12 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
     const t = threads.find((x) => x.id === replyForm.threadId);
     if (t && t.locked && !t.canModerate && lockErrorThread.current !== t.id) setReplyForm(null);
   }, [threads, replyForm]);
+
+  // F020 § 2.4: comments turned off closes a non-manager's open reply form (the draft is kept in `drafts`).
+  const repliesOff = settings.mode === "off" && !settings.canManage;
+  useEffect(() => {
+    if (repliesOff && replyForm) setReplyForm(null);
+  }, [repliesOff, replyForm]);
 
   // ---------- Sort (F017 § 2.1) ----------
   const changeSort = (next: CommentSort) => {
@@ -729,8 +851,77 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
     return `Show ${plural(n, "more reply", "more replies")}`;
   };
 
+  // F020 § 2.4/2.5
+  const manager = settings.canManage;
+  const mode = settings.mode;
+  const blocked = !!user && !manager && waitLeft > 0;
+  const slowNotice = ((): string | null => {
+    if (!user || manager) return null;
+    const again = waitLeft > 0 ? ` You can post again in ${formatWait(waitLeft)}.` : "";
+    if (settings.slowModeSecs > 0) return `Slow mode: you can post once every ${slowModeInterval(settings.slowModeSecs)}.${again}`;
+    // A slow-mode 429 while the local settings still say "off" (changed since page 1).
+    if (waitLeft > 0) return `Slow mode is on. You can post again in ${formatWait(waitLeft)}.`;
+    return null;
+  })();
+  const SLOW_ICON = "⏱";
+  const loginHref = `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
+
+  /** F020: the dialog saved; settings change in place (no list reload). */
+  const onSettingsSaved = (next: CommentSettings) => {
+    setSettings((s) => ({ ...s, ...next }));
+    setSettingsOpen(false);
+    announce("Comment settings saved");
+  };
+
+  /** F020 § 2.4: the top-level form slot by viewer and mode. */
+  const renderTopSlot = () => {
+    const closed = (children: ReactNode) => (
+      <p id="pf-comments-closed" className="pf-comments__closed pf-muted" tabIndex={-1}>
+        {children}
+      </p>
+    );
+    if (!user) {
+      if (mode === "repliesOnly")
+        return closed(
+          <>
+            {CLOSED_NOTE_REPLIES_ONLY} <Link to={loginHref}>Log in</Link> to reply to existing threads.
+          </>,
+        );
+      if (mode === "off") return closed(CLOSED_NOTE_OFF);
+      return (
+        <p className="pf-muted pf-small">
+          <Link to={loginHref}>Log in</Link> to join the conversation.
+        </p>
+      );
+    }
+    if (!manager && mode === "repliesOnly") return closed(`${CLOSED_NOTE_REPLIES_ONLY} You can still reply to existing threads.`);
+    if (!manager && mode === "off") return closed(CLOSED_NOTE_OFF);
+    const managerNotice = manager ? (mode === "repliesOnly" ? MANAGER_NOTICE_REPLIES_ONLY : mode === "off" ? MANAGER_NOTICE_OFF : null) : null;
+    return (
+      <CommentForm
+        inputId="pf-comment-body"
+        label="Write a comment"
+        placeholder="Share your thoughts, tips or high-score brags…"
+        submitLabel="Post comment"
+        value={body}
+        onChange={setBody}
+        onSubmit={postTop}
+        busy={posting}
+        error={postError}
+        user={user}
+        notice={managerNotice ?? slowNotice}
+        noticeIcon={!managerNotice && slowNotice ? SLOW_ICON : undefined}
+        blocked={blocked}
+      />
+    );
+  };
+
   const renderReplyForm = (t: ThreadView) => {
     if (!replyForm || replyForm.threadId !== t.id || !user) return null;
+    // One notice: the F017 locked-thread hint wins, then the manager "off" notice, then slow mode.
+    const lockedHint = t.locked && t.canModerate;
+    const managerOff = manager && mode === "off";
+    const replyNotice = lockedHint ? LOCKED_MODERATOR_HINT : managerOff ? MANAGER_NOTICE_OFF : slowNotice;
     return (
       <CommentForm
         key={`${t.id}:${replyForm.openerId}`}
@@ -748,7 +939,9 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
         error={replyError}
         onCancel={closeReply}
         replyingTo={replyForm.replyingTo}
-        notice={t.locked && t.canModerate ? LOCKED_MODERATOR_HINT : null}
+        notice={replyNotice}
+        noticeIcon={!lockedHint && !managerOff && slowNotice ? SLOW_ICON : undefined}
+        blocked={blocked}
         onClearReplyingTo={() => setReplyForm((f) => (f ? { ...f, parentId: f.threadId, replyingTo: null } : f))}
         autoFocus
       />
@@ -773,7 +966,8 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
     onLock: f017 ? (x: Comment) => void onLock(x) : undefined,
     pinBusy: !!toolBusy[`pin:${c.id}`],
     lockBusy: !!toolBusy[`lock:${c.id}`],
-    repliesLocked: t.locked && !t.canModerate,
+    // F020: no Reply buttons for non-managers while comments are off (the game-level note explains it).
+    repliesLocked: (t.locked && !t.canModerate) || repliesOff,
   });
 
   const renderThread = (t: ThreadView, label?: string) => {
@@ -826,30 +1020,36 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
         <h2 id="pf-comments-title" className="pf-panel__title" tabIndex={-1}>
           Comments <span className="pf-muted">{totalAll > 0 ? totalAll : ""}</span>
         </h2>
-        {f017 && !legacy && <CommentSortToggle value={sort} onChange={changeSort} />}
+        {((f020 && (mode !== "on" || settings.slowModeSecs > 0 || manager)) || (f017 && !legacy)) && (
+          <div className="pf-comments__tools">
+            {f020 && (mode !== "on" || settings.slowModeSecs > 0) && (
+              <span className="pf-comments__badges">
+                {mode === "off" && <span className="pf-badge pf-badge--comments-off">Comments off</span>}
+                {mode === "repliesOnly" && <span className="pf-badge">Replies only</span>}
+                {settings.slowModeSecs > 0 && <span className="pf-badge">Slow mode · {slowModeShort(settings.slowModeSecs)}</span>}
+              </span>
+            )}
+            {f020 && manager && (
+              <button
+                type="button"
+                id="comment-settings-btn"
+                className="pf-btn pf-btn--sm pf-btn--ghost"
+                aria-haspopup="dialog"
+                aria-label="Comment settings"
+                onClick={() => setSettingsOpen(true)}
+              >
+                <span aria-hidden="true">⚙</span> Settings
+              </button>
+            )}
+            {f017 && !legacy && <CommentSortToggle value={sort} onChange={changeSort} />}
+          </div>
+        )}
       </div>
       <p className="pf-sr-only" role="status" aria-live="polite" aria-atomic="true">
         <span key={live.n}>{live.text}</span>
       </p>
 
-      {user ? (
-        <CommentForm
-          inputId="pf-comment-body"
-          label="Write a comment"
-          placeholder="Share your thoughts, tips or high-score brags…"
-          submitLabel="Post comment"
-          value={body}
-          onChange={setBody}
-          onSubmit={postTop}
-          busy={posting}
-          error={postError}
-          user={user}
-        />
-      ) : (
-        <p className="pf-muted pf-small">
-          <Link to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`}>Log in</Link> to join the conversation.
-        </p>
-      )}
+      {renderTopSlot()}
 
       {notice && <Alert kind={notice.kind}>{notice.text}</Alert>}
 
@@ -910,6 +1110,16 @@ function CommentsList({ gameId, isGameOwner = false, focusCommentId = null }: Co
       >
         Only one comment can be pinned. The comment by {confirmPin?.replacedName ?? ""} will be unpinned.
       </ConfirmDialog>
+
+      {f020 && manager && (
+        <CommentSettingsDialog
+          open={settingsOpen}
+          gameId={gameId}
+          value={{ mode: settings.mode, slowModeSecs: settings.slowModeSecs }}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={onSettingsSaved}
+        />
+      )}
     </section>
   );
 }

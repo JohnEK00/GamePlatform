@@ -5,6 +5,7 @@ import type { Game } from "../api/types";
 import { useApi, usePlatform } from "../context/config";
 import { useToast } from "../context/toast";
 import { Alert, ConfirmDialog, EmptyState, ErrorState, ProgressBar, Skeleton, Spinner, Thumbnail } from "../components/common";
+import { CommentSettingsForm } from "../components/CommentSettingsForm";
 import { FileDrop } from "../components/FileDrop";
 import { GameFields, type GameFieldValues } from "../components/GameFields";
 import { ReleaseNotesField } from "../components/ReleaseNotesField";
@@ -210,6 +211,20 @@ export function EditGamePage() {
           </button>
         </div>
       </form>
+
+      {game.commentSettings && (
+        <section className="pf-form pf-panel" id="comment-settings" aria-labelledby="comment-settings-title">
+          <h2 id="comment-settings-title" className="pf-panel__title">
+            Comments
+          </h2>
+          <CommentSettingsForm
+            gameId={game.id}
+            value={game.commentSettings}
+            headingId="comment-settings-title"
+            onSaved={(commentSettings) => setData((prev) => ({ ...(prev ?? game), commentSettings }))}
+          />
+        </section>
+      )}
 
       <section className="pf-form pf-panel">
         <h2 className="pf-panel__title">Files</h2>

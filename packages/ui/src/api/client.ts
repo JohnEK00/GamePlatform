@@ -18,6 +18,7 @@ import type {
   CommentContext,
   CommentListPage,
   CommentListQuery,
+  CommentSettings,
   CreateGameInput,
   CreateReportRequest,
   CreatorStats,
@@ -123,6 +124,17 @@ export class ApiError extends Error {
     const err = (body as { error?: { code?: unknown; message?: unknown } } | null)?.error;
     const code =
       err && typeof err.code === "string" ? err.code : STATUS_CODES[status] ?? (status >= 500 ? "internal" : "unknown");
+    if (status === 429 && code === "slow_mode") {
+      // F020: keep the code and the server's message ("Slow mode is on: you can post again in N seconds").
+      const retryAfter = parseRetryAfter(retryAfterHeader);
+      const msg =
+        err && typeof err.message === "string" && err.message
+          ? err.message
+          : retryAfter
+            ? `Slow mode is on: you can post again in ${retryAfter} seconds`
+            : "Slow mode is on: you can post again in a moment";
+      return new ApiError("slow_mode", msg, status, retryAfter);
+    }
     if (status === 429 || code === "rate_limited") {
       const retryAfter = parseRetryAfter(retryAfterHeader);
       return new ApiError("rate_limited", rateLimitMessage(retryAfter), status, retryAfter);
@@ -472,6 +484,13 @@ export class ApiClient {
   /** F017 (game owner or admin): unlock a thread. Idempotent. */
   unlockComment(commentId: string): Promise<ThreadState> {
     return this.request(`/api/comments/${encodeURIComponent(commentId)}/lock`, { method: "DELETE" });
+  }
+  /** F020 (game owner or admin): who can comment and slow mode. Both fields are required; returns the stored values. */
+  updateCommentSettings(gameId: string, settings: CommentSettings): Promise<CommentSettings> {
+    return this.request(`/api/games/${encodeURIComponent(gameId)}/comment-settings`, {
+      method: "PUT",
+      json: { mode: settings.mode, slowModeSecs: settings.slowModeSecs },
+    });
   }
   listScores(id: string, limit?: number, period?: LeaderboardPeriod): Promise<Score[]> {
     return this.request(`/api/games/${encodeURIComponent(id)}/scores`, { query: { limit, period } });

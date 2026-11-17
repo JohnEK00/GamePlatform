@@ -5147,6 +5147,91 @@ a.pf-tab {
   }
 }
 
+/* ---------- F020: game comment settings ---------- */
+.pf-comments__tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin-left: auto;
+}
+.pf-comments__badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* State badges read as sentences ("Slow mode · 5 min"), so no uppercase; colours keep ≥ 4.5:1 on the panel. */
+.pf-comments__badges .pf-badge {
+  height: 22px;
+  text-transform: none;
+  letter-spacing: 0.01em;
+  background: rgba(195, 199, 220, 0.12);
+  color: var(--pf-text-2);
+  box-shadow: inset 0 0 0 1px var(--pf-border-strong);
+}
+.pf-comments__badges .pf-badge.pf-badge--comments-off {
+  background: rgba(255, 84, 104, 0.14);
+  color: #ffc2ca;
+  box-shadow: inset 0 0 0 1px rgba(255, 84, 104, 0.4);
+}
+.pf-comments__closed {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--pf-border-strong);
+  border-radius: 0 var(--pf-radius-sm) var(--pf-radius-sm) 0;
+  background: var(--pf-surface-2);
+  color: var(--pf-text-2);
+  font-size: 0.9rem;
+}
+.pf-comments__closed:focus {
+  outline: none;
+}
+.pf-comments__closed:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 2px;
+}
+.pf-comment-form .pf-btn.is-blocked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.pf-comment-settings {
+  display: grid;
+  gap: 18px;
+}
+.pf-comment-settings__modes {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.pf-comment-settings__modes legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+.pf-comment-settings__modes .pf-report__reason > span {
+  display: inline;
+}
+.pf-comment-settings__modes .pf-field__hint {
+  margin: 2px 0 0;
+}
+.pf-comment-settings__select {
+  max-width: 260px;
+}
+.pf-comment-settings .pf-modal__actions,
+.pf-comment-settings .pf-form__actions {
+  margin: 0;
+}
+@media (max-width: 560px) {
+  .pf-comments__tools {
+    margin-left: 0;
+  }
+  .pf-comment-settings__select {
+    max-width: none;
+  }
+}
+
 /* =====================================================================================
    F008: collections
    ===================================================================================== */

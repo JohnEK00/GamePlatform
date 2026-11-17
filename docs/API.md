@@ -1498,3 +1498,9 @@ type CommentListPage = { ...F017, settings: CommentSettingsView }  // returned o
 - **Lock race:** if a thread is locked between the lock check and the transaction, the post fails with `slow_mode` instead of the lock error.
 - **Wait times:** the wait is computed in milliseconds and rounded up, so `Retry-After` and `waitSecs` always agree on when the wait ends.
 - **Unknown stored values:** an unknown `comment_mode` reads as `on` and an unknown `slow_mode_secs` reads as `0`. Both log a warning.
+
+### F020 implementation notes (frontend)
+- **429 errors in the client:** `ApiError.fromResponse` keeps `code: "slow_mode"`, the server's message and `retryAfter`. A 429 with any other code still becomes `rate_limited`.
+- **Slow-mode 429 when the client's settings are stale:** if the client still has `slowModeSecs` at 0, the notice reads "Slow mode is on. You can post again in {m:ss}."
+- **Reloading the first page:** fetching page 1 again restarts the countdown only when `waitSecs > 0`. It never clears a countdown that is already running.
+- **Header:** the badges, the ⚙ Settings button and the sort toggle appear in that order.

@@ -11,6 +11,14 @@ export {
   normalizeCommentListPage,
   commentPermalink,
   isF017CommentPage,
+  isF020CommentPage,
+  normalizeCommentSettings,
+  normalizeCommentSettingsView,
+  slowModeInterval,
+  slowModeShort,
+  formatWait,
+  COMMENT_MODES,
+  SLOW_MODE_SECS,
   readCommentSort,
   writeCommentSort,
   COMMENT_SORT_STORAGE_KEY,
@@ -234,6 +242,10 @@ export type { CommentItemProps } from "./components/CommentItem";
 export { CommentForm, COMMENT_MAX_LENGTH } from "./components/CommentForm";
 export type { CommentFormProps } from "./components/CommentForm";
 export { CommentSortToggle } from "./components/CommentSortToggle";
+export { CommentSettingsForm, COMMENT_MODE_LABELS, SLOW_MODE_LABELS } from "./components/CommentSettingsForm";
+export type { CommentSettingsFormProps } from "./components/CommentSettingsForm";
+export { CommentSettingsDialog } from "./components/CommentSettingsDialog";
+export type { CommentSettingsDialogProps } from "./components/CommentSettingsDialog";
 export type { CommentSortToggleProps } from "./components/CommentSortToggle";
 export { HeartButton } from "./components/HeartButton";
 export type { HeartButtonProps, HeartState } from "./components/HeartButton";

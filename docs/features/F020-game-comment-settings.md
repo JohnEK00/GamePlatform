@@ -1,6 +1,6 @@
 # F020: Game comment settings: comments on / replies only / off, and slow mode
 
-Status: **specced**. Size: **S** (backend small; frontend small to medium; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
+Status: **shipped**. Size: **S** (backend small; frontend small to medium; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
 Contracts: `docs/API.md` § F020 additions (types, one new endpoint, changed `POST …/comments` validation order, the new `slow_mode` error code, rate limit), `docs/ARCHITECTURE.md` § F020 additions (migration `0021_f020.sql`, the slow-mode claim transaction, read shapes, ownership). `docs/GAME_FORMAT.md`: no changes.
 Depends on: F006 (threads, replies), F017 (locks, `canModerate`, `Limit::ThreadTools`), all shipped. The migration is **`0021_f020.sql`** and runs after `0020_f016.sql`. **No new Rust or JS dependencies.**
 

@@ -36,6 +36,13 @@ export type CommentFormProps = {
   className?: string;
   /** F017: a hint above the textarea (e.g. the locked-thread note for moderators); it also describes the textarea. */
   notice?: string | null;
+  /** The decorative (aria-hidden) icon before `notice`. Default 🔒. */
+  noticeIcon?: string;
+  /**
+   * F020: posting is paused (slow-mode countdown). The submit button gets `aria-disabled="true"` (not `disabled`, so
+   * focus stays) and submitting by click or Ctrl/Cmd+Enter does nothing. The draft is kept. The reason is in `notice`.
+   */
+  blocked?: boolean;
 };
 
 /**
@@ -61,6 +68,8 @@ export function CommentForm({
   autoFocus = false,
   className = "",
   notice = null,
+  noticeIcon = "🔒",
+  blocked = false,
 }: CommentFormProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -79,7 +88,7 @@ export function CommentForm({
 
   const send = () => {
     const text = value.trim();
-    if (!text || busy || text.length > COMMENT_MAX_LENGTH) return;
+    if (!text || busy || blocked || text.length > COMMENT_MAX_LENGTH) return;
     void onSubmit(text);
   };
 
@@ -136,7 +145,7 @@ export function CommentForm({
         )}
         {notice && (
           <p className="pf-comment-form__notice pf-small" id={noticeId}>
-            <span aria-hidden="true">🔒</span> {notice}
+            <span aria-hidden="true">{noticeIcon}</span> {notice}
           </p>
         )}
         <label htmlFor={inputId} className="pf-sr-only">
@@ -168,7 +177,12 @@ export function CommentForm({
                 Cancel
               </button>
             )}
-            <button type="submit" className={`pf-btn pf-btn--primary${onCancel ? " pf-btn--sm" : ""}`} disabled={busy || !value.trim()}>
+            <button
+              type="submit"
+              className={`pf-btn pf-btn--primary${onCancel ? " pf-btn--sm" : ""}${blocked ? " is-blocked" : ""}`}
+              disabled={busy || !value.trim()}
+              aria-disabled={blocked || undefined}
+            >
               {busy ? <Spinner size={14} /> : null} {submitLabel}
             </button>
           </span>
