@@ -1346,3 +1346,66 @@ Game comment settings (spec: `docs/features/F020-game-comment-settings.md`). Two
 - **Feed and notifications**: none written or retracted by settings changes. Rejected posts write nothing, so F007 hooks run only for committed posts (unchanged).
 - **UI**: `CommentSettingsForm` + `CommentSettingsDialog` (new), changes in `Comments`, `CommentForm`, `EditGamePage`; helpers in `api/comments.ts`. The slow-mode countdown is a monotonic deadline (`performance.now()`) seeded from server-relative seconds (`waitSecs`, `Retry-After`), so client clock skew never matters.
 - **Ownership**: the migration, `error.rs`, `models.rs`, `routes/comments.rs`, `routes/mod.rs`, the `Limit::ThreadTools` doc comment and `tests/f020.rs` belong to backend-dev. Types, client, `api/comments.ts`, the components, `EditGamePage`, styles and UI tests belong to frontend-dev. Desktop has no code changes.
+
+
+## F015 additions
+Screenshots in the feed and on profiles (spec: `docs/features/F015-screenshots-in-feed-and-profiles.md`). One index-only migration, one activity writer, one predicate in branch (a) of `FEED_SQL`, one batched assembly query, and one public list endpoint. No `activity_events` rebuild (F021 removed the kind CHECK), and no new dependencies, engine or desktop code.
+- **Model.** A `screenshotPosted` event is an `activity_events` row with `game_id` set and no other payload. It is keyed by (actor, game, UTC day), and each post replaces it (delete + insert, the `personalBest` pattern via `idx_activity_coalesce`). The row stores **no** screenshot ids: the shots of an item are those with `author_id = actor_id`, `game_id = game_id` and `substr(created_at, 1, 10) = day`, evaluated at read time. So deletes (author, owner, admin, report resolve) apply at once, and an item with no shots left is skipped.
+- **Data**: migration `backend/migrations/0022_f015.sql` runs after `0021_f020.sql`. Normative:
+  ```sql
+  -- F015: screenshots in the feed and on profiles (docs/ARCHITECTURE.md § F015 additions).
+  -- The profile list (an author's screenshots, newest first) without a temp B-tree sort.
+  -- The feed uses the existing idx_screenshots_author_game (0009).
+  CREATE INDEX idx_screenshots_author_created ON screenshots(author_id, created_at DESC, id);
+  ```
+- **Writer** (`activity::record_screenshot_posted(conn, actor_id, game_id, now)`; nested transaction and `log_failure` like the other writers; `?3` day = `now[..10]`; `now` is the exact `created_at` string bound in the screenshot insert):
+  ```sql
+  DELETE FROM activity_events
+  WHERE actor_id = ?1 AND game_id = ?2 AND kind = 'screenshotPosted' AND day = ?3;
+  INSERT INTO activity_events (actor_id, kind, game_id, day, created_at)
+  VALUES (?1, 'screenshotPosted', ?2, ?3, ?4);
+  ```
+  Called from `routes/screenshots.rs::create_screenshot` after the guarded insert affected one row, and only when the game returned by the step-2 `fetch_visible_game` has `published`. It runs through `activity::acquire(&state.db)`, as `scores.rs` does for `personalBest`. The game owner is **not** excluded.
+- **Feed query** (`FEED_SQL`): branch (a) gains one predicate, after the existing `achievementUnlocked` one. Branches (b) and (c) are unchanged; branch (b) already restricts kinds to `gamePublished`/`gameUpdated`.
+  ```sql
+  AND (e.kind <> 'screenshotPosted' OR EXISTS (
+        SELECT 1 FROM screenshots s INDEXED BY idx_screenshots_author_game
+        WHERE s.author_id = e.actor_id AND s.game_id = e.game_id
+          AND substr(s.created_at, 1, 10) = e.day))
+  ```
+  The extended `tests/review2.rs` N1 test asserts that the plan contains `idx_screenshots_author_game (author_id=? AND game_id=?)` and never scans `screenshots`. All earlier plan assertions hold.
+- **Feed assembly** (`get_feed`, one query per page, only when the page has `screenshotPosted` rows). `?1` is a JSON array of `[actorId, gameId, day]` triples taken from the page's rows (`u_id`, `game_id`, `day`). The column list matches `SCREENSHOT_SELECT`, so `screenshot_from_row` reads it.
+  ```sql
+  -- routes/screenshots.rs: FEED_SCREENSHOTS_SQL
+  SELECT s.id, s.game_id, s.author_id, s.caption, s.ext, s.width, s.height, s.game_version, s.created_at,
+         g.owner_id, g.title AS game_title,
+         u.id AS a_id, u.username AS a_username, u.display_name AS a_display_name,
+         u.avatar_ext AS a_avatar_ext, u.avatar_version AS a_avatar_version,
+         json_extract(p.value, '$[0]') AS p_actor, json_extract(p.value, '$[1]') AS p_game,
+         json_extract(p.value, '$[2]') AS p_day
+  FROM json_each(?1) p
+  CROSS JOIN screenshots s INDEXED BY idx_screenshots_author_game
+  JOIN users u ON u.id = s.author_id
+  JOIN games g ON g.id = s.game_id
+  WHERE s.author_id = json_extract(p.value, '$[0]') AND s.game_id = json_extract(p.value, '$[1]')
+    AND substr(s.created_at, 1, 10) = json_extract(p.value, '$[2]')
+  ORDER BY p.key, s.created_at DESC, s.id
+  ```
+  Rust groups the rows by `(p_actor, p_game, p_day)` in order. Per row: `count` = the group length, `items` = the first `FEED_SCREENSHOTS_MAX` (4) via `screenshot_from_row` with `Viewer { id: viewer, admin: is_admin(viewer) }` (`is_admin` is called once per page). An empty group skips the row.
+- **Profile query** (`list_user_screenshots`; `?1` author id, `?2` viewer id or NULL):
+  ```sql
+  SELECT COUNT(*) FROM screenshots s JOIN games g ON g.id = s.game_id
+  WHERE s.author_id = ?1 AND (g.published = 1 OR g.owner_id = ?2);
+
+  {SCREENSHOT_SELECT} WHERE s.author_id = ?1 AND (g.published = 1 OR g.owner_id = ?2)
+  ORDER BY s.created_at DESC, s.id LIMIT ?3 OFFSET ?4;
+  ```
+  `SCREENSHOT_SELECT` gains `g.title AS game_title`. A test asserts that the page plan uses `idx_screenshots_author_created` without `USE TEMP B-TREE FOR ORDER BY`. The response type `UserScreenshot` is `Screenshot` flattened with `game: ScreenshotGameRef { id, title }`.
+- **UI.**
+  - `ScreenshotLightbox` (extracted from `ScreenshotGallery`) is shared by the game page gallery, the feed's `ScreenshotFeedItem` and the new `ProfileScreenshots`. Only the game page shows "Set as thumbnail"; only the feed and the profile show "View on game page".
+  - `FeedPage` gains a Screenshots tab (`kinds=screenshotPosted`).
+  - `GamePage` handles `?section=screenshots`, and `util.ts` gains `gameScreenshotsPath`.
+- **Ownership**:
+  - backend-dev: the migration, `activity.rs`, `routes/screenshots.rs`, `routes/feed.rs`, `routes/mod.rs`, `tests/f015.rs` and the `review2.rs` extension.
+  - frontend-dev: types, client, `util.ts`, `ScreenshotLightbox`, `ScreenshotGallery`, `FeedItem`, `FeedPage`, `ProfileScreenshots`, `ProfilePage`, `GamePage`, styles and tests.
+  - desktop-dev: verification only.

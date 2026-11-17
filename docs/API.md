@@ -1505,3 +1505,62 @@ type CommentListPage = { ...F017, settings: CommentSettingsView }  // returned o
 - **Reloading the first page:** fetching page 1 again restarts the countdown only when `waitSecs > 0`. It never clears a countdown that is already running.
 - **Header:** the badges, the ⚙ Settings button and the sort toggle appear in that order.
 - **Server clock steps backwards (review 8, L1):** a stored last-post time that is later than the current time counts as expired. The post is allowed, `waitSecs` and `Retry-After` follow the same rule, and a successful post stores the real current time, so the interval starts again from that post.
+
+
+## F015 additions
+
+Screenshots in the feed and on profiles (spec: `docs/features/F015-screenshots-in-feed-and-profiles.md`; § 0 there settles every ambiguity). All earlier rules apply, including F002, F005 and F021. One new public endpoint, no changed endpoints and no new rate limits.
+
+### Types
+```ts
+type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked"
+                  | "collectionUpdated" | "screenshotPosted"          // F015
+
+type FeedScreenshots = {
+  count: number;          // all of the actor's screenshots of this game on the item's UTC day; 1–20, >= items.length
+  items: Screenshot[];    // F005 Screenshot, 1–4 entries, newest first (createdAt desc, then id asc); canDelete per viewer
+}
+
+type FeedItem = {
+  ...F021,
+  screenshots: FeedScreenshots | null;   // screenshotPosted only; null for every other kind. Older servers omit it (treat as null).
+}
+// For screenshotPosted: actor = the screenshot author (may be the game owner); game = the game;
+// reason = "following" (always); version = null; score/achievement/update/collection = null;
+// createdAt = the latest post of that day.
+
+type ScreenshotGameRef = { id: string; title: string }
+type UserScreenshot = Screenshot & { game: ScreenshotGameRef }
+```
+
+### Feed: event production
+| Kind | Written when | Coalescing |
+|---|---|---|
+| `screenshotPosted` | `POST /api/games/{id}/screenshots` returns 201 and the game was published at the visibility check. The author may be the game owner. | One row per (actor, game, UTC day of the screenshot's `createdAt`). Each post deletes the day's row and inserts a new one (new, higher `id`). |
+
+- The UTC day is the first 10 characters of the new screenshot's `createdAt`. The server uses one timestamp for both the screenshot and the event, so a post at `23:59:59.900Z` and one at `00:00:00.100Z` are in two items.
+- Best effort, as for every kind: a failure is logged and the post still returns 201. Rejected posts write nothing. Posts to unpublished games write nothing.
+
+### Feed: sources and visibility
+- `screenshotPosted` items come **only** from users the viewer follows (F002 source 1, first clause). The favorites clause never applies to this kind, and the viewer's own items are never shown.
+- An item is included only while (a) the game is published and (b) **at least one** screenshot exists whose author is the actor, whose game is the item's game, and whose `createdAt` falls on the item's UTC day.
+- `screenshots.items` and `count` are computed at read time from the same rule, so deleted screenshots disappear at once. An item left with none is skipped. The cursor rule is unchanged: `nextCursor` is the last row of the page even when that row was skipped.
+- `kinds` accepts `screenshotPosted`. An older server answers it with 400 `Unknown feed kind 'screenshotPosted'`.
+
+### New endpoint
+| Method | Path | Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/users/{username}/screenshots | `?page=1&perPage=12` | `Page<UserScreenshot>`, newest first (`createdAt` desc, then `id` asc) |
+
+- `{username}` is matched case-insensitively. An unknown user → 404 `not_found` `User not found`.
+- `page`: default 1; values below 1 count as 1; non-integer → 400 `bad_request` `page must be an integer`.
+- `perPage`: default **12**, clamped to **1–50**; non-integer → 400 `bad_request` `perPage must be an integer`.
+- **Visibility:** only screenshots whose game is published **or owned by the viewer**, the F005 rule for `GET /api/games/{id}`. This applies to the author's own view too. `total` counts the same set.
+- `canDelete` follows F005: the viewer is the author, the game owner or an admin; false when anonymous.
+- No rate limit (a public read, like `GET /api/games/{id}/screenshots` and `/api/users/{username}/collections`). There is no `/api/users/me/screenshots` alias.
+
+### Web routes
+- `/games/{id}?section=screenshots` scrolls the game page to its Screenshots section after load, like F004's `?section=versions`. Feed and profile links use it.
+
+### Rate limits
+- Unchanged. Posting stays under F005 `Limit::Screenshot` (10/hour) and the 20-per-game cap. Feed reads stay under `Limit::Feed`.

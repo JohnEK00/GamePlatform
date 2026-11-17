@@ -40,9 +40,10 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F016 | Gamepad remapping, synced control bindings and device-aware prompts | M | shipped |
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | M | shipped |
 | F020 | Game comment settings: comments on / replies only / off, slow mode | S | shipped |
-| F015 | Screenshots in the feed and on profiles | S | proposed |
+| F015 | Screenshots in the feed and on profiles | S | specced |
 | F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | proposed |
 | F022 | Announce a collection when it goes public | S | proposed |
+| F024 | "Screenshot of your game" notifications for creators | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
@@ -120,10 +121,14 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0013_f007.sql`: `notifications`, `notification_events`, `notification_settings`; `notifications.rs`; five endpoints; `Limit::Notifications`; hooks in comments/hearts/follows/publish; pruning), frontend (provider + poll loop, bell, page, settings, `OsNotifications` host contract), desktop (`notify.rs` commands, feature-gated plugin, settings toggle, menu item). No engine changes.
 - **Depends on**: F006 (hook points, permalinks). Fan-out on write per recipient, unlike the F002 feed (see ARCHITECTURE § F007).
 
-### F015: Screenshots in the feed and on profiles (S, proposed; after F005)
-- **Pitch**: a new F002 feed kind `screenshotPosted` (coalesced per author, game and UTC day), and a "Screenshots" tab on profiles (`GET /api/users/{username}/screenshots`), with published games only.
-- **User value**: followers see what their friends play, and players get a personal gallery.
-- **Areas**: backend (activity kind, no CHECK rebuild needed since F021; profile endpoint), frontend (feed item, profile tab). No engine changes.
+### F015: Screenshots in the feed and on profiles (S, specced → [spec](features/F015-screenshots-in-feed-and-profiles.md))
+- **Pitch**:
+  - A F002 feed kind `screenshotPosted`: "Mia posted 3 screenshots of Kiln Clash", with up to 4 thumbnails that open the F005 lightbox. One item per author, game and UTC day, for the author's followers, which includes owners posting shots of their own games. A **Screenshots** tab on `/feed`.
+  - A **Screenshots** section on every profile (`GET /api/users/{username}/screenshots`): a personal gallery across games, labelled with each game, showing published games only (plus the viewer's own games), with "Load more" and delete from the lightbox.
+  - Everything is evaluated at read time (the event stores no screenshot ids), so deletes and unpublishing apply at once. `?section=screenshots` deep-links the game page gallery.
+- **User value**: followers see what their friends play and make, creators' promo shots reach their audience, and every player gets a personal gallery. It turns the six examples' 📷 button into social content.
+- **Areas**: backend (migration `0022_f015.sql` with one index, writer, one branch (a) predicate, batched assembly, profile endpoint), frontend (`ScreenshotLightbox` extraction, feed item and tab, `ProfileScreenshots`, game page section link), desktop (verification only). No engine changes.
+- **Depends on**: F002, F005, F021 (all shipped). No `activity_events` rebuild. Follow-up: F024.
 
 ### F008: Collections (M, shipped → [spec](features/F008-collections.md))
 - **Pitch**:
@@ -241,3 +246,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: an engine-drawn, gamepad- and touch-navigable keyboard panel (`ui.keyboard` or an automatic one when a field starts editing with `lastDevice` `"touch"`/`"gamepad"`), feeding the F019 `textEvents` path, with A–Z, 0–9, space, backspace and done keys, respecting the field's `allow` filter.
 - **User value**: controller and phone players can enter names too, which F019 leaves to each game.
 - **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.
+
+### F024: "Screenshot of your game" notifications for creators (S, proposed; after F015)
+- **Pitch**: a F007 kind `screenshotPosted` for the game owner ("Mia posted 2 screenshots of Space Dodge"), coalesced per game while unread (F018 group), withdrawn when all of them are deleted while unread, with a `screenshots` setting (default on). F018 game mutes apply, and the author never notifies themself.
+- **User value**: creators notice community shots quickly, can thank players, set a good one as the thumbnail, or remove an inappropriate one.
+- **Areas**: backend (notification kind, setting column in a small migration, hook in `create_screenshot`/`remove_screenshot`), frontend (summary text, setting switch, icon). No engine changes; desktop verification of OS notification text.

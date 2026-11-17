@@ -872,3 +872,7 @@ Unchanged from F012. The new widgets are part of the UI layer, before the F005 c
 
 ### F019 note: Escape in browser fullscreen (review 8, L2)
 When the player uses the site's fullscreen button, the browser takes the first Escape to leave fullscreen, and the game never receives it. A text field that is being edited stays in editing mode. A second Escape, gamepad B, Enter, clicking elsewhere, or Up/Down still ends editing, so the game never gets stuck. To cancel an edit reliably, use gamepad B or a second Escape. Desktop F11 fullscreen is native window fullscreen and doesn't have this problem.
+
+
+## F015 additions
+None. Screenshots reach the feed and profiles through the existing F005 post flow (the 📷 button, `engine.platform.shareScreenshot()`), with no engine, message or bundle changes.
