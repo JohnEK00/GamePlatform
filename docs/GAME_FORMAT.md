@@ -1023,3 +1023,7 @@ Host and author pauses keep the keyboard open (editing stays on). A key press in
 
 ## F024 additions
 None. Screenshot notifications for creators are written by the existing F005 post flow (the 📷 button, `engine.platform.shareScreenshot()`). There are no engine, message, game.json or bundle changes.
+
+
+## F028 additions
+None. Public profiles 2 (banner, links, profile sections) is a platform-only feature. There are no engine, message, game.json, bundle or player page changes.

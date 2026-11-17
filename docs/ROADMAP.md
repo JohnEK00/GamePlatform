@@ -1,7 +1,30 @@
 # Roadmap
 
 Owned by the `product-planner` agent. Items are listed in priority order (highest first). Sizes: S (one specialist, under a day), M (several specialists, one round). Anything L gets split before it's specced.
-Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, `shipped`.
+Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, `shipped`, `retired` (merged into another item or dropped; kept for history).
+
+**Direction (2026-11-17, set by the user):** new work should improve the **platform itself**: more pages, UI improvements, public profile pages, and letting people post. Platform items (profiles, posts, home and discovery, navigation and search, new pages) come first. Engine-only and notification-plumbing items (F025, F026) move to the bottom. Creation tools (F011, F014) and the desktop library (F010) sit in between.
+
+### Platform audit (2026-11-17)
+- **Pages today:**
+  - Home/browse `/` (hero, "Featured" top 4, Trending shelf, a sorted and tag-filtered grid; search reuses `/?q=`);
+  - game `/games/{id}` (+ edit, stats), upload, dashboard, favorites, feed, notifications, settings, studio, docs ("Make a game"), admin;
+  - collection `/c/{id}`;
+  - profile `/u/{u}` with `/collections`, `/followers` and `/following`;
+  - login, register, 404.
+- **Profile:** a small header (avatar, name, `@username`, join date, bio, counts), then achievements, a paged games grid, screenshots and collections on one long page.
+  - It has no banner, no links, no featured games and no sections or clean URLs per section, no Copy link and no `/me`.
+  - The "plays" stat vanishes past 24 games.
+  - Non-creators' main content is an empty games grid.
+  - Profiles can't be reported (avatar and bio are unmoderated).
+- **Rough UI:**
+  - Search covers games only and has no page of its own.
+  - There is no way to find people other than feed suggestions, no tag index, and no About/Help page.
+  - The footer has four links.
+  - The header nav and the user menu duplicate each other, and Collections and Notifications are reachable only from the menu or bell.
+  - The home page is one "Featured" block + one shelf + a grid: no new-this-week, recently updated, collections or creator spotlight.
+  - Empty and loading states are consistent within pages, but each page hand-rolls them.
+- **Posting:** users can only comment on games, post game screenshots and curate collections. There is no standalone post, status or update, and no way to talk to followers that isn't tied to a game.
 
 ## Shipped (v1 + v2): do not re-propose
 - **Accounts and profiles**: register/login (JWT), display name, bio, avatar, profile page with the user's games.
@@ -42,14 +65,25 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F020 | Game comment settings: comments on / replies only / off, slow mode | S | shipped |
 | F015 | Screenshots in the feed and on profiles | S | shipped |
 | F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | shipped |
-| F024 | "Screenshot of your game" notifications for creators | S | specced |
-| F022 | Announce a collection when it goes public | S | proposed |
-| F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
-| F026 | "Your record was beaten" leaderboard notifications | S | proposed |
-| F025 | On-screen keyboard 2: symbols page and accented letters | S | proposed |
+| F024 | "Screenshot of your game" notifications for creators | S | shipped |
+| F028 | Public profiles 2: banner, links, profile sections and sharing | M | specced |
+| F029 | Featured games on profiles | S | proposed |
+| F030 | User posts: short text posts on profiles and in followers' feeds | M | proposed |
+| F031 | Post replies and hearts, with notifications | M | proposed |
+| F032 | Home and discover 2: sectioned home page and creator spotlight | M | proposed |
+| F033 | Search page: games, creators and collections | M | proposed |
+| F034 | Navigation and UI polish: header, mobile menu, footer, shared states | S | proposed |
+| F035 | Explore creators page | S | proposed |
+| F036 | Tags index and tag pages | S | proposed |
+| F037 | About and Help pages | S | proposed |
+| F038 | Images in posts | S | proposed |
 | F027 | Featured screenshots: owners pin up to 3 shots on the game page | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
+| F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
 | F010 | Desktop offline library | M | proposed |
+| F026 | "Your record was beaten" leaderboard notifications | S | proposed |
+| F025 | On-screen keyboard 2: symbols page and accented letters | S | proposed |
+| F022 | Announce a collection when it goes public | S | retired (merged into F030) |
 
 ### F001: Leaderboards 2.0 (M, shipped → [spec](features/F001-leaderboards-2.md))
 - **Pitch**: daily and weekly boards next to all-time ones, ascending/time-based scoring for speedruns, and an API so games can show leaderboards and "new personal best!" in-game.
@@ -240,7 +274,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0021_f020.sql`: two `games` columns without CHECK and `comment_post_times` with a backfill; mode and slow-mode steps in `create_comment` inside one transaction; the settings endpoint; `AppError::SlowMode`), frontend (`CommentSettingsForm`, `CommentSettingsDialog`, edit page panel, comment form states and countdown), desktop (verification only). No engine changes.
 - **Depends on**: F006 and F017 (shipped).
 
-### F022: Announce a collection when it goes public (S, proposed; after F021)
+### F022: Announce a collection when it goes public (S, retired: merged into F030)
+- **Retired 2026-11-17.** A post with a collection attachment (F030) is the explicit way to share a collection with followers. It reaches the feed, can say why the list exists, and covers the "curate privately, then publish" flow without a hidden automatic announcement. The original pitch is kept below for history.
 - **Pitch**: when a collection changes from private to public with at least one published game, followers get one `collectionShared` feed item ("Mia shared *Cozy games*: 8 games") instead of nothing, and creators of the games in it get the F021 `addedToCollection` notification (deduped per collection and game, so re-toggling never re-notifies).
 - **User value**: the common "curate privately, then publish" flow reaches followers, which F021 deliberately skips.
 - **Areas**: backend (one more activity kind, no rebuild; hook in `PATCH /api/collections/{id}`; a once-per-collection guard), frontend (feed item). No engine or desktop changes.
@@ -256,7 +291,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: engine (new pure `osk.ts`, `ui.ts` wiring, README, two test files), frontend (template hint removal, docs subsection, two tests; desktop tests in acceptance), desktop (verification only). Backend not dispatched. No migration (the next free number stays `0023`), no messages, no example changes.
 - **Depends on**: F019, F016, F012 (all shipped). Follow-up: F025.
 
-### F024: "Screenshot of your game" notifications for creators (S, specced → [spec](features/F024-screenshot-notifications.md))
+### F024: "Screenshot of your game" notifications for creators (S, shipped → [spec](features/F024-screenshot-notifications.md))
 - **Pitch**:
   - A F007 kind `screenshotPosted` for the game owner: "Mia posted 2 screenshots of Space Dodge", with a 48 px preview of the newest shot, linking to `/games/{id}?section=screenshots`.
   - One unread notification per game; every screenshot is one event.
@@ -275,6 +310,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: a F007 kind `recordBeaten` for the player who held **#1** on a game's all-time board (F001, per board direction) when another player takes the top spot: "Mia beat your best on Space Dodge (12,400)", linking to the game's leaderboard. One notification per (game, board) while unread, with the newest challenger. It has a `records` setting and F018 game mutes apply. Daily and weekly boards never notify, to avoid churn.
 - **User value**: brings competitive players back to defend their spot, the strongest re-engagement loop leaderboards offer, and composes with F001 and F007 with no new UI surfaces beyond one notification text.
 - **Areas**: backend (hook in the score-submit path after the F001 best update, kind, setting column), frontend (summary, setting switch). No engine changes.
+- **Priority (2026-11-17)**: notification plumbing; moved below the platform items.
 
 ### F027: Featured screenshots (S, proposed; after F024)
 - **Pitch**: game owners "Feature" up to 3 screenshots from their gallery (any author). Featured shots show first in the gallery with a "Featured" badge, and as a strip on the game page header. The author gets a F007 `screenshotFeatured` notification (once per screenshot, the F018 pin pattern).
@@ -285,3 +321,78 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: a `?123` key switching the F023 keyboard to a symbols page (`! ? , : ; ( ) & @ # + = / *`), and a long-press or `RB` accent row for the letter under the cursor (é, ñ, ü…), shown only for glyphs the theme font has.
 - **User value**: names and short messages beyond plain ASCII for phone and controller players, without bloating the default layout.
 - **Areas**: engine (`osk.ts` pages, `ui.ts`), frontend (docs table). No backend or desktop changes.
+- **Priority (2026-11-17)**: engine-only; moved to the bottom under the platform-first direction.
+
+### F028: Public profiles 2: banner, links, profile sections and sharing (M, specced → [spec](features/F028-public-profiles-2.md))
+- **Pitch**:
+  - A 3:1 profile banner (re-encoded server-side, `PUT`/`DELETE /api/users/me/banner`) and up to 3 validated links.
+  - A redesigned header with plays and achievements totals.
+  - Profile sections with clean URLs: Overview, `/u/{u}/games`, `/u/{u}/screenshots` and `/u/{u}/collections`.
+  - Copy link, `/me`, and canonical-case URLs.
+  - Profile reports with an admin "Clear profile" action. Desktop gets View → My Profile.
+- **User value**: creators get a real public page with an identity and links to their other work. Every section is shareable, and non-creators get a meaningful Overview. Profiles become moderatable.
+- **Areas**: backend (migration `0024_f028.sql`, banner pipeline, link rules, stats, `user` reports), frontend (profile shell, header, sections, settings, admin), desktop (menu item, test). No engine changes.
+- **Depends on**: F002, F005, F008, F015 (all shipped). It is the foundation for F029 and F030.
+
+### F029: Featured games on profiles (S, proposed; after F028)
+- **Pitch**: users feature up to 4 published games, their own or anyone's, as a "Featured" row at the top of their profile Overview, in their chosen order. A "Feature on profile" picker in the profile's Overview (own games + favorites, with Move up/down) and `PUT /api/users/me/featured` (`gameIds`, max 4, published at write time; unpublished or deleted games are hidden at read time). `UserProfileResponse.featured: GameSummary[]`.
+- **User value**: creators lead with their best work instead of their newest. Players who don't make games can show their favourites. It composes with the F028 shell.
+- **Areas**: backend (one table `profile_featured`, one endpoint, read-time filter), frontend (Overview row, picker dialog). No engine changes.
+
+### F030: User posts (M, proposed; after F028)
+- **Pitch**:
+  - Short text posts (1–500 characters, plain text with auto-linked URLs that pass the F028 link rule), optionally attached to one game or one public collection, which is shown as a card.
+  - Posts appear in a new **Posts** section of the F028 profile shell (`/u/{u}/posts`) and on a permalink page `/p/{id}`.
+  - Followers see them in the feed: a `postCreated` kind and a Posts tab.
+  - Authors delete their own posts and admins any post. Posts can be reported (`targetType: "post"`, delete action).
+  - `Limit::Post` (e.g. 10 per 10 min) and a per-user daily cap.
+  - Absorbs F022: a post with a collection attachment is how curators announce a list.
+- **User value**: the first way to talk to followers that isn't tied to a game: dev logs, "new level coming", "check out this list". It makes profiles and the feed social.
+- **Areas**: backend (`posts` table, CRUD + list endpoints, feed kind, report target), frontend (composer on own profile and feed, post card, Posts section, permalink, feed tab, admin rows), desktop (verification). No engine changes.
+
+### F031: Post replies and hearts (M, proposed; after F030)
+- **Pitch**: hearts on posts, and one level of replies under each post. This reuses the F006 comment patterns (the `HeartButton`, 3-reply preview and "Show N more", permalinks `/p/{id}?reply={rid}`), F017-style author lock, and F007 notifications: `postReply` and `postHeart` for the author, coalesced like comment hearts, with settings switches and F018 thread mutes.
+- **User value**: posts become conversations, and creators hear back from their audience.
+- **Areas**: backend (`post_replies`, `post_hearts`, notification kinds, report target for replies), frontend (thread UI on post cards and the permalink, notification texts, settings). No engine changes.
+
+### F032: Home and discover 2 (M, proposed)
+- **Pitch**:
+  - The home page becomes a sectioned discover page: a hero carousel of 3 "Featured" picks (admin-curated via `PUT /api/admin/featured`, falling back to top rated), "New this week", "Recently updated" (F004), "Trending" (F003), "Popular collections" (most-favorited games' collections), and a "Creator spotlight" (one creator per day with their banner, bio and 3 games, from F028).
+  - The full sortable grid moves to `/browse` (with `/?sort=`/`?tag=`/`?q=` redirects).
+- **User value**: visitors see variety and people, not one grid. Creators get a chance to be spotlighted, and new and updated games get exposure.
+- **Areas**: backend (featured list table + admin endpoints, a `sort=updated` option, spotlight pick), frontend (home sections, `/browse` page, admin featured editor). No engine changes.
+
+### F033: Search page (M, proposed)
+- **Pitch**: a `/search?q=` page with Games, Creators and Collections tabs and result counts. The header search navigates there. A new `GET /api/users?q=` (username and display-name prefix and substring, ranked by followers) and `GET /api/collections?q=` (public, non-empty). Recent searches are remembered per device, and empty and no-result states suggest trending tags.
+- **User value**: people and lists become findable. Today search only covers games and lives inside the home page.
+- **Areas**: backend (two search endpoints with indexes and limits), frontend (search page, header search, result cards). No engine changes.
+
+### F034: Navigation and UI polish (S, proposed)
+- **Pitch**:
+  - A regrouped header: Browse, Feed, Collections and Studio, with "Make a game" moved under Studio. The user menu keeps only personal items.
+  - A full-height mobile menu sheet with focus trap and Escape.
+  - A richer footer (About, Help, Docs, Browse, Creators, Tags).
+  - A shared `PageHeader` with optional breadcrumbs (Game › Edit / Stats, Profile › Followers).
+  - One `EmptyState`/`LoadError` usage audit, so every list page has an icon, a one-line explanation and an action.
+- **User value**: less hunting for pages, especially on phones, and a consistent feel across the app.
+- **Areas**: frontend only (Layout, styles, page headers); desktop verification.
+
+### F035: Explore creators page (S, proposed; after F028)
+- **Pitch**: `/creators` lists creators with at least one published game, as cards (banner, avatar, name, bio excerpt, game count, followers, Follow button). Sorted by "Popular" (followers), "Active" (latest publish or update) or "New". Backed by `GET /api/creators?sort=&page=`.
+- **User value**: a way to discover people to follow beyond feed suggestions, and the F028 banners give it visual weight.
+- **Areas**: backend (one endpoint), frontend (page, creator card, nav and footer link). No engine changes.
+
+### F036: Tags index and tag pages (S, proposed)
+- **Pitch**: `/tags` shows every tag with its game count (alphabetical or by size), and `/tags/{tag}` is a tag page with its own header, the sortable grid, and the collections that feature that tag's games. Tag chips link there instead of filtering the home grid.
+- **User value**: browsable genres with shareable URLs; the home page's chip row only shows the top tags.
+- **Areas**: backend (`GET /api/tags?all=1` with counts), frontend (two pages, chip links). No engine changes.
+
+### F037: About and Help pages (S, proposed)
+- **Pitch**: `/about` (what Pixelforge Arcade is, how to play, make and share, and links to the Studio and docs) and `/help` (an FAQ on accounts, uploading, controls, screenshots, collections, reporting and desktop), with anchors that the footer and empty states link to. Static content in the UI package. The desktop's Help → About opens `/about`.
+- **User value**: new visitors understand the site, and common questions stop being dead ends.
+- **Areas**: frontend (two pages, footer links), desktop (menu wiring).
+
+### F038: Images in posts (S, proposed; after F030)
+- **Pitch**: one optional image per post (the F005 re-encode pipeline, a thumbnail in the feed, the lightbox on the permalink), or "attach a screenshot" from your own F015 gallery.
+- **User value**: dev-log posts with work-in-progress art, and sharing a favourite moment with followers.
+- **Areas**: backend (post image column + storage), frontend (composer attach, card image). No engine changes.

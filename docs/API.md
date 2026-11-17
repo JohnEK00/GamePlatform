@@ -1653,3 +1653,152 @@ Unchanged. Posting stays under F005 `Limit::Screenshot` (10/hour per user) and t
 
 ### Retention
 F007 retention applies unchanged.
+
+
+## F028 additions
+Public profiles 2: banner, links, profile sections and sharing (spec: `docs/features/F028-public-profiles-2.md`; § 0 there settles every ambiguity). All earlier rules apply. There are two new endpoints, four changed endpoints, one new media path and no new rate-limit buckets.
+
+### Types
+```ts
+type ProfileLink = {
+  label: string;   // trimmed, 0–30 chars, no control chars; "" = clients show the URL's host (without "www.")
+  url: string;     // absolute http(s) URL, <= 200 chars (see "Link rules"); the server lowercases only the scheme
+}
+
+type User = {
+  ...v1 (UserRef + bio, createdAt, role),
+  bannerUrl: string | null;   // F028: "/media/banners/{userId}.jpg?v={n}" (resolve against the API base); null = no banner.
+                              // Older servers omit it: clients treat that as "banners unsupported".
+  links: ProfileLink[];       // F028: 0–3, in the owner's order. Older servers omit it: treat as unsupported / [].
+}
+// User is returned by /api/auth/register, /api/auth/login, /api/auth/me, PATCH /api/users/me,
+// PUT /api/users/me/avatar, PUT|DELETE /api/users/me/banner and as UserProfileResponse.user.
+// UserRef (owner, actors, reporter, ...) is unchanged: no banner or links in references.
+
+type ProfileStats = {
+  plays: number;          // sum of GameSummary.plays over the games counted in gamesTotal (same viewer filter)
+  achievements: number;   // unlocked achievements on games published or owned by the viewer (the GET /api/users/{u}/achievements rule, no limit)
+  screenshots: number;    // == total of GET /api/users/{u}/screenshots for the same viewer
+  collections: number;    // == total of GET /api/users/{u}/collections for the same viewer
+}
+
+type UserProfileResponse = {
+  ...v1 + F002,
+  stats: ProfileStats;    // F028. Older servers omit it.
+}
+
+type UpdateMeRequest = {
+  displayName?: string;
+  bio?: string;
+  links?: ProfileLink[] | null;   // F028: omitted or null = unchanged; [] = clear; max 3
+}
+
+type ReportTargetType = "game" | "comment" | "screenshot" | "collection"
+                      | "user";            // F028: targetId = the user's id
+type ReportAction = "dismiss" | "unpublish" | "delete"
+                  | "clearProfile";        // F028: user reports only
+// Report for targetType "user": targetPreview = "@{username}" (usernames never change), targetGameId = null,
+// targetImageUrl = targetImageFullUrl = null.
+```
+
+### Link rules (`PATCH /api/users/me` `links`)
+`links` is checked first for its count, then each item in order. Index `{i}` in messages is 0-based. The first failure wins.
+
+| Check | Status, code, message |
+|---|---|
+| more than 3 items | 422 `validation` `links must have at most 3 items` |
+| label (after trim) contains a char < U+0020 or U+007F | 422 `links[{i}].label must not contain control characters` |
+| label (after trim) longer than 30 chars | 422 `links[{i}].label must be at most 30 characters` |
+| url (after trim) longer than 200 chars | 422 `links[{i}].url must be at most 200 characters` |
+| url fails the format rule below (an empty url too) | 422 `links[{i}].url must be a full http:// or https:// address` |
+
+URL format, on the trimmed value:
+1. Every character is printable ASCII, `0x21`–`0x7E`. So there are no spaces, no control characters and no non-ASCII; IDNs must be given in punycode.
+2. It starts with `http://` or `https://`, case-insensitive.
+3. The **authority** is the text after `://` up to the first `/`, `?` or `#`, or the end. It is `host` or `host:port`, where:
+   - `host` is 1+ characters of `[A-Za-z0-9.-]`, contains at least one `.`, and doesn't start or end with `.` or `-`;
+   - `port` is 1–5 digits.
+
+   An `@` anywhere in the authority fails, because credentials aren't allowed.
+4. Anything after the authority is unrestricted beyond rule 1.
+
+The stored value is the trimmed URL with its scheme lowercased. Labels are stored trimmed. A body whose `links` isn't an array of objects is rejected by the JSON extractor (422 `validation`). Unknown keys inside a link are ignored. Missing `label` or `url` count as `""`.
+
+### New endpoints
+| Method | Path | Body | Response |
+|---|---|---|---|
+| PUT 🔒 | /api/users/me/banner | multipart, field `banner` (PNG, JPEG or WebP, ≤ 2 MB) | 200 `User` |
+| DELETE 🔒 | /api/users/me/banner | – | 200 `User` |
+
+`PUT /api/users/me/banner`:
+- Errors, in this order:
+  - 401 when signed out;
+  - 429 `rate_limited` (shared `Limit::Image`);
+  - 422 `banner file is required` (no `banner` field);
+  - 413 `payload_too_large` `banner must be at most 2MB`. A body over the 3 MB image body limit is rejected with 413 by that limit, as for avatars; its message is not specified;
+  - 422 `banner must be a PNG, JPEG or WebP image` (magic bytes);
+  - 503 `unavailable` `The server is busy, try again in a few seconds` with `Retry-After: 5` (no free image slot);
+  - the F005 decode errors (422): `image must be between 64 and 4096 pixels per side`, `image could not be decoded`, `image is too large to process; use fewer pixels or 8-bit color`;
+  - 422 `banner must be at least 600×200 pixels after cropping to 3:1`.
+- Processing:
+  - The decoded image is flattened on black and centre-cropped to 3:1. With `w ≥ 3h` the crop is `3h × h`; otherwise it is `w × floor(w/3)`.
+  - The crop must be at least 600×200.
+  - A crop wider than 1500 px is resized to exactly 1500×500. A narrower crop keeps its size.
+  - It is encoded as JPEG (quality 85) without metadata.
+- The response is the updated `User` with `bannerUrl` = `/media/banners/{userId}.jpg?v={n}`, where `n` increases on every upload.
+
+`DELETE /api/users/me/banner` removes the banner and returns the `User` (`bannerUrl: null`). It is idempotent: 200 when there is no banner. The version only increases when a banner was removed. No rate limit.
+
+### Changed endpoints
+- `PATCH /api/users/me`:
+  - accepts `links` (see "Link rules");
+  - **every field is validated before anything is written**, in the order displayName, bio, links, so a 422 changes nothing;
+  - the existing `displayName` and `bio` messages are unchanged.
+- `GET /api/users/{username}`: the response gains `stats: ProfileStats`, computed for the viewer. `games`, `gamesTotal` and paging are unchanged.
+- `POST /api/reports`:
+  - `targetType: "user"` with `targetId` = a user id;
+  - unknown → 404 `not_found` `User not found`; your own id → 422 `You can't report yourself`;
+  - an unknown `targetType` → 422 `targetType must be "game", "comment", "screenshot", "collection" or "user"`;
+  - the duplicate-open rule (409) and `Limit::Report` are unchanged.
+- `POST /api/admin/reports/{id}/resolve`: action validity, checked before the "already resolved" 409:
+
+  | action | game | comment / screenshot / collection | user |
+  |---|---|---|---|
+  | `dismiss` | ok | ok | ok |
+  | `unpublish` | ok | 422 `unpublish is only valid for game reports` | 422 `action must be "dismiss" or "clearProfile" for user reports` |
+  | `delete` | ok | ok | 422 `action must be "dismiss" or "clearProfile" for user reports` |
+  | `clearProfile` | 422 `clearProfile is only valid for user reports` | 422 (same) | ok |
+  | anything else | 422 `action must be "dismiss", "unpublish", "delete" or "clearProfile"` | (same) | (same) |
+
+  `clearProfile`:
+  - sets `displayName` to the username, `bio` to `""` and `links` to `[]`;
+  - removes the avatar and the banner (`avatarUrl` and `bannerUrl` become null, and the files are deleted);
+  - leaves the user's games, comments, screenshots, collections, follows and scores untouched;
+  - a user who no longer exists is a no-op;
+  - like every action, it then resolves every open report on the same target with `resolution: "clearProfile"`.
+
+### Media
+- `GET /media/banners/{userId}.jpg` is public, with the F005 screenshot media headers:
+  - `Cache-Control: public, max-age=3600` on 200/304, and `no-store` otherwise;
+  - `X-Content-Type-Options: nosniff`;
+  - `Content-Security-Policy: sandbox`.
+
+  The `?v=` query only busts caches and is ignored by the server.
+
+### Web routes
+- `/u/{username}`: profile Overview.
+- `/u/{username}/games?page=n`: all the user's games (24 per page; published only, or all for the owner).
+- `/u/{username}/screenshots`: the F015 gallery.
+- `/u/{username}/collections?page=n`: the F008 list, now inside the profile.
+- `/me`: redirects to the signed-in user's profile (login first when signed out).
+- The legacy `/u/{username}?page=n` (n ≥ 2) redirects to `/u/{username}/games?page=n`.
+- Clients replace a non-canonical username case in the URL with `user.username`.
+- Share links are `{origin}/u/{username}` (desktop: `{serverBase}/u/{username}`).
+
+### Rate limits
+- `PUT /api/users/me/banner` shares `Limit::Image` (20/hour per user) with `PUT /api/users/me/avatar` and `PUT /api/games/{id}/thumbnail`.
+- User reports share `Limit::Report` (10/hour).
+- `DELETE /api/users/me/banner` and `PATCH /api/users/me` have no limit (unchanged).
+
+### Privacy
+`stats` only summarises content the same viewer can already list. Links are opt-in and public. Banners are public like avatars.

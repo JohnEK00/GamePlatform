@@ -1542,3 +1542,80 @@ On-screen keyboard for `ui.textField` (spec: `docs/features/F023-on-screen-keybo
   - backend-dev: the migration, `notifications.rs`, `models.rs`, `routes/notifications.rs`, `routes/screenshots.rs`, the `event_screenshot_id: None` additions in `routes/comments.rs`, `routes/follows.rs` and `routes/collections.rs`, `tests/f024.rs`, and the `tests/f007.rs` and `tests/f018.rs` adjustments.
   - frontend-dev: types, `index.ts`, `notifications.ts`, `NotificationItem`, `NotificationSettings`, styles and tests.
   - desktop-dev: `apps/desktop/src/__tests__/f024.desktop.test.tsx` only.
+
+
+## F028 additions
+Public profiles 2 (spec: `docs/features/F028-public-profiles-2.md`). This round adds one migration (three added columns; no rebuild, no index), two banner endpoints, link validation, profile stats, a `user` report target, a profile shell in the UI and one desktop menu item. There are no new dependencies and no engine changes.
+- **Data**: migration `backend/migrations/0024_f028.sql` runs after `0023_f024.sql`. Normative:
+  ```sql
+  -- F028: public profiles 2 (docs/ARCHITECTURE.md § F028 additions).
+
+  -- Profile banner: always "jpg" when set (re-encoded server-side); the version busts caches like avatar_version.
+  ALTER TABLE users ADD COLUMN banner_ext TEXT;
+  ALTER TABLE users ADD COLUMN banner_version INTEGER NOT NULL DEFAULT 0;
+
+  -- Profile links: a JSON array of {"label","url"} (0-3 items), validated by PATCH /api/users/me.
+  ALTER TABLE users ADD COLUMN links_json TEXT NOT NULL DEFAULT '[]';
+  ```
+- **Model** (`models.rs`):
+  - `ProfileLink { label, url }`;
+  - `User.banner_url` (via `banner_url(id, ext, version)` → `/media/banners/{id}.{ext}?v={version}`) and `User.links`;
+  - `USER_COLUMNS` gains `banner_ext, banner_version, links_json`;
+  - `user_from_row` parses `links_json` leniently (`unwrap_or_default`);
+  - `UserRef` and `user_ref_from_row` are unchanged.
+- **Storage and media.**
+  - `Storage::banners_dir()` = `{DATA_DIR}/banners`, created by `ensure_dirs`. Files are `{userId}.jpg`, written with `replace_image` (atomic rename) and removed with `remove_images`.
+  - `public_router` serves `/media/banners` through `ServeDir` behind the same `screenshot_media_headers` response layer as `/media/screenshots` (1 h cache, `nosniff`, `CSP: sandbox`, `no-store` on errors).
+- **Banner pipeline** (`screenshots.rs`):
+  - `process_screenshot`'s steps 1–3 (header checks, decode budget, limited decode, flatten to RGB8) move unchanged into `decode_rgb(bytes) -> (RgbImage, ImageFormat)`, which both pipelines use.
+  - `banner_crop(w, h)`:
+    ```text
+    if w >= 3*h { cw = 3*h; ch = h;     x = (w - cw) / 2; y = 0 }
+    else        { cw = w;   ch = w / 3; x = 0;            y = (h - ch) / 2 }     // integer division
+    ```
+  - `process_banner`:
+    1. `decode_rgb`;
+    2. `crop_imm(x, y, cw, ch)`;
+    3. require `cw >= 600 && ch >= 200`;
+    4. if `cw > 1500`, `resize(.., 1500, 500, FilterType::Triangle)`;
+    5. `encode_jpeg(.., 85)`.
+  - `users::upload_banner` runs it in `spawn_blocking` while holding an `image_slots` permit (otherwise it returns `routes::screenshots::busy()`, now `pub(crate)`), after `Limit::Image` and `validate_image(&bytes, "banner")`.
+- **Link validation**: `users::validate_links`, a pure function implementing API § F028 "Link rules". `update_me` validates displayName, bio and links, then writes all present fields in one transaction (`UPDATE users SET … WHERE id = ?`).
+- **Stats** (`users::get_user`). `?1` = the profile user id, `?2` = the viewer id or NULL, and `{filter}` = the existing games filter (`""` for the owner, `AND g.published = 1` otherwise):
+  ```sql
+  -- plays (same rows as games_total)
+  SELECT COALESCE(SUM(g.plays), 0) FROM games g WHERE g.owner_id = ?1 {filter};
+  -- achievements (the list_user_achievements rule, without LIMIT)
+  SELECT COUNT(*) FROM user_achievements ua
+    JOIN achievements a ON a.game_id = ua.game_id AND a.ach_id = ua.ach_id
+    JOIN games g ON g.id = ua.game_id
+   WHERE ua.user_id = ?1 AND (g.published = 1 OR g.owner_id = ?2);
+  ```
+  - `screenshots` runs `routes::screenshots::user_screenshots_count_sql()` with binds (author, viewer).
+  - `collections` runs `SELECT COUNT(*) FROM collections c WHERE {USER_COLLECTIONS_FILTER}` with binds (owner, viewer, is_self). The filter string moves out of `list_user_collections` into `routes::collections::USER_COLLECTIONS_FILTER`, and both callers use it.
+  - Each count therefore equals its list endpoint's `total`.
+- **Reports**:
+  - `TARGET_TYPES` gains `"user"` (no schema change since `0016`).
+  - `create_report`'s `user` branch stores `target_game_id` NULL and `target_preview` `@{username}`.
+  - `admin_resolve_report` applies the validity table in API § F028 and calls `users::clear_profile`: one `UPDATE` (display name ← username, bio, links, avatar and banner cleared, versions + 1), then file removal for both images.
+- **UI** (`@webgame/ui`):
+  - **Shell.** `ProfilePage` is now a layout route at `u/:username` with child routes:
+    - index → `ProfileOverview`;
+    - `games` → `ProfileGamesTab`;
+    - `screenshots` → `ProfileScreenshotsTab`;
+    - `collections` → `UserCollectionsPage`.
+
+    It fetches `GET /api/users/{username}` once per (username, viewer) and passes `{ profile, isMe, reload }` through `useOutletContext` (`useProfileOutlet()`). It renders `ProfileHeader` and the `.pf-profile-tabs` `<nav>` of `NavLink`s. `/me` → `MyProfileRedirect`.
+  - **Followers/following** stay standalone routes outside the shell.
+  - **Games section** pages through `GET /api/games?owner={username|me}&sort=new`, not the profile endpoint.
+  - **Sharing.** `share.ts` (`appShareUrl`, `profileShareUrl`, `LINK_COPIED_MS`) generalises `collectionShareUrl`, which keeps its output.
+  - **New components.** `CopyLinkButton`, `ProfileHeader`, `ProfileLinksEditor` and `BannerSettings`.
+  - **Links.** `profile.ts` mirrors the server URL rule (`isSafeProfileUrl`). Links are rendered only when safe, with `target="_blank" rel="noopener noreferrer nofollow ugc"`.
+- **Desktop**:
+  - View → My Profile (`profile`, forwarded, no accelerator) → `nativeMenu.ts` `ROUTES.profile = "/me"`.
+  - Profile links reach the system browser through the existing `external.rs` new-window handler.
+  - Banner URLs are absolute on the configured server (`api.url`), which the CSP `img-src` already allows.
+- **Ownership**:
+  - backend-dev: the migration, `storage.rs`, `models.rs`, `screenshots.rs`, `routes/users.rs`, `routes/mod.rs`, `routes/reports.rs`, `routes/collections.rs` (the filter constant), `routes/screenshots.rs` (`busy` visibility), `tests/f028.rs`, and the one `tests/f008.rs` message update.
+  - frontend-dev: `api/types.ts`, `api/client.ts`, `share.ts`, `profile.ts`, `util.ts`, `collections.ts`, the new components, `ProfileScreenshots`, `ProfilePage`, `ProfileSections`, `UserCollectionsPage`, `SettingsPage`, `Report.tsx`, `AdminPage`, `Layout.tsx` (the user menu's Profile → `/me`), `WebGameApp.tsx`, `index.ts`, `styles.css` and tests.
+  - desktop-dev: `src-tauri/src/menu.rs`, `src/nativeMenu.ts` and `src/__tests__/f028.desktop.test.tsx`.
