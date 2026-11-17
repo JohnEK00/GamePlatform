@@ -32,7 +32,7 @@ To seed a demo account and the example games, see [backend/README.md](backend/RE
 - **Social**: follow creators, an activity feed, threaded comment replies with hearts, creator pin/lock tools, and in-app notifications (with optional desktop OS notifications, mutes per game or thread, and one polling tab per browser).
 - **Collections**: curated, ordered game lists with notes, public (shareable `/c/{id}` links, shown on profiles and game pages) or private.
 - **Screenshots**: capture with 📷 or a game's own key, share to a per-game gallery or set as the thumbnail; every image is re-encoded before use.
-- **Controls**: games declare named actions; players remap keys per game from a controls panel.
+- **Controls**: games declare named actions; players remap keys and gamepad buttons per game from a controls panel, and signed-in players' bindings follow their account across devices. Games can show prompts for the device in use.
 - **Achievements**: games declare them in `game.json` and call `engine.platform.unlockAchievement(id)`. They show on game pages and profiles.
 - **Cloud saves**: `engine.storage` follows your account across devices, with a localStorage fallback.
 - **Game Studio** (`/studio`): write a game in the browser, starting from a template, with a live sandboxed preview, then publish it or export a `.zip`. On desktop you can also open a local game folder.

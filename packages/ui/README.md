@@ -119,7 +119,7 @@ Everything is exported from the package root (`src/index.ts` is the source of tr
   - OS step: `osNotificationsFor`, `OS_NOTIFICATION_TITLE`, `OS_NOTIFICATION_MAX`, `readOsWatermark`/`writeOsWatermark`, `OS_WATERMARK_PREFIX`.
   - The `OsNotifications` type.
 - **Screenshots (F005):** `useScreenshotCapture`, `ScreenshotTray`, `ScreenshotDialog`, `ScreenshotGallery`, `launderImage`, `sniffImage`, `readImageHeader`, `fitImageForUpload`, `browserImageCodec`, `screenshotFileName`, `sanitizeScreenshotCaption`, the `SCREENSHOT_*` limits, `SCREENSHOTS_CHANGED_EVENT`, `PLAYER_SCREENSHOT_EVENT`.
-- **Controls (F009):** `ControlsPanel`, `ControlsSummary`, `KeyCaptureButton`, the action/override helpers from `controls.ts` (`validateActions`, `effectiveActions`, `readOverrides`, `useStoredOverrides`, `keyLabel`, …), `PLAYER_CONTROLS_EVENT`.
+- **Controls (F009, F016):** `ControlsPanel`, `ControlsSummary`, `KeyCaptureButton`, `GamepadCaptureButton`, `useControlsSync`, `startGamepadCapture`, the action/override helpers from `controls.ts` (`validateActions`, `effectiveActions`, `readOverrides`, `useStoredOverrides`, `readBindings`, `writeBindings`, `useStoredBindings`, `keyLabel`, …), `PLAYER_CONTROLS_EVENT`.
 - **Studio:** `StudioPreview`, `CodeEditor`, `PublishDialog`, `OpenGameDialog`, `STUDIO_TEMPLATES`, the zip writer/reader (`createZip`, `createZipAsync`, `readZip`, `MAX_OPEN_ZIP_BYTES`) and the project helpers (`buildBundleZip`, `validateProject`, `projectFromZip`, `projectFromFileList`, …), `STUDIO_OPEN_FOLDER_EVENT`.
 - **Pages:** `HomePage`, `GamePage`, `UploadPage`, `EditGamePage`, `DashboardPage`, `GameStatsPage`, `FavoritesPage`, `FeedPage`, `StudioPage`, `AdminPage`, `ProfilePage`, `FollowListPage`, `SettingsPage`, `NotificationsPage`, `LoginPage`, `RegisterPage`, `DocsPage`, `NotFoundPage`.
 - **Utils:** `formatCount`, `formatDate`, `timeAgo`, `formatScore`, `formatTimeUntil`, `errorMessage`, `looksLikeZip`, `gameVersionsPath`, …
@@ -160,7 +160,7 @@ this is the list of what the player handles:
 | `webgame:screenshot` (`source: "game"`) / `webgame:screenshot-result` | game → parent / reply | Game share: 1 per 3 s and 20 per mount (a failed share keeps its slot), else `rate_limited`; `invalid` when laundering fails. |
 | `webgame:mute` | parent → game | Mute button. |
 | `webgame:pause` / `webgame:resume` | parent → game | Tab hidden, controls panel open. |
-| `webgame:controls` | parent → game | Key overrides from the controls panel (F009). |
+| `webgame:controls` | parent → game | Key and gamepad overrides from the controls panel (F009, F016); always carries `gamepad`. Bindings sync to `GET`/`PUT …/controls` when signed in. |
 | `webgame:studio-ready` / `webgame:studio-load` | page → parent / reply | Studio only: the parent sends the in-memory project. |
 
 Screenshot images from a game are untrusted: `launderImage` checks the size (≤ 8 MiB), the magic bytes (PNG, JPEG

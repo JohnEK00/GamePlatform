@@ -37,7 +37,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F008 | Collections (curated game lists) | M | shipped |
 | F018 | Notification controls: mutes, shared polling, "pinned" notifications | M | shipped |
 | F021 | Collection activity: feed items and "added to a collection" notifications | M | shipped |
-| F016 | Gamepad remapping, synced control bindings and device-aware prompts | M | specced |
+| F016 | Gamepad remapping, synced control bindings and device-aware prompts | M | shipped |
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | S | proposed |
 | F020 | Game comment settings: turn comments off, slow mode | S | proposed |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
@@ -170,7 +170,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: desktop creators can mix Studio edits and their own editor without exporting zips or losing edits on reload.
 - **Areas**: desktop (write command scoped to the F013 folder registry, `notify` watcher), frontend (Save button, auto-reload toggle). No backend changes.
 
-### F016: Gamepad remapping, synced control bindings and device-aware prompts (M, specced → [spec](features/F016-gamepad-remapping-and-sync.md))
+### F016: Gamepad remapping, synced control bindings and device-aware prompts (M, shipped → [spec](features/F016-gamepad-remapping-and-sync.md))
 - **Pitch**:
   - The F009 controls panel's gamepad column becomes two capture slots per action. The parent page captures the button through its own Gamepad API (standard-mapping controllers, with a baseline so held or "wake-up" presses never count). Changes apply to the running game at once through an optional `gamepad` field on `webgame:controls`.
   - Signed-in players' bindings (keys and gamepad) sync per user per game through `GET`/`PUT /api/games/{id}/controls`, so they follow the account between the web and desktop apps. The account copy wins on load unless this device has an unsynced change. Device-only bindings from F009 are uploaded on first sign-in. Anonymous players keep device storage.
