@@ -5,18 +5,19 @@ import { useApi } from "../context/config";
 import { Avatar, EmptyState, ErrorState, LoadError, Skeleton, Spinner } from "../components/common";
 import { FeedItem, FeedItemSkeleton, isKnownFeedItem } from "../components/FeedItem";
 import { FollowButton } from "../components/Follow";
-import { TabPanel, Tabs, type TabItem } from "../components/Tabs";
+import { TabPanel, tabPanelId, Tabs, type TabItem } from "../components/Tabs";
 import { errorMessage, formatCount, useAsync, useDocumentTitle } from "../util";
 
 /** localStorage key remembering the last selected feed tab. */
 export const FEED_TAB_KEY = "webgame.feed.tab";
 
-export type FeedTab = "all" | "games" | "collections";
+export type FeedTab = "all" | "games" | "collections" | "screenshots";
 
 const TABS: TabItem<FeedTab>[] = [
   { value: "all", label: "Everything" },
   { value: "games", label: "New games" },
   { value: "collections", label: "Collections" },
+  { value: "screenshots", label: "Screenshots" },
 ];
 const TABS_ID = "pf-feed-tabs";
 
@@ -24,12 +25,13 @@ const TAB_KINDS: Record<FeedTab, FeedItemKind[] | undefined> = {
   all: undefined,
   games: ["gamePublished", "gameUpdated"],
   collections: ["collectionUpdated"],
+  screenshots: ["screenshotPosted"],
 };
 
 function readTab(): FeedTab {
   try {
     const v = localStorage.getItem(FEED_TAB_KEY);
-    if (v === "all" || v === "games" || v === "collections") return v;
+    if (v === "all" || v === "games" || v === "collections" || v === "screenshots") return v;
   } catch {
     /* storage unavailable */
   }
@@ -167,6 +169,27 @@ export function FeedPage() {
 
   const empty = !state.loading && !state.error && state.items.length === 0;
 
+  const listRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  /**
+   * F015 § 0.12: focus after a feed item disappeared (its last screenshot was deleted): the first link of the next
+   * item still on screen, else "Load more", else the tab panel. Runs when the lightbox closes, on the updated DOM.
+   */
+  const focusAfter = (id: string): HTMLElement | null => {
+    const list = listRef.current;
+    if (list) {
+      const ids = state.items.map((i) => i.id);
+      const articles = Array.from(list.querySelectorAll<HTMLElement>("article[data-feed-id]"));
+      for (const next of ids.slice(ids.indexOf(id) + 1)) {
+        const el = articles.find((a) => a.getAttribute("data-feed-id") === next);
+        const link = el?.querySelector<HTMLElement>("a[href]:not([tabindex='-1'])");
+        if (link) return link;
+      }
+    }
+    if (moreRef.current?.isConnected) return moreRef.current;
+    return document.getElementById(tabPanelId(TABS_ID));
+  };
+
   return (
     <div className="pf-container pf-page pf-feed">
       <header className="pf-pagehead pf-pagehead--row">
@@ -199,6 +222,13 @@ export function FeedPage() {
             </EmptyState>
             <SuggestedCreators onFollowed={() => setFollowedSome(true)} />
           </>
+        ) : tab === "screenshots" ? (
+          <>
+            <EmptyState icon="📷" title="No screenshots yet.">
+              Screenshots posted by people you follow appear here.
+            </EmptyState>
+            <SuggestedCreators onFollowed={() => setFollowedSome(true)} />
+          </>
         ) : (
           <>
             <EmptyState
@@ -219,15 +249,15 @@ export function FeedPage() {
         )
       ) : (
         <>
-          <div className="pf-feed__list">
+          <div className="pf-feed__list" ref={listRef}>
             {state.items.map((item) => (
-              <FeedItem key={item.id} item={item} />
+              <FeedItem key={item.id} item={item} onEmptied={() => focusAfter(item.id)} />
             ))}
           </div>
           {state.moreError != null && <LoadError message={`Couldn't load more: ${errorMessage(state.moreError)}`} onRetry={loadMore} />}
           {state.nextCursor && (
             <div className="pf-feed__more">
-              <button type="button" className="pf-btn" onClick={loadMore} disabled={state.loadingMore}>
+              <button type="button" className="pf-btn" onClick={loadMore} disabled={state.loadingMore} ref={moreRef}>
                 {state.loadingMore ? <Spinner size={14} /> : null} Load more
               </button>
             </div>

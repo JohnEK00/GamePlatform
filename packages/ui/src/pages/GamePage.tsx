@@ -23,7 +23,8 @@ import { ReportButton } from "../components/Report";
 import { useAuth } from "../context/auth";
 import { Leaderboard } from "../components/Leaderboard";
 import { StarRating } from "../components/StarRating";
-import { errorMessage, formatCount, formatDate, looksLikeZip, useAsync, useDocumentTitle, VERSIONS_SECTION, isNotesError, REPLACE_CONFLICT_MESSAGE } from "../util";
+import { errorMessage, formatCount, formatDate, looksLikeZip, useAsync, useDocumentTitle, VERSIONS_SECTION, SCREENSHOTS_SECTION, isNotesError, REPLACE_CONFLICT_MESSAGE } from "../util";
+import { SCREENSHOTS_SECTION_ID } from "../components/ScreenshotDialog";
 import { NotFoundPage } from "./NotFoundPage";
 
 /** F004: the modal shown after a bundle is picked: file name, "What's new" notes, Upload / Cancel. */
@@ -345,6 +346,16 @@ function OwnerFollow({ game }: { game: Game }) {
   );
 }
 
+/** `?section=` values of the game page and the element ids they scroll to (F004, F015). */
+const SECTION_IDS: Record<string, string> = {
+  [VERSIONS_SECTION]: "versions",
+  [SCREENSHOTS_SECTION]: SCREENSHOTS_SECTION_ID,
+};
+
+function sectionElementId(section: string | null): string | null {
+  return section && Object.prototype.hasOwnProperty.call(SECTION_IDS, section) ? SECTION_IDS[section] : null;
+}
+
 export function GamePage() {
   const { id = "" } = useParams();
   const api = useApi();
@@ -355,17 +366,18 @@ export function GamePage() {
   useDocumentTitle(game?.title);
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search);
-  const wantsVersions = searchParams.get("section") === VERSIONS_SECTION;
+  const sectionTarget = sectionElementId(searchParams.get("section"));
   // F006: `?comment={id}` permalinks (a query, so it works under the desktop HashRouter).
   const focusCommentId = searchParams.get("comment") || null;
   const gameLoaded = !!game && game.id === id;
 
-  // F004: `?section=versions` (feed links; works under HashRouter, unlike a #hash) scrolls to "What's new".
+  // F004 `?section=versions` / F015 `?section=screenshots` (feed and profile links; a query works under HashRouter,
+  // unlike a #hash): scroll to that section once the game has loaded. Scroll only, never focus; unknown values do nothing.
   useEffect(() => {
-    if (!wantsVersions || !gameLoaded) return;
-    const el = document.getElementById("versions");
+    if (!sectionTarget || !gameLoaded) return;
+    const el = document.getElementById(sectionTarget);
     if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [wantsVersions, gameLoaded, id]);
+  }, [sectionTarget, gameLoaded, id]);
 
   /** Refetch without the loading skeleton, so open forms (picked file, typed notes) survive. */
   const refetch = async () => {

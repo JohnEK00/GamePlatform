@@ -1569,3 +1569,8 @@ type UserScreenshot = Screenshot & { game: ScreenshotGameRef }
 - **`GET /api/users/{username}/screenshots`:** the user is looked up before paging is parsed. An unknown user with a bad `page` returns 404, not 400; `/users/{u}/collections` does the opposite.
 - **Duplicate feed rows:** if a race leaves two `screenshotPosted` rows for the same actor, game and day, only the newest is shown.
 - **Rejected post when the day's cap is reached:** a 422 for hitting the cap doesn't replace that day's existing event row.
+
+### F015 implementation notes (frontend)
+- **Emptied profile section:** if a delete empties the section on someone else's profile (for example the game owner or an admin deleting), it keeps showing its heading so focus has somewhere to land. On first load, the section stays hidden for another user's profile while loading, when it is empty, and after an error.
+- **Load-more errors on a profile:** shown inline as "Couldn't load more: …" with a Retry button.
+- **React key:** the profile screenshots section uses the key `shots:{username}`, so it doesn't clash with ProfileCollections.

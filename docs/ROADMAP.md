@@ -40,7 +40,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F016 | Gamepad remapping, synced control bindings and device-aware prompts | M | shipped |
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | M | shipped |
 | F020 | Game comment settings: comments on / replies only / off, slow mode | S | shipped |
-| F015 | Screenshots in the feed and on profiles | S | specced |
+| F015 | Screenshots in the feed and on profiles | S | shipped |
 | F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | proposed |
 | F022 | Announce a collection when it goes public | S | proposed |
 | F024 | "Screenshot of your game" notifications for creators | S | proposed |
@@ -121,7 +121,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0013_f007.sql`: `notifications`, `notification_events`, `notification_settings`; `notifications.rs`; five endpoints; `Limit::Notifications`; hooks in comments/hearts/follows/publish; pruning), frontend (provider + poll loop, bell, page, settings, `OsNotifications` host contract), desktop (`notify.rs` commands, feature-gated plugin, settings toggle, menu item). No engine changes.
 - **Depends on**: F006 (hook points, permalinks). Fan-out on write per recipient, unlike the F002 feed (see ARCHITECTURE § F007).
 
-### F015: Screenshots in the feed and on profiles (S, specced → [spec](features/F015-screenshots-in-feed-and-profiles.md))
+### F015: Screenshots in the feed and on profiles (S, shipped → [spec](features/F015-screenshots-in-feed-and-profiles.md))
 - **Pitch**:
   - A F002 feed kind `screenshotPosted`: "Mia posted 3 screenshots of Kiln Clash", with up to 4 thumbnails that open the F005 lightbox. One item per author, game and UTC day, for the author's followers, which includes owners posting shots of their own games. A **Screenshots** tab on `/feed`.
   - A **Screenshots** section on every profile (`GET /api/users/{username}/screenshots`): a personal gallery across games, labelled with each game, showing published games only (plus the viewer's own games), with "Load more" and delete from the lightbox.

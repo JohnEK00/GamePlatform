@@ -59,6 +59,7 @@ export type { FavoriteButtonProps, FavoriteState, FavoritesApi } from "./compone
 export { FollowProvider, FollowButton, useFollows } from "./components/Follow";
 export type { FollowButtonProps, FollowState, FollowsApi } from "./components/Follow";
 export { FeedItem, FeedItemSkeleton, FEED_ITEM_KINDS, isKnownFeedItem, feedScoreDisplay } from "./components/FeedItem";
+export type { FeedItemProps } from "./components/FeedItem";
 export { AchievementIcon, GameAchievements, RecentAchievements } from "./components/Achievements";
 export { ReportDialog, ReportButton, REPORT_REASONS } from "./components/Report";
 export type { ReportDialogProps } from "./components/Report";
@@ -96,8 +97,12 @@ export { ScreenshotTray } from "./components/ScreenshotTray";
 export type { ScreenshotTrayProps } from "./components/ScreenshotTray";
 export { ScreenshotDialog, SCREENSHOTS_CHANGED_EVENT, screenshotErrorMessage } from "./components/ScreenshotDialog";
 export type { ScreenshotDialogProps, ScreenshotDialogGame } from "./components/ScreenshotDialog";
-export { ScreenshotGallery, SCREENSHOT_GALLERY_PER_PAGE } from "./components/ScreenshotGallery";
+export { ScreenshotGallery, SCREENSHOT_GALLERY_PER_PAGE, pagesForOffset } from "./components/ScreenshotGallery";
 export type { ScreenshotGalleryProps } from "./components/ScreenshotGallery";
+export { ScreenshotLightbox } from "./components/ScreenshotLightbox";
+export type { ScreenshotLightboxProps } from "./components/ScreenshotLightbox";
+export { ProfileScreenshots, PROFILE_SCREENSHOTS_PER_PAGE } from "./components/ProfileScreenshots";
+export type { ProfileScreenshotsProps } from "./components/ProfileScreenshots";
 
 // F009: controls and remapping
 export {
@@ -403,4 +408,6 @@ export {
   isRecentlyUpdated,
   RELEASE_NOTES_MAX,
   gameVersionsPath,
+  SCREENSHOTS_SECTION,
+  gameScreenshotsPath,
 } from "./util";

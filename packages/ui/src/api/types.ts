@@ -518,8 +518,8 @@ export type FollowResponse = {
   followers: number;
 };
 
-/** F021 adds "collectionUpdated". */
-export type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked" | "collectionUpdated";
+/** F021 adds "collectionUpdated"; F015 adds "screenshotPosted". */
+export type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked" | "collectionUpdated" | "screenshotPosted";
 
 /** F021: one game of a `collectionUpdated` item. */
 export type FeedCollectionGame = {
@@ -571,6 +571,16 @@ export type FeedItem = {
   update?: FeedUpdate | null;
   /** F021: collectionUpdated only; null for every other kind. Older servers omit it (treat as null). */
   collection?: FeedCollection | null;
+  /** F015: screenshotPosted only; null for every other kind. Older servers omit it (treat as null). */
+  screenshots?: FeedScreenshots | null;
+};
+
+/** F015: the screenshots of a `screenshotPosted` item (computed at read time). */
+export type FeedScreenshots = {
+  /** All of the actor's screenshots of this game on the item's UTC day; 1–20, >= items.length. */
+  count: number;
+  /** 1–4 entries, newest first (createdAt desc, then id asc); canDelete per viewer. */
+  items: Screenshot[];
 };
 
 export type FeedPage = { items: FeedItem[]; nextCursor: string | null };
@@ -616,6 +626,11 @@ export type Screenshot = {
 };
 
 export type ScreenshotPage = Page<Screenshot>;
+
+/** F015: the game of a profile screenshot. */
+export type ScreenshotGameRef = { id: string; title: string };
+/** F015: an item of `GET /api/users/{username}/screenshots`. */
+export type UserScreenshot = Screenshot & { game: ScreenshotGameRef };
 
 // ---- F007: in-app notifications ----
 

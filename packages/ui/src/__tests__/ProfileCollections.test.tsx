@@ -25,6 +25,7 @@ function makeClient(me: User | null) {
   vi.spyOn(client, "listMyFavorites").mockResolvedValue({ items: [], total: 0, page: 1, perPage: 100 });
   vi.spyOn(client, "unreadNotificationCount").mockResolvedValue({ unread: 0, latestAt: null, pollAfterSecs: 60 });
   vi.spyOn(client, "listUserAchievements").mockResolvedValue([]);
+  vi.spyOn(client, "listUserScreenshots").mockResolvedValue({ items: [], total: 0, page: 1, perPage: 12 });
   return client;
 }
 

@@ -8,6 +8,7 @@ import { FollowButton, useFollows } from "../components/Follow";
 import { GameGrid } from "../components/GameCard";
 import { RecentAchievements } from "../components/Achievements";
 import { ProfileCollections } from "../components/ProfileCollections";
+import { ProfileScreenshots } from "../components/ProfileScreenshots";
 import { formatCount, formatDate, useAsync, useDocumentTitle } from "../util";
 import { NotFoundPage } from "./NotFoundPage";
 
@@ -146,6 +147,9 @@ export function ProfilePage() {
           }}
         />
       )}
+
+      {/* Keyed per user (fresh state on navigation); prefixed so it can't clash with ProfileCollections' key. */}
+      {data && <ProfileScreenshots key={`shots:${data.user.username}`} username={data.user.username} isMe={isMe} />}
 
       {data && <ProfileCollections key={data.user.username} username={data.user.username} isMe={isMe} />}
     </div>

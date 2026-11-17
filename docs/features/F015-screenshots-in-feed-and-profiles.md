@@ -1,6 +1,6 @@
 # F015: Screenshots in the feed and on profiles
 
-Status: **specced**. Size: **S** (backend small: one index-only migration, one activity writer, one feed sub-query and one batched page query, one public list endpoint; frontend small to medium: a lightbox extraction, one feed item kind, one feed tab, one profile section; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
+Status: **shipped**. Size: **S** (backend small: one index-only migration, one activity writer, one feed sub-query and one batched page query, one public list endpoint; frontend small to medium: a lightbox extraction, one feed item kind, one feed tab, one profile section; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
 Contracts: `docs/API.md` § F015 additions (feed kind and types, event production, feed source rule, the new `GET /api/users/{username}/screenshots`), `docs/ARCHITECTURE.md` § F015 additions (migration `0022_f015.sql` with the exact SQL, the writer, the feed branch (a) predicate, the feed assembly query, the profile query, ownership). `docs/GAME_FORMAT.md` § F015 additions: no changes.
 Depends on: F002 (feed), F005 (screenshots), F021 (`activity_events` without the `kind` CHECK), all shipped. The migration is **`0022_f015.sql`** and runs after `0021_f020.sql`. **No new Rust or JS dependencies. No `activity_events` rebuild.**
 

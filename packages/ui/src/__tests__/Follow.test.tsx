@@ -148,6 +148,7 @@ describe("FollowButton", () => {
         before: (c) => {
           vi.spyOn(c, "getUser").mockResolvedValue({ user: sam, games: [], gamesTotal: 0, followers: 128, following: 12, isFollowing: false });
           vi.spyOn(c, "listUserAchievements").mockResolvedValue([]);
+          vi.spyOn(c, "listUserScreenshots").mockResolvedValue({ items: [], total: 0, page: 1, perPage: 12 });
         },
       },
     );

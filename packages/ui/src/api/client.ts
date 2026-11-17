@@ -54,6 +54,7 @@ import type {
   Score,
   ScoreSubmitResult,
   ScreenshotPage,
+  UserScreenshot,
   Screenshot,
   Leaderboard,
   LeaderboardPeriod,
@@ -630,6 +631,10 @@ export class ApiClient {
   /** Newest first; `perPage` 1–50 server-side (default 12). */
   listScreenshots(gameId: string, query: PageQuery = {}, signal?: AbortSignal): Promise<ScreenshotPage> {
     return this.request(`/api/games/${encodeURIComponent(gameId)}/screenshots`, { query: { page: query.page, perPage: query.perPage }, signal });
+  }
+  /** F015: a user's screenshots across games (published or owned by the viewer), newest first. perPage: default 12, 1–50. */
+  listUserScreenshots(username: string, query: PageQuery = {}, signal?: AbortSignal): Promise<Page<UserScreenshot>> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/screenshots`, { query: { page: query.page, perPage: query.perPage }, signal });
   }
   /**
    * Multipart `image` (png/jpg/webp ≤ 2MB) + `caption` (sent when non-empty after trim). Only ever pass an image

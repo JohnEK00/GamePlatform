@@ -1,13 +1,22 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import type { FeedCollection, FeedItem as FeedItemData, FeedItemKind } from "../api/types";
+import type { FeedCollection, FeedItem as FeedItemData, FeedItemKind, Screenshot } from "../api/types";
+import { useApi } from "../context/config";
 import { normalizeLeaderboardConfig } from "../leaderboard";
-import { formatScore, gameVersionsPath, timeAgo } from "../util";
+import { formatScore, gameScreenshotsPath, gameVersionsPath, timeAgo } from "../util";
 import { AchievementIcon } from "./Achievements";
 import { Avatar, Skeleton, Thumbnail } from "./common";
+import { ScreenshotLightbox } from "./ScreenshotLightbox";
 
 /** The feed item kinds this client understands; anything else is ignored (forward compatibility). */
-export const FEED_ITEM_KINDS: readonly FeedItemKind[] = ["gamePublished", "gameUpdated", "personalBest", "achievementUnlocked", "collectionUpdated"];
+export const FEED_ITEM_KINDS: readonly FeedItemKind[] = [
+  "gamePublished",
+  "gameUpdated",
+  "personalBest",
+  "achievementUnlocked",
+  "collectionUpdated",
+  "screenshotPosted",
+];
 
 export function isKnownFeedItem(item: { kind?: unknown } | null | undefined): item is FeedItemData {
   return !!item && FEED_ITEM_KINDS.includes(item.kind as FeedItemKind);
@@ -154,7 +163,7 @@ function CollectionFeedItem({ item, collection }: { item: FeedItemData; collecti
     </Link>
   );
   return (
-    <article className="pf-feeditem" data-kind={item.kind}>
+    <article className="pf-feeditem" data-kind={item.kind} data-feed-id={item.id}>
       <Link to={actorPath} className="pf-feeditem__avatar" tabIndex={-1} aria-hidden="true">
         <Avatar user={item.actor} size={40} />
       </Link>
@@ -185,13 +194,158 @@ function CollectionFeedItem({ item, collection }: { item: FeedItemData; collecti
   );
 }
 
+/** F015: the valid screenshots of a `screenshotPosted` item, or null when it can't be shown (defensive). */
+function feedScreenshots(item: FeedItemData): { count: number; items: Screenshot[] } | null {
+  const fs = item.screenshots;
+  if (!fs || typeof fs !== "object" || !Array.isArray(fs.items)) return null;
+  const items = fs.items.filter((s) => !!s && typeof s === "object" && typeof s.id === "string" && typeof s.thumbUrl === "string");
+  if (items.length === 0) return null;
+  return { count: Math.max(items.length, Math.floor(Number(fs.count)) || 0), items };
+}
+
+const captionOf = (s: Screenshot) => (typeof s.caption === "string" ? s.caption.trim() : "");
+
+/**
+ * F015 § 2.1: "{actor} posted {n} screenshots of {game}", up to four thumbnails, "+N more", and the lightbox.
+ * Deletes are local: the shot leaves this item, and the item renders nothing once its last shot is gone.
+ */
+function ScreenshotFeedItem({ item, onEmptied }: { item: FeedItemData; onEmptied?: () => HTMLElement | null }) {
+  const api = useApi();
+  const initial = feedScreenshots(item);
+  // Local copy for deletes; re-derived when the item object changes (a reload).
+  const [local, setLocal] = useState({ src: item, data: initial });
+  const data = local.src === item ? local.data : initial;
+  if (local.src !== item) setLocal({ src: item, data: initial });
+  const [open, setOpen] = useState<number | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const gameLinkRef = useRef<HTMLAnchorElement>(null);
+  // Position of the open thumbnail, kept for the focus fallback after a delete.
+  const lastOpen = useRef(0);
+  if (open !== null) lastOpen.current = open;
+
+  if (!data) return null;
+  const { count, items } = data;
+  const actorPath = `/u/${encodeURIComponent(item.actor.username)}`;
+  const caption = count === 1 ? captionOf(items[0]) : "";
+  const more = count - items.length;
+
+  const onDeleted = (s: Screenshot) => {
+    setLocal((cur) => {
+      const d = cur.src === item ? cur.data : initial;
+      if (!d) return cur;
+      const left = d.items.filter((x) => x.id !== s.id);
+      if (left.length === d.items.length) return { src: item, data: d };
+      return { src: item, data: left.length ? { items: left, count: Math.max(left.length, d.count - 1) } : null };
+    });
+    setOpen(null);
+  };
+
+  // § 0.12: the thumbnail now at the deleted one's position, else the last one, else the game link, else the page's pick.
+  const returnFocus = () => {
+    const buttons = listRef.current?.querySelectorAll<HTMLElement>(".pf-feed-shots__item");
+    if (buttons && buttons.length) return buttons[Math.min(lastOpen.current, buttons.length - 1)];
+    if (gameLinkRef.current?.isConnected) return gameLinkRef.current;
+    return onEmptied?.() ?? null;
+  };
+
+  const actor = (
+    <Link to={actorPath} className="pf-feeditem__actor">
+      <strong>{item.actor.displayName || item.actor.username}</strong>
+    </Link>
+  );
+  const game = (
+    <Link to={`/games/${encodeURIComponent(item.game.id)}`} className="pf-feeditem__gamename" ref={gameLinkRef}>
+      <strong>{item.game.title}</strong>
+    </Link>
+  );
+
+  return (
+    <article className="pf-feeditem" data-kind={item.kind} data-feed-id={item.id}>
+      <Link to={actorPath} className="pf-feeditem__avatar" tabIndex={-1} aria-hidden="true">
+        <Avatar user={item.actor} size={40} />
+      </Link>
+      <div className="pf-feeditem__body">
+        <p className="pf-feeditem__text">
+          {count === 1 ? (
+            <>
+              {actor} posted a screenshot of {game}
+            </>
+          ) : (
+            <>
+              {actor} posted {count} screenshots of {game}
+            </>
+          )}
+        </p>
+        {caption && (
+          <p className="pf-feed-shots__caption pf-muted" title={caption}>
+            {`“${caption}”`}
+          </p>
+        )}
+        <ul className="pf-feed-shots" ref={listRef}>
+          {items.map((s, i) => {
+            const c = captionOf(s);
+            return (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  className="pf-feed-shots__item"
+                  aria-haspopup="dialog"
+                  aria-label={c ? `Screenshot: ${c}` : `Screenshot ${i + 1} of ${count}`}
+                  onClick={() => setOpen(i)}
+                >
+                  <img src={api.url(s.thumbUrl)} alt="" loading="lazy" />
+                </button>
+              </li>
+            );
+          })}
+          {more > 0 && (
+            <li className="pf-feed-shots__more">
+              <Link to={gameScreenshotsPath(item.game.id)} className="pf-small">
+                +{more} more on the game page
+              </Link>
+            </li>
+          )}
+        </ul>
+        <div className="pf-feeditem__meta pf-small pf-muted">
+          <span className="pf-feeditem__kindicon" aria-hidden="true">
+            📷
+          </span>
+          <time dateTime={item.createdAt}>{timeAgo(item.createdAt)}</time>
+        </div>
+      </div>
+      {open !== null && items[open] && (
+        <ScreenshotLightbox
+          items={items}
+          index={open}
+          gameTitle={() => item.game.title}
+          showGameLink
+          onIndex={(i) => setOpen(Math.max(0, Math.min(items.length - 1, i)))}
+          onClose={() => setOpen(null)}
+          onDeleted={onDeleted}
+          returnFocus={returnFocus}
+        />
+      )}
+    </article>
+  );
+}
+
+export type FeedItemProps = {
+  item: FeedItemData;
+  /**
+   * F015: where focus goes when this item disappears after its last screenshot was deleted (read when the lightbox
+   * closes, so it sees the updated DOM). FeedPage returns the next item's first link, else "Load more", else the panel.
+   */
+  onEmptied?: () => HTMLElement | null;
+};
+
 /** One activity-feed row: actor avatar, sentence, time, and a compact link to the game. Unknown kinds render nothing. */
-export function FeedItem({ item }: { item: FeedItemData }) {
+export function FeedItem({ item, onEmptied }: FeedItemProps) {
   if (!isKnownFeedItem(item)) return null;
   if (item.kind === "collectionUpdated") {
     const collection = feedCollection(item);
     return collection ? <CollectionFeedItem item={item} collection={collection} /> : null;
   }
+  if (item.kind === "screenshotPosted") return <ScreenshotFeedItem item={item} onEmptied={onEmptied} />;
   const text = sentence(item);
   if (text === null) return null;
   const ach = item.kind === "achievementUnlocked" ? item.achievement : null;
@@ -201,7 +355,7 @@ export function FeedItem({ item }: { item: FeedItemData }) {
       ? item.update.changes.filter((c) => c && typeof c.notes === "string" && c.notes.trim() !== "").slice(0, 3)
       : [];
   return (
-    <article className="pf-feeditem" data-kind={item.kind}>
+    <article className="pf-feeditem" data-kind={item.kind} data-feed-id={item.id}>
       <Link to={`/u/${encodeURIComponent(item.actor.username)}`} className="pf-feeditem__avatar" tabIndex={-1} aria-hidden="true">
         <Avatar user={item.actor} size={40} />
       </Link>

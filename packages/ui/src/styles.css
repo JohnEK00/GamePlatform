@@ -4203,6 +4203,115 @@ a.pf-tab {
 .pf-shots__empty {
   margin: 0;
 }
+
+/* ---------- F015: screenshots in the feed and on profiles ---------- */
+.pf-feed-shots__caption {
+  margin: -2px 0 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9rem;
+  font-style: italic;
+}
+.pf-feed-shots {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pf-feed-shots > li {
+  flex: none;
+  width: 112px;
+}
+.pf-feed-shots__item {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-sm);
+  background: var(--pf-bg-2);
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+.pf-feed-shots__item:hover {
+  border-color: var(--pf-accent);
+  transform: translateY(-1px);
+}
+.pf-feed-shots__item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pf-feed-shots > li.pf-feed-shots__more {
+  width: auto;
+  padding: 0 4px;
+}
+.pf-feed-shots__more a {
+  color: var(--pf-accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+.pf-feed-shots__more a:hover {
+  color: var(--pf-accent-hover);
+  text-decoration: underline;
+}
+@media (max-width: 479px) {
+  .pf-feed-shots {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .pf-feed-shots > li {
+    width: auto;
+  }
+  .pf-feed-shots > li.pf-feed-shots__more {
+    grid-column: 1 / -1;
+    padding: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pf-feed-shots__item:hover {
+    transform: none;
+  }
+}
+
+.pf-profile-shots {
+  margin-top: 28px;
+}
+/* Programmatic focus target after a delete (§ 0.12). */
+.pf-profile-shots .pf-section-title:focus {
+  outline: none;
+}
+.pf-profile-shots__cell {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.pf-profile-shots__cell .pf-shots__item img {
+  object-fit: cover;
+}
+.pf-profile-shots__game {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--pf-text-2);
+  font-weight: 600;
+  text-decoration: none;
+}
+.pf-profile-shots__game:hover {
+  color: var(--pf-accent);
+  text-decoration: underline;
+}
 .pf-shots__more {
   display: flex;
   justify-content: center;

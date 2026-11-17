@@ -114,6 +114,10 @@ describe("ScreenshotGallery (F005)", () => {
     expect(within(dialog).getByRole("button", { name: /Set as thumbnail/ })).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(screen.getByText("Delete this screenshot?")).toBeTruthy();
+    // F015 § 2.4: the confirmation now covers the feed and profiles too.
+    expect(screen.getByText("It is removed from the game page and everywhere else permanently.")).toBeTruthy();
+    // The game page never shows "View on game page".
+    expect(within(dialog).queryByRole("link", { name: "View on game page" })).toBeNull();
     const confirm = screen.getAllByRole("dialog").at(-1)!;
     fireEvent.click(within(confirm).getByRole("button", { name: /Delete/ }));
     await waitFor(() => expect(del).toHaveBeenCalledWith("s1"));

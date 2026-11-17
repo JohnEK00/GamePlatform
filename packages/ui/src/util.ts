@@ -209,6 +209,14 @@ export function gameVersionsPath(gameId: string): string {
   return `/games/${encodeURIComponent(gameId)}?section=${VERSIONS_SECTION}`;
 }
 
+/** F015: the `?section=` value that scrolls the game page to its screenshot gallery. */
+export const SCREENSHOTS_SECTION = "screenshots";
+
+/** F015: link to a game's screenshot gallery (`?section=screenshots`, HashRouter-safe like {@link gameVersionsPath}). */
+export function gameScreenshotsPath(gameId: string): string {
+  return `/games/${encodeURIComponent(gameId)}?section=${SCREENSHOTS_SECTION}`;
+}
+
 /** F004: copy for a 409 on bundle replace (a stale `expectedVersion` or a lost concurrent upload). */
 export const REPLACE_CONFLICT_MESSAGE = "This game was updated to a newer version since you opened this page. Reload and try again.";
 
