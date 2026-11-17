@@ -1425,3 +1425,54 @@ In the desktop app, `target="_blank"` links (such as "Open image" in the screens
 - **No shell:** the browser is started directly with `rundll32 url.dll,FileProtocolHandler`, `open` or `xdg-open`.
 
 The main window is now created in `setup` from its `tauri.conf.json` entry (`create: false`) so that it gets this handler. Game iframes can't trigger it, because their sandbox doesn't include `allow-popups`.
+
+
+## F023 additions
+On-screen keyboard for `ui.textField` (spec: `docs/features/F023-on-screen-keyboard.md`). Engine-only.
+
+**No migration**: the latest stays `0022_f015.sql`, and the next free number is still `0023`. There are also no endpoints, no messages and no new Rust or JS dependencies. The examples don't change, so nothing is repacked.
+
+- **Engine modules** (engine-dev, `packages/engine/src/`):
+  - **`osk.ts`** (new; pure, with no DOM or renderer). It holds:
+    - `OSK_ROWS` (the layout table);
+    - `oskLayout(gameW, gameH, fieldRect)`, the sizing and docking formula, which returns `null` when the keyboard doesn't fit;
+    - `oskKeyAt(layout, x, y)`;
+    - `oskMove(cursor, dx, dy)`, for anchor-column movement with wrapping;
+    - `oskLabel` and `oskChar`.
+
+    It is node-testable without a `Ui`.
+  - **`ui.ts`**:
+    - `TextFieldOptions.keyboard` and the exported type `TextFieldKeyboard`.
+    - One private keyboard state: `{ field, shown, upper, cursor { row, col, anchor }, pressKey, layout, fieldRect, mode }`, plus three repeat timers (vertical, horizontal, `DEL`).
+    - The read-only `keyboardRect`.
+    - A `keyboard` command kind drawn by `exec`.
+    - `UiInput` gains an optional `lastDevice`, and its gamepad button type widens to `A`, `B`, `X`, `Y`, `LB`, `Start` and the D-pad. `UiRenderer` gains optional `width`/`height`.
+
+    `engine.input` and `engine.renderer` already provide all of these. Test doubles without them never show a keyboard.
+  - **`index.ts`**: exports the type `TextFieldKeyboard`. `osk.ts` stays internal.
+- **Step order** (no new engine hooks):
+  ```
+  input.beginStep → ui.beginStep(dt)
+      pointerStep: keyboard panel hit-test first (previous step's layout), then widgets
+      navigateStep (editing branch): revert / keyboard routing / raw Enter, ArrowUp/Down
+      → oskEvents[] + editAction for this step
+  → game/scene update: the editing textField applies input.textEvents then oskEvents;
+      a step that starts editing decides `shown` from input.lastDevice and `keyboard`
+  → ui.endStep: close when editing ended; otherwise lay out, evaluate disabled keys (allow, maxLength, caret),
+      append the keyboard command after the widgets, set keyboardRect → input.endStep
+  ```
+  The keyboard therefore acts one step after it is first drawn, which is why the gamepad `A` that starts editing never also types.
+- **Why it's in the engine** (not the host page, and not a hidden `<input>`):
+  - Game iframes are sandboxed and opaque-origin.
+  - Raising an OS keyboard needs focus inside the user gesture, which the fixed-step model can't promise (F019 § 5).
+  - OS keyboards don't work with controllers.
+
+  An engine-drawn keyboard keeps everything inside the frame and the fixed step, and uses the game's theme.
+- **No platform involvement**: no message, no host UI, no permission. Keyboard events go only to the edited field. They never reach `input.textEvents`, actions or `lastDevice`.
+- **Studio and docs** (frontend-dev):
+  - The `menu-hud` template drops its "Type your name with a keyboard" hint.
+  - The docs page section 16 gains an "On-screen keyboard (F023)" subsection.
+  - Desktop: verification only.
+- **Ownership**:
+  - engine-dev: `osk.ts`, `ui.ts`, `index.ts`, the engine README and the engine tests.
+  - frontend-dev: `templates.ts`, `DocsPage.tsx` and their tests.

@@ -1577,3 +1577,7 @@ type UserScreenshot = Screenshot & { game: ScreenshotGameRef }
 
 ## Review-fix additions (REVIEW-2026-11-17-9)
 - **Huge `page` values (L7):** on every paginated endpoint, `page` is clamped to 1–1,000,000. A larger number returns 200 with the correct `total`, `items: []` and `page: 1000000`. A value too large to parse as a 64-bit integer still returns 400 `page must be an integer`. The offset is computed so it can't overflow.
+
+
+## F023 additions
+On-screen keyboard for `ui.textField` (spec: `docs/features/F023-on-screen-keyboard.md`). **No changes**: no endpoints, no fields, no status codes and no limits. The keyboard is engine-only (GAME_FORMAT § F023), and its text never leaves the game iframe.

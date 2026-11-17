@@ -876,3 +876,136 @@ When the player uses the site's fullscreen button, the browser takes the first E
 
 ## F015 additions
 None. Screenshots reach the feed and profiles through the existing F005 post flow (the 📷 button, `engine.platform.shareScreenshot()`), with no engine, message or bundle changes.
+
+
+## F023 additions
+On-screen keyboard for `ui.textField` (spec: `docs/features/F023-on-screen-keyboard.md`). **No changes** to the bundle format, game.json, the boot options or the game ↔ parent messages. Everything below is engine API.
+
+All F019 rules still apply whenever the keyboard isn't shown. This section changes them only while it is shown. Existing games keep working: their fields default to `"auto"`, so touch and controller players get the keyboard with no code change.
+
+### API
+```ts
+type TextFieldKeyboard = "auto" | "always" | "never";
+type TextFieldOptions = { /* F019 fields */ keyboard?: TextFieldKeyboard };   // default "auto"
+engine.ui.keyboardRect: Readonly<{ x: number; y: number; w: number; h: number }> | null   // read-only
+```
+- An invalid `keyboard` value counts as `"auto"`, and warns once per id: `textField "{id}" keyboard must be "auto", "always" or "never"`.
+- `keyboardRect` is the panel drawn at the end of the last completed step, in game units (frozen), or `null` when no keyboard was drawn.
+
+### Layout (normative)
+The grid has 10 columns and 5 rows. Each character key takes one column; the row 4 keys take the columns given.
+
+| Row | Keys |
+|---|---|
+| 0 | `1` `2` `3` `4` `5` `6` `7` `8` `9` `0` |
+| 1 | `Q` `W` `E` `R` `T` `Y` `U` `I` `O` `P` |
+| 2 | `A` `S` `D` `F` `G` `H` `J` `K` `L` `'` |
+| 3 | `Z` `X` `C` `V` `B` `N` `M` `-` `_` `.` |
+| 4 | `SHIFT` (columns 0–1), `SPACE` (2–5), `DEL` (6–7), `OK` (8–9) |
+
+- **Case.** Letters show as capitals each time the keyboard opens. `SHIFT` toggles between capitals and small letters (caps lock, not one-shot) and only affects letters.
+- **Labels.**
+  - A character key shows its character in the current case.
+  - `SHIFT` shows `abc` while capitals are on, and `ABC` while small letters are on.
+  - The other row 4 keys show `SPACE`, `DEL` and `OK`.
+- **Output.**
+  - A character key gives `{ kind: "text", text: ch }`, and `SPACE` gives `{ kind: "text", text: " " }`.
+  - `DEL` gives `{ kind: "key", key: "Backspace" }`.
+  - `OK` submits (F019 "submit": `committed` is true and focus stays on the field).
+  - `SHIFT` gives no event.
+  - These events go only to the field being edited. They never appear in `input.textEvents`, never change `input.lastDevice` and never fire actions.
+
+### Size and position (normative)
+Let `W = renderer.width` and `H = renderer.height` (game units), with margin `m = 4` and gap `g = 2`.
+- `keyH = clamp(round(H · 0.09), 12, 48)` and `keyW = floor((W − 2m − 9g) / 10)`.
+- `panelW = 10·keyW + 9g + 2m` and `panelH = 5·keyH + 4g + 2m`.
+- `panelX = floor((W − panelW) / 2)`.
+- `panelY = H − panelH` (bottom), unless the edited field's rect satisfies `field.y + field.h > H − panelH` **and** `field.y >= panelH`. In that case `panelY = 0` (top).
+- Key at row `r`, column `c`, span `s`: `x = panelX + m + c·(keyW + g)`, `y = panelY + m + r·(keyH + g)`, `w = s·keyW + (s − 1)·g`, `h = keyH`.
+- If `keyW < 8` or `panelH > H`, no keyboard is shown, and this warns once per `Ui`: `on-screen keyboard does not fit a {W}x{H} game; it is not shown`. `{W}` and `{H}` are the integer game size, and the separator is the letter `x`. The field keeps working with a physical keyboard.
+
+### Opening and closing
+- **Open.** The decision is made at the field's call in the step where editing starts, by any F019 start: a pointer press, activate, typing, or `ui.editing = id`.
+  - `"always"` opens the keyboard.
+  - `"auto"` opens it when `input.lastDevice` is `"touch"` or `"gamepad"` at that moment.
+  - `"never"` doesn't open it.
+
+  The keyboard is drawn from the end of that step and takes input from the next step, so the press that started editing never types a key.
+- **Hide.** In a step with at least one `input.textEvents` entry (physical typing or a paste), the events are applied and the keyboard is hidden for the rest of this edit. Editing continues.
+- **Reopen.** A pointer press on the field being edited reopens a hidden keyboard when `keyboard` is `"always"`, or when it is `"auto"` and `lastDevice` is `"touch"` at that press. The caret also moves (F019).
+- **Close.** The keyboard closes whenever editing ends, whether by submit, commit, revert or drop (F019 "Stop editing"). The next start decides again, and the keyboard reopens with capitals and the cursor on `Q`.
+
+### Input while the keyboard is shown
+- **Pointer** (mouse and the primary touch). The panel uses the previous step's layout and is tested **before** widgets:
+  - A press inside the panel is taken by the keyboard: it doesn't reach any widget, doesn't commit, doesn't change `ui.focus`, and `ui.hot` is `null`.
+  - A key fires on a release over the key that was pressed, if that key is enabled. A cancelled release never fires.
+  - Keys have no pointer repeat.
+  - A press on the field moves the caret (F019).
+  - A press anywhere else commits (F019) and closes the keyboard.
+  - Raw `input.mouse` and `input.touches` still report presses on the panel.
+- **Gamepad 0** (fixed; not remappable except for the direction actions):
+
+  | Input | Effect |
+  |---|---|
+  | D-pad `Up`/`Down`/`Left`/`Right`, or the declared `up`/`down`/`left`/`right` actions | move the keyboard cursor |
+  | `A` | press the cursor key |
+  | `B` | revert and stop editing (F019) |
+  | `X` | `DEL` |
+  | `Y` | `SPACE` |
+  | `LB` | `SHIFT` |
+  | `Start` | `OK` |
+
+  - While the keyboard is shown, pad `A` and the declared `confirm` action don't submit, and pad `Up`/`Down` and the `up`/`down` actions don't commit or move focus.
+  - Because of keyboard capture, the direction actions count only through gamepad or mouse bindings.
+  - A pad `A` press still reports `actionPressed("confirm")` to the game, as in F019.
+- **Physical keyboard.** These F019 rules are unchanged:
+  - raw `Enter`/`NumpadEnter` submit;
+  - `Escape` reverts;
+  - with `ui.navigation` on, raw `ArrowUp`/`ArrowDown` commit and move focus;
+  - `ArrowLeft`/`ArrowRight` and the other editing keys go through `textEvents`, so they hide the keyboard.
+
+  Raw arrow keys never move the keyboard cursor.
+- **Cursor.**
+  - It opens on `Q` (row 1, column 0), with anchor column 0.
+  - Left and right move one key along the row (a wide key counts once), wrap within the row, and set the anchor to the new key's first column.
+  - Up and down move to the key in the adjacent row that covers the anchor column, wrapping between rows 0 and 4. They don't change the anchor.
+  - When both a vertical and a horizontal move happen in one step, the vertical one applies first.
+- **Hold repeat** uses the F019 timing (the first repeat after 0.4 s, then every 0.08 s of step time). It applies to:
+  - cursor movement, with a separate timer for each axis;
+  - `DEL` while pad `X` is held, or while pad `A` is held with the cursor on `DEL`.
+
+  Other keys never repeat.
+- **Disabled keys** are evaluated every step against the field's text and caret after that step's edits:
+  - A character key or `SPACE` is disabled when the text has `maxLength` code points, or when `allow(ch)` is falsy or throws. A throw logs the F019 warning `textField "{id}" allow threw; the character was rejected`, once per id.
+  - `DEL` is disabled when the caret is at 0.
+  - `SHIFT` and `OK` are always enabled.
+  - The cursor can rest on a disabled key, but pressing it does nothing.
+- **Order within a step:**
+  1. A revert (`Escape` or pad `B`) wins: this step's keyboard events are dropped.
+  2. Otherwise the field applies `input.textEvents`, then the keyboard events in this order:
+     - the pointer key;
+     - pad `A` on the key the cursor was on at the **start** of the step;
+     - the cursor move;
+     - pad `X`, `Y`, `LB` and `Start`.
+
+     A `SHIFT` affects the events after it.
+  3. Then a submit (`OK`/`Start`/raw `Enter`) or a commit (raw `ArrowUp`/`ArrowDown`) applies.
+- **Focus.** The keyboard has no id. It is never in the navigation order, and never `ui.hot`, `ui.active` or `ui.focus`. `ui.focus` stays on the field.
+
+### Drawing
+- The panel is one command, appended after all of the step's widgets, so it draws on top of them in the UI layer (before the F005 capture point; screenshots include it). It does not count toward the 256-command cap.
+- **Panel:** `theme.panel` as a 9-slice at `theme.nineSliceScale`, or `panelColor` with a 1-unit `panelBorder`.
+- **Keys:** button styles. `theme.button`/`buttonHover`/`buttonDown`, or `buttonColor`/`buttonHoverColor`/`buttonDownColor` with a 1-unit `buttonBorder`. Hover means the key under the pointer while `mouse.inside`; down means the key being pressed.
+- **Labels:** centred, using `theme.font`, `theme.textSize` and `textColor`. Disabled keys are drawn at alpha 0.5 with `disabledTextColor`.
+- **Cursor key:** a 2-unit `focusColor` outline **inside** its rect.
+- There are no new theme fields. The field keeps its F019 ring and caret.
+
+### Pause
+Host and author pauses keep the keyboard open (editing stays on). A key press in progress is dropped (a cancelled release), and so are the repeat timers. Text typed while paused is still discarded (F019).
+
+### For creators
+- Nothing to do: a `ui.textField` now works for phone and controller players. Pass `{ keyboard: "never" }` if you draw your own picker, or `{ keyboard: "always" }` for pointer-only games.
+- Your `allow` filter dims the keys it rejects, so restrict names with `allow` instead of cleaning them up afterwards.
+- For small pixel-art games, use `ui.theme.font = "pixel"` so the key labels fit.
+- Move HUD elements out of `ui.keyboardRect` if they matter while typing. If you read raw `input.mouse` during editing, ignore presses inside it.
+- Gamepad `A` still reports your `confirm` action while typing, so guard gameplay with `engine.ui.editing` (F019).

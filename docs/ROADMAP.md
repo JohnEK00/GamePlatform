@@ -41,10 +41,11 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | M | shipped |
 | F020 | Game comment settings: comments on / replies only / off, slow mode | S | shipped |
 | F015 | Screenshots in the feed and on profiles | S | shipped |
-| F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | proposed |
+| F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | specced |
 | F022 | Announce a collection when it goes public | S | proposed |
 | F024 | "Screenshot of your game" notifications for creators | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
+| F025 | On-screen keyboard 2: symbols page and accented letters | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F010 | Desktop offline library | M | proposed |
 
@@ -242,12 +243,23 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: the common "curate privately, then publish" flow reaches followers, which F021 deliberately skips.
 - **Areas**: backend (one more activity kind, no rebuild; hook in `PATCH /api/collections/{id}`; a once-per-collection guard), frontend (feed item). No engine or desktop changes.
 
-### F023: Engine on-screen keyboard for `ui.textField` (S, proposed; after F019)
-- **Pitch**: an engine-drawn, gamepad- and touch-navigable keyboard panel (`ui.keyboard` or an automatic one when a field starts editing with `lastDevice` `"touch"`/`"gamepad"`), feeding the F019 `textEvents` path, with A–Z, 0–9, space, backspace and done keys, respecting the field's `allow` filter.
-- **User value**: controller and phone players can enter names too, which F019 leaves to each game.
-- **Areas**: engine (+ the Menu & HUD template). No backend or desktop changes.
+### F023: Engine on-screen keyboard for `ui.textField` (S, specced → [spec](features/F023-on-screen-keyboard.md))
+- **Pitch**:
+  - An engine-drawn keyboard (a 10×5 grid: digits, QWERTY letters with caps-lock `SHIFT`, `' - _ .`, `SPACE`, `DEL`, `OK`) that is part of the field being edited, not a separate widget.
+  - It opens when editing starts and `input.lastDevice` is `"touch"` or `"gamepad"`. Fields can set `keyboard: "auto" | "always" | "never"`. It hides as soon as the player types on a physical keyboard.
+  - Gamepad: D-pad, `A` key, `B` cancel, `X` delete, `Y` space, `LB` shift, `Start` OK. Touch: tap keys (fire on release).
+  - Keys the field's `allow` filter or `maxLength` reject are dimmed. It is sized and docked from the game resolution (top when the field is low), and drawn with the theme on top of the UI layer.
+  - `ui.keyboardRect` lets games avoid it. Its events never reach `input.textEvents` or actions.
+- **User value**: phone and controller players can enter names in every game that uses `ui.textField`, with no code changes. The Menu & HUD template drops its "Type your name with a keyboard" hint.
+- **Areas**: engine (new pure `osk.ts`, `ui.ts` wiring, README, two test files), frontend (template hint removal, docs subsection, two tests; desktop tests in acceptance), desktop (verification only). Backend not dispatched. No migration (the next free number stays `0023`), no messages, no example changes.
+- **Depends on**: F019, F016, F012 (all shipped). Follow-up: F025.
 
 ### F024: "Screenshot of your game" notifications for creators (S, proposed; after F015)
 - **Pitch**: a F007 kind `screenshotPosted` for the game owner ("Mia posted 2 screenshots of Space Dodge"), coalesced per game while unread (F018 group), withdrawn when all of them are deleted while unread, with a `screenshots` setting (default on). F018 game mutes apply, and the author never notifies themself.
 - **User value**: creators notice community shots quickly, can thank players, set a good one as the thumbnail, or remove an inappropriate one.
 - **Areas**: backend (notification kind, setting column in a small migration, hook in `create_screenshot`/`remove_screenshot`), frontend (summary text, setting switch, icon). No engine changes; desktop verification of OS notification text.
+
+### F025: On-screen keyboard 2: symbols page and accented letters (S, proposed; after F023)
+- **Pitch**: a `?123` key switching the F023 keyboard to a symbols page (`! ? , : ; ( ) & @ # + = / *`), and a long-press or `RB` accent row for the letter under the cursor (é, ñ, ü…), shown only for glyphs the theme font has.
+- **User value**: names and short messages beyond plain ASCII for phone and controller players, without bloating the default layout.
+- **Areas**: engine (`osk.ts` pages, `ui.ts`), frontend (docs table). No backend or desktop changes.
