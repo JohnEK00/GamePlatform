@@ -36,7 +36,7 @@ describe("Menu & HUD template settings screen (F019)", () => {
     expect(js.match(/\{ name: "[A-Z]+", color: "#[0-9a-f]{6}" \}/g)).toHaveLength(6);
     // BACK, plus the pause action (not while typing), with focus restored on the title menu.
     expect(js).toMatch(/ui\.button\("back", "BACK", [^)]*\)\) this\.go\(engine, "title", "settings"\)/);
-    expect(js).toMatch(/this\.state === "settings" && input\.actionPressed\("pause"\) && !engine\.ui\.editing/);
+    expect(js).toMatch(/inSettings && this\.state === "settings" && input\.actionPressed\("pause"\) && !engine\.ui\.editing/);
     expect(js).toMatch(/ui\.button\("settings", "SETTINGS", [^)]*\)\) this\.go\(engine, "settings", "name"\)/);
     // The hint only for touch and controller players.
     expect(js).toMatch(/input\.lastDevice === "touch" \|\| input\.lastDevice === "gamepad"/);
@@ -57,5 +57,59 @@ describe("Menu & HUD template settings screen (F019)", () => {
 
   it("parses as a module body", () => {
     expect(() => new Function(js.replace("export default", "return"))).not.toThrow();
+  });
+
+  it("documents the fullscreen Escape caveat next to the NAME field (review 8, L2)", () => {
+    expect(js).toContain("the browser takes the");
+    expect(js).toMatch(/press Escape again, or use gamepad B/);
+  });
+
+  // Review 8, M1: the key that starts typing on a focused NAME field may also report as the "pause" action, and
+  // ui.editing is only set once the field's call has run. The guard must read it after menus().
+  describe("pause guard on the settings screen", () => {
+    type Game = { state: string; update(engine: unknown, dt: number): void };
+    const makeGame = () => (new Function(js.replace("export default", "return")) as () => Game)();
+
+    function fakeEngine(opts: { pause: boolean; startsTyping: boolean }) {
+      const ui: Record<string, unknown> = {
+        focus: "name" as string | null,
+        editing: null as string | null,
+        panel() {},
+        label() {},
+        button: () => false,
+        slider: (_id: string, v: number) => v,
+        toggle: (_id: string, v: boolean) => v,
+        list: () => -1,
+        changed: () => false,
+        committed: () => false,
+        textField(id: string, v: string) {
+          if (opts.startsTyping) ui.editing = id;
+          return v;
+        },
+      };
+      return {
+        width: 320,
+        height: 240,
+        ui,
+        input: { actionPressed: (id: string) => opts.pause && id === "pause", lastDevice: "keyboard", actionLabel: () => "P" },
+        audio: { tone() {}, masterVolume: 1, muted: false },
+        storage: { get: (_k: string, d: unknown) => d, set() {} },
+      };
+    }
+
+    it("stays on the settings when the typed key that starts editing is also the pause key", () => {
+      const game = Object.assign(makeGame(), { state: "settings", sound: false, volume: 1, name: "", colour: 0, focusNext: null });
+      const engine = fakeEngine({ pause: true, startsTyping: true });
+      game.update(engine, 1 / 60);
+      expect(engine.ui.editing).toBe("name");
+      expect(game.state).toBe("settings");
+    });
+
+    it("still goes back to the title on pause when nothing is being typed", () => {
+      const game = Object.assign(makeGame(), { state: "settings", sound: false, volume: 1, name: "", colour: 0, focusNext: null });
+      const engine = fakeEngine({ pause: true, startsTyping: false });
+      game.update(engine, 1 / 60);
+      expect(game.state).toBe("title");
+    });
   });
 });

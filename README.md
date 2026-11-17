@@ -29,7 +29,7 @@ To seed a demo account and the example games, see [backend/README.md](backend/RE
 ## Features
 - **Play & share**: upload games as `.zip` bundles, browse/search/sort by tags (including Trending), ratings, favorites, "More like this", and release notes with an "Updated" badge.
 - **Leaderboards**: daily, weekly and all-time boards, lower-is-better and time scores, and boards games can show in-game.
-- **Social**: follow creators, an activity feed, threaded comment replies with hearts, creator pin/lock tools, and in-app notifications (with optional desktop OS notifications, mutes per game or thread, and one polling tab per browser).
+- **Social**: follow creators, an activity feed, threaded comment replies with hearts, creator pin/lock tools, per-game comment modes (on, replies only, off) with optional slow mode, and in-app notifications (with optional desktop OS notifications, mutes per game or thread, and one polling tab per browser).
 - **Collections**: curated, ordered game lists with notes, public (shareable `/c/{id}` links, shown on profiles and game pages) or private.
 - **Screenshots**: capture with 📷 or a game's own key, share to a per-game gallery or set as the thumbnail; every image is re-encoded before use.
 - **Controls**: games declare named actions; players remap keys and gamepad buttons per game from a controls panel, and signed-in players' bindings follow their account across devices. Games can show prompts for the device in use.
@@ -39,7 +39,7 @@ To seed a demo account and the example games, see [backend/README.md](backend/RE
 - **Creator analytics**: dashboard totals and a 30-day plays chart for your games overall and per game.
 - **Moderation**: report games, comments, screenshots and collections, plus an admin queue at `/admin` (admins are set with `ADMIN_USERNAMES`; register those accounts before listing them).
 - **Security**: untrusted game code runs only in sandboxed iframes, owner previews use short-lived preview tokens, and rate limits protect auth, uploads and comments.
-- **Engine**: WebGL2 sprite batching, input with remappable actions, audio, scenes, tilemaps, physics, particles, tweens, bitmap and pixel fonts, 9-slice panels, simple menu widgets, frame capture, and an F3 debug overlay. There are six example games: Space Dodge, Pixel Peaks, Brick Breaker, Ember Garden, Overclock and Kiln Clash.
+- **Engine**: WebGL2 sprite batching, input with remappable actions, audio, scenes, tilemaps, physics, particles, tweens, bitmap and pixel fonts, 9-slice panels, menu widgets (buttons, sliders, toggles, text fields and lists), frame capture, and an F3 debug overlay. There are six example games: Space Dodge, Pixel Peaks, Brick Breaker, Ember Garden, Overclock and Kiln Clash.
 - **Studio extras**: open your own published games, publish updates with release notes, and start from templates including Time trial and Menu & HUD.
 - **Desktop**: native menu (Feed, Controls, Notifications, Collections, Take Screenshot), F11 fullscreen, native open and save dialogs, local game folders in the Studio, opt-in OS notifications, and a configurable server.
 

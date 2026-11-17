@@ -869,3 +869,6 @@ Unchanged from F012. The new widgets are part of the UI layer, before the F005 c
   - `ui.editing = null`, or moving `ui.focus` away, commits the edit. The field reports `committed` at its next call.
 - **Volume:** the volume API is `engine.audio.masterVolume`. There is no `audio.volume`.
 - **Mute at load:** the host's `webgame:mute` also sets `engine.audio.muted`. So a game's SOUND setting should only force `muted = true` at load when the saved setting is off, and never unmute at load.
+
+### F019 note: Escape in browser fullscreen (review 8, L2)
+When the player uses the site's fullscreen button, the browser takes the first Escape to leave fullscreen, and the game never receives it. A text field that is being edited stays in editing mode. A second Escape, gamepad B, Enter, clicking elsewhere, or Up/Down still ends editing, so the game never gets stuck. To cancel an edit reliably, use gamepad B or a second Escape. Desktop F11 fullscreen is native window fullscreen and doesn't have this problem.

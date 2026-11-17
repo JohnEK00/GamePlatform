@@ -258,6 +258,41 @@ describe("Comments F020: settings dialog", () => {
     expect(document.activeElement).toBe(btn);
     expect(client.updateCommentSettings).not.toHaveBeenCalled();
   });
+
+  it("review 8 L3: Save keeps focus while saving and after an error; the error is announced; Cancel is ignored while saving", async () => {
+    let reject!: (e: unknown) => void;
+    await setup({
+      settings: view({ canManage: true }),
+      mocks: (c) =>
+        vi.spyOn(c, "updateCommentSettings").mockReturnValue(
+          new Promise<CommentSettings>((_r, j) => {
+            reject = j;
+          }),
+        ),
+    });
+    const btn = screen.getByRole("button", { name: "Comment settings" });
+    btn.focus();
+    fireEvent.click(btn);
+    const dialog = screen.getByRole("dialog", { name: "Comment settings" });
+    fireEvent.click(within(dialog).getByRole("radio", { name: "Off: no new comments or replies" }));
+    const save = within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    save.focus();
+    fireEvent.click(save);
+    expect(save.disabled).toBe(false);
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(save);
+    // Cancel is aria-disabled and ignored while saving.
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    expect(cancel.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(cancel);
+    expect(screen.getByRole("dialog")).toBe(dialog);
+
+    await act(async () => reject(new ApiError("validation", "mode is invalid", 422)));
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(within(dialog).getByRole("alert").textContent).toBe("mode is invalid");
+    expect(document.activeElement).toBe(save);
+    expect(save.hasAttribute("aria-disabled")).toBe(false);
+  });
 });
 
 describe("Comments F020: Reply buttons and reply forms", () => {

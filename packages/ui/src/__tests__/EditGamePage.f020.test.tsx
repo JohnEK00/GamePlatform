@@ -69,7 +69,7 @@ describe("EditGamePage F020: Comments panel", () => {
     expect(panelTitles()).toEqual(["Details", "Comments", "Files", "Danger zone"]);
     expect(within(panel).getByRole("radio", { name: "Replies only: no new threads" })).toHaveProperty("checked", true);
     expect((within(panel).getByLabelText("Slow mode") as HTMLSelectElement).value).toBe("60");
-    expect((within(panel).getByRole("button", { name: /Save comment settings/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(panel).getByRole("button", { name: /Save comment settings/ }).getAttribute("aria-disabled")).toBe("true");
   });
 
   it("saves, merges the result into the game, and leaves unsaved Details values alone", async () => {
@@ -86,7 +86,9 @@ describe("EditGamePage F020: Comments panel", () => {
 
     fireEvent.click(within(panel).getByRole("radio", { name: "Off: no new comments or replies" }));
     fireEvent.change(within(panel).getByLabelText("Slow mode"), { target: { value: "300" } });
-    await act(async () => fireEvent.click(within(panel).getByRole("button", { name: /Save comment settings/ })));
+    const save = within(panel).getByRole("button", { name: /Save comment settings/ });
+    save.focus();
+    await act(async () => fireEvent.click(save));
 
     expect(put).toHaveBeenCalledWith("g1", { mode: "off", slowModeSecs: 300 });
     expect(update).not.toHaveBeenCalled();
@@ -94,7 +96,10 @@ describe("EditGamePage F020: Comments panel", () => {
     // The saved values are now the baseline: nothing changed → Save disabled, values kept.
     expect(within(panel).getByRole("radio", { name: "Off: no new comments or replies" })).toHaveProperty("checked", true);
     expect((within(panel).getByLabelText("Slow mode") as HTMLSelectElement).value).toBe("300");
-    expect((within(panel).getByRole("button", { name: /Save comment settings/ }) as HTMLButtonElement).disabled).toBe(true);
+    // Review 8 L3: aria-disabled, not disabled, so keyboard focus stays on Save instead of falling to <body>.
+    expect(save.getAttribute("aria-disabled")).toBe("true");
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+    expect(document.activeElement).toBe(save);
     expect((screen.getByLabelText(/Title/) as HTMLInputElement).value).toBe("Pixel Peaks II");
   });
 

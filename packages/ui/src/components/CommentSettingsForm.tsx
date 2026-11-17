@@ -67,6 +67,10 @@ export function CommentSettingsForm({ gameId, value, onSaved, onCancel, headingI
   }, [value.mode, value.slowModeSecs]);
 
   const changed = mode !== value.mode || secs !== value.slowModeSecs;
+  // Review 8, L3: the controls use aria-disabled (not `disabled`) and ignore activations while it is set. A focused
+  // control that becomes `disabled` loses focus to <body> (HTML focus fixup), which would drop keyboard and screen
+  // reader users at the top of the page after a save, or after an error.
+  const saveBlocked = !changed || saving;
 
   const setBusy = (b: boolean) => {
     setSaving(b);
@@ -102,8 +106,8 @@ export function CommentSettingsForm({ gameId, value, onSaved, onCancel, headingI
               name="pf-comment-mode"
               value={m}
               checked={mode === m}
-              onChange={() => setMode(m)}
-              disabled={saving}
+              onChange={() => !saving && setMode(m)}
+              aria-disabled={saving || undefined}
             />
             <span>{COMMENT_MODE_LABELS[m]}</span>
           </label>
@@ -120,9 +124,9 @@ export function CommentSettingsForm({ gameId, value, onSaved, onCancel, headingI
           id="pf-slow-mode"
           className="pf-input pf-comment-settings__select"
           value={String(secs)}
-          onChange={(e) => setSecs(Number(e.target.value) as SlowModeSecs)}
+          onChange={(e) => !saving && setSecs(Number(e.target.value) as SlowModeSecs)}
           aria-describedby="pf-slow-mode-hint"
-          disabled={saving}
+          aria-disabled={saving || undefined}
         >
           {SLOW_MODE_SECS.map((s) => (
             <option key={s} value={String(s)}>
@@ -134,14 +138,20 @@ export function CommentSettingsForm({ gameId, value, onSaved, onCancel, headingI
           Each player can post one comment or reply on this game per interval.
         </span>
       </div>
+      {/* Alert is role="alert": it is announced when it appears, while focus stays on Save. */}
       {error && <Alert>{error}</Alert>}
       <div className={onCancel ? "pf-modal__actions" : "pf-form__actions"}>
         {onCancel && (
-          <button type="button" className="pf-btn pf-btn--ghost" onClick={onCancel} disabled={saving}>
+          <button
+            type="button"
+            className="pf-btn pf-btn--ghost"
+            onClick={() => !saving && onCancel()}
+            aria-disabled={saving || undefined}
+          >
             Cancel
           </button>
         )}
-        <button type="submit" className="pf-btn pf-btn--primary" disabled={!changed || saving}>
+        <button type="submit" className="pf-btn pf-btn--primary" aria-disabled={saveBlocked || undefined}>
           {saving ? <Spinner size={14} /> : null} {onCancel ? "Save" : "Save comment settings"}
         </button>
       </div>

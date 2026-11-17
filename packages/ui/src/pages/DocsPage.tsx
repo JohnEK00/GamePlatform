@@ -747,6 +747,12 @@ const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
             If you read raw keys or <code>typed</code> for gameplay, check <code>engine.ui.editing</code> yourself.
           </li>
           <li>
+            <strong>Escape in fullscreen:</strong> in the site&apos;s fullscreen mode the browser takes the first{" "}
+            <code>Escape</code> to leave fullscreen, so the game never sees it. To cancel an edit, use gamepad{" "}
+            <strong>B</strong> or press <code>Escape</code> again. <code>Enter</code>, clicking elsewhere and Up/Down still
+            end editing.
+          </li>
+          <li>
             <strong>Touch and controller players:</strong> text fields need a physical keyboard (there is no on-screen
             keyboard yet). Offer a fallback, such as preset names in a <code>ui.list</code>, or a hint when{" "}
             <code>input.lastDevice</code> is <code>"touch"</code> or <code>"gamepad"</code>, as the <em>Menu &amp; HUD</em>{" "}

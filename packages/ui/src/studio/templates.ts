@@ -511,11 +511,15 @@ export default {
       }
     } else if (this.state === "paused" && input.actionPressed("pause")) {
       this.state = "play";
-    } else if (this.state === "settings" && input.actionPressed("pause") && !engine.ui.editing) {
-      // "pause" also leaves the settings. Not while a name is being typed: a gamepad Start would drop the edit.
+    }
+    const inSettings = this.state === "settings";
+    this.menus(engine);
+    // "pause" also leaves the settings, but not while a name is being typed (a gamepad Start would drop the edit).
+    // Checked after menus() has drawn the NAME field: in the step where typing on it starts, ui.editing is only
+    // set once the field's call has run, and the typed key (say P) must not count as "pause".
+    if (inSettings && this.state === "settings" && input.actionPressed("pause") && !engine.ui.editing) {
       this.go(engine, "title", "settings");
     }
-    this.menus(engine);
   },
 
   play(engine, dt) {
@@ -625,7 +629,9 @@ export default {
     ui.label("SETTINGS", cx, 32, { size: 16, align: "center" });
 
     // While the name is being typed, keyboard actions pause (input.keyboardCaptured), so A/D and P only type letters.
-    // Enter saves, Escape (or gamepad B) puts the old name back.
+    // Enter saves, Escape (or gamepad B) puts the old name back. In the site's fullscreen mode the browser takes the
+    // first Escape to leave fullscreen: press Escape again, or use gamepad B. Enter, a click elsewhere and Up/Down
+    // still end typing.
     ui.label("NAME", lx, 60);
     this.name = ui.textField("name", this.name, wx, 56, ww, 16, { maxLength: NAME_MAX, placeholder: "PLAYER", allow: NAME_CHAR });
     if (ui.committed("name")) {

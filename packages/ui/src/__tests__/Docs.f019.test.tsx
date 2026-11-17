@@ -47,6 +47,16 @@ describe("DocsPage (F019)", () => {
       }
       const table = within(section).getByRole("table", { name: "Keys and gamepad, by focused widget" });
       expect(within(table).getAllByRole("row")).toHaveLength(6);
+
+      // Review 8, L2: the fullscreen Escape caveat.
+      const escItem = within(section)
+        .getAllByRole("listitem")
+        .find((li) => li.textContent?.startsWith("Escape in fullscreen:"));
+      expect(escItem).toBeTruthy();
+      const escText = (escItem!.textContent ?? "").replace(/\s+/g, " ");
+      expect(escText).toContain("the browser takes the first Escape to leave fullscreen");
+      expect(escText).toContain("use gamepad B or press Escape again");
+      expect(escText).toContain("Enter, clicking elsewhere and Up/Down still end editing");
     } finally {
       window.location.hash = "";
     }

@@ -53,7 +53,7 @@ Non-goals (later items): followers-only comments, per-user bans/timeouts, word f
   - `off`: "Off: no new comments or replies"
   - Hint under the group (`aria-describedby` on the fieldset): "Existing comments stay visible. You and moderators can always post."
 - **Slow mode**: `<label for="pf-slow-mode">Slow mode</label>` + native `<select id="pf-slow-mode">` with options (value → label): `0` "Off", `30` "30 seconds", `60` "1 minute", `300` "5 minutes", `900` "15 minutes", `3600` "1 hour". Hint (`aria-describedby`): "Each player can post one comment or reply on this game per interval."
-- Buttons: dialog: **Cancel** + **Save**; edit page: one **Save comment settings** button. The save button is disabled while nothing changed and while saving (spinner inside).
+- Buttons: dialog: **Cancel** + **Save**; edit page: one **Save comment settings** button. The save button is `aria-disabled` (not `disabled`, so focus stays on it) while nothing has changed and while saving (spinner inside); activations are ignored. While saving, the other controls are `aria-disabled` too and ignore input. Errors show in a `role="alert"` message (review 8, L3).
 - Success: `toast.success("Comment settings saved")`, `onSaved(response)`. Errors: an inline `Alert` with the server message (429 → the existing `rateLimitMessage(retryAfter)`); values are kept.
 
 ### 2.2 Edit page (`EditGamePage.tsx`)
@@ -173,7 +173,7 @@ Top-level form slot (where `CommentForm` or the "Log in" line is today):
 9. **Tests**:
    - `ApiClient.f020.test.ts`: `updateCommentSettings` method, path, body; `slow_mode` 429 parsed with `retryAfter`.
    - `comments.f020.test.ts` (helpers): normalisation defaults and clamping, `slowModeInterval`, `slowModeShort`, `formatWait` (`0:05`, `4:58`, `60:00`).
-   - `CommentSettingsForm.test.tsx`: labels, legend, hint wiring, option values/labels in order, Save disabled until changed, success toast + `onSaved`, 422/429 inline errors.
+   - `CommentSettingsForm.test.tsx`: labels, legend, hint wiring, option values/labels in order, Save `aria-disabled` until changed, success toast + `onSaved`, 422/429 inline errors.
    - `Comments.f020.test.tsx`: every cell of the § 2.4 table (exact texts); badges; ⚙ only for `canManage`; dialog open → save → settings applied in place, focus back to the button, announcement; Reply hidden for non-managers in `off`, visible in `repliesOnly`; slow-mode notice and countdown with fake timers (`aria-disabled`, submit ignored, draft kept, single "You can post again." announcement); `waitSecs` from page 1; a `slow_mode` 429 starts the countdown with no toast; mode 422s switch the UI and focus `#pf-comments-closed`; nothing F020 rendered when the page has no `settings`.
    - `EditGamePage.f020.test.tsx`: the panel renders between Details and Files, saves, merges into the game; hidden when `commentSettings` is missing.
    - `Comments.f006.test.tsx`, `Comments.f017.test.tsx` and `CommentItem.*` stay green (update fixtures only by adding `settings` where a test needs it).

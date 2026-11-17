@@ -5219,6 +5219,12 @@ a.pf-tab {
 .pf-comment-settings__select {
   max-width: 260px;
 }
+/* While saving, the controls are aria-disabled (they keep focus) rather than disabled. */
+.pf-comment-settings__select[aria-disabled="true"],
+.pf-comment-settings__modes .pf-report__reason:has(input[aria-disabled="true"]) {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .pf-comment-settings .pf-modal__actions,
 .pf-comment-settings .pf-form__actions {
   margin: 0;
