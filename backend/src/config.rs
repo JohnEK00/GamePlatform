@@ -4,7 +4,16 @@ use std::path::PathBuf;
 
 pub const DEFAULT_CORS_ORIGINS: &str =
     "http://localhost:5173,http://localhost:1420,http://tauri.localhost,tauri://localhost";
-const DEV_JWT_SECRET: &str = "dev-insecure-jwt-secret-change-me";
+
+/// A fresh random 256-bit secret, hex-encoded (64 chars), from the OS CSPRNG.
+///
+/// Used when `JWT_SECRET` is unset: tokens then only verify within this process, so sessions do
+/// not survive a restart. There is deliberately no fixed fallback secret (review 6, M1).
+pub fn random_secret() -> String {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("OS random number generator unavailable");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -193,8 +202,10 @@ impl Config {
         let jwt_secret = match env_nonempty("JWT_SECRET") {
             Some(s) => s,
             None => {
-                tracing::warn!("JWT_SECRET is not set; using an insecure development default");
-                DEV_JWT_SECRET.to_string()
+                tracing::warn!(
+                    "JWT_SECRET is not set; generated a random per-process secret. Sessions and                      preview tokens will not survive a restart. Production must set JWT_SECRET"
+                );
+                random_secret()
             }
         };
         let engine_dist = PathBuf::from(
@@ -240,7 +251,8 @@ impl Config {
             port: 0,
             database_url,
             data_dir,
-            jwt_secret: "test-secret".into(),
+            // Random per config: tests that need a known secret set one explicitly.
+            jwt_secret: random_secret(),
             engine_dist: PathBuf::from("../packages/engine/dist"),
             web_dist: None,
             cors_origins: parse_origins(DEFAULT_CORS_ORIGINS),
@@ -257,8 +269,26 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_notification_poll_secs, parse_public_origin, parse_trending_ttl, parse_trust_proxy,
+        Config, parse_notification_poll_secs, parse_public_origin, parse_trending_ttl,
+        parse_trust_proxy, random_secret,
     };
+
+    #[test]
+    fn random_secret_is_256_bit_and_unique() {
+        let a = random_secret();
+        assert_eq!(a.len(), 64);
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+        assert_ne!(a, random_secret());
+        // No fixed fallback anywhere: two configs never share a secret.
+        assert_ne!(
+            Config::for_data_dir("x").jwt_secret,
+            Config::for_data_dir("x").jwt_secret
+        );
+        assert!(!a.contains("dev-insecure"));
+    }
 
     #[test]
     fn notification_poll_secs_values() {

@@ -12,6 +12,81 @@ use tower::ServiceExt;
 use webgame_server::ratelimit::ManualClock;
 use webgame_server::{AppState, Config, app};
 
+/// Parent of every test directory: `%TEMP%/webgame-tests` (`$TMPDIR/webgame-tests`).
+fn tests_parent() -> std::path::PathBuf {
+    std::env::temp_dir().join("webgame-tests")
+}
+
+/// This process's run directory, created on first use.
+///
+/// On Windows a `TempDir` can't remove its directory while SQLite still has the database open,
+/// and sqlx closes pool connections on background threads after the pool is dropped, so a
+/// test's directory outlives the test. Each test process therefore keeps its directories in
+/// `webgame-tests/run-<pid>-<nanos>/` and holds `.lock` in it open without
+/// `FILE_SHARE_DELETE`. The first call sweeps sibling run directories whose `.lock` can be
+/// deleted (their process has exited); a live run's lock can't be deleted, so it is skipped.
+/// Leftovers are bounded by the test binaries that ran last, not by the number of runs.
+///
+/// Elsewhere, files can be unlinked while open, so `TempDir` cleans up and the directories
+/// live directly in the parent.
+#[cfg(windows)]
+fn run_dir() -> &'static std::path::Path {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::sync::OnceLock;
+    static RUN: OnceLock<(std::path::PathBuf, std::fs::File)> = OnceLock::new();
+    &RUN.get_or_init(|| {
+        let parent = tests_parent();
+        std::fs::create_dir_all(&parent).unwrap();
+        if let Ok(entries) = std::fs::read_dir(&parent) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !entry.file_name().to_string_lossy().starts_with("run-") {
+                    continue;
+                }
+                let lock = path.join(".lock");
+                if !lock.exists() || std::fs::remove_file(&lock).is_ok() {
+                    let _ = std::fs::remove_dir_all(&path);
+                }
+            }
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = parent.join(format!("run-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        const FILE_SHARE_READ: u32 = 0x1;
+        let lock = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(dir.join(".lock"))
+            .unwrap();
+        (dir, lock)
+    })
+    .0
+}
+
+#[cfg(not(windows))]
+fn run_dir() -> &'static std::path::Path {
+    use std::sync::OnceLock;
+    static RUN: OnceLock<std::path::PathBuf> = OnceLock::new();
+    RUN.get_or_init(|| {
+        let parent = tests_parent();
+        std::fs::create_dir_all(&parent).unwrap();
+        parent
+    })
+}
+
+/// A fresh directory for one test (use this, never `tempfile::tempdir()`; see [`run_dir`]).
+pub fn test_dir() -> TempDir {
+    tempfile::Builder::new()
+        .prefix("t")
+        .tempdir_in(run_dir())
+        .unwrap()
+}
+
 pub struct TestApp {
     pub router: Router,
     pub state: AppState,
@@ -60,7 +135,7 @@ pub async fn setup() -> TestApp {
 
 /// Like `setup`, but lets the test adjust the config before the app is built.
 pub async fn setup_with(customize: impl FnOnce(&mut Config)) -> TestApp {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = test_dir();
     let mut config = Config::for_data_dir(dir.path().join("data"));
     let engine = dir.path().join("engine");
     std::fs::create_dir_all(&engine).unwrap();

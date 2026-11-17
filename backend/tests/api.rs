@@ -1026,7 +1026,7 @@ async fn play_page_and_files() {
 
 #[tokio::test]
 async fn runtime_missing_is_503() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::test_dir();
     let mut config = webgame_server::Config::for_data_dir(dir.path().join("data"));
     config.engine_dist = dir.path().join("missing");
     let state = webgame_server::AppState::new(config).await.unwrap();
@@ -1188,7 +1188,7 @@ async fn preview_tokens() {
 
 #[tokio::test]
 async fn spa_fallback_with_web_dist() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::test_dir();
     let web = dir.path().join("web");
     std::fs::create_dir_all(web.join("assets")).unwrap();
     std::fs::write(web.join("index.html"), "<!doctype html><title>SPA</title>").unwrap();

@@ -62,6 +62,9 @@ pub enum Limit {
     /// `PATCH`/`DELETE /api/collections/{id}`, `PUT`/`DELETE /api/collections/{id}/games/{gameId}`
     /// and `PUT /api/collections/{id}/order`: 120 per 10 min, per user. Reads are unlimited.
     Collections,
+    /// Review 6 L2: comment list reads (`GET /api/games/{id}/comments`, every sort): 120/min,
+    /// per user or per IP when anonymous. Thread pages (`…/replies`) are not limited.
+    CommentList,
 }
 
 impl Limit {
@@ -87,6 +90,7 @@ impl Limit {
             Limit::Notifications => (120, Duration::from_secs(60)),
             Limit::ThreadTools => (60, Duration::from_secs(600)),
             Limit::Collections => (120, Duration::from_secs(600)),
+            Limit::CommentList => (120, Duration::from_secs(60)),
         }
     }
 }

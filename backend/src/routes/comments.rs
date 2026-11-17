@@ -18,7 +18,7 @@ use crate::models::{
     now_rfc3339, user_ref_from_row,
 };
 use crate::notifications::{self as notif, Dedupe, Kind, NewNotification};
-use crate::ratelimit::Limit;
+use crate::ratelimit::{ClientIp, Limit, key_for};
 use crate::routes::games::{fetch_visible_game, limit_user, parse_paging};
 use crate::routes::screenshots::is_admin;
 
@@ -40,7 +40,7 @@ fn comment_select() -> &'static str {
      r.id AS r_id, r.username AS r_username, r.display_name AS r_display_name, \
      r.avatar_ext AS r_avatar_ext, r.avatar_version AS r_avatar_version, \
      (c.user_id = g.owner_id) AS is_creator, \
-     (SELECT COUNT(*) FROM comment_hearts h WHERE h.comment_id = c.id) AS hearts, \
+     c.hearts AS hearts, \
      EXISTS (SELECT 1 FROM comment_hearts h WHERE h.comment_id = c.id AND h.user_id = ?1) \
        AS my_heart, \
      EXISTS (SELECT 1 FROM comment_hearts h WHERE h.comment_id = c.id \
@@ -240,7 +240,9 @@ impl CommentSort {
     fn order_by(self) -> &'static str {
         match self {
             Self::New => "c.created_at DESC, c.rowid DESC",
-            Self::Top => "hearts DESC, c.created_at DESC, c.rowid DESC",
+            // Review 6 L2: the trigger-maintained `comments.hearts` column, read through
+            // `idx_comments_game_hearts` (no correlated count, no temp B-tree).
+            Self::Top => "c.hearts DESC, c.created_at DESC, c.rowid DESC",
         }
     }
 }
@@ -248,9 +250,14 @@ impl CommentSort {
 pub async fn list_comments(
     State(state): State<AppState>,
     viewer: MaybeAuthUser,
+    ip: ClientIp,
     ApiPath(game_id): ApiPath<String>,
     ApiQuery(query): ApiQuery<ListCommentsQuery>,
 ) -> AppResult<Json<CommentListPage>> {
+    // Review 6 L2: first, like the other limited anonymous reads (leaderboard, scores).
+    state
+        .limiter
+        .check(Limit::CommentList, &key_for(viewer.id(), &ip))?;
     fetch_visible_game(&state, &game_id, viewer.id()).await?;
     let sort = CommentSort::parse(query.sort.as_deref())?;
     let (page, per_page) = parse_paging(query.page.as_deref(), query.per_page.as_deref(), 20)?;
@@ -620,7 +627,7 @@ async fn heart_target(state: &AppState, user: &AuthUser, id: &str) -> AppResult<
 
 async fn heart_response(state: &AppState, id: &str, hearted: bool) -> AppResult<HeartResponse> {
     let (hearts, creator_heart): (i64, bool) = sqlx::query_as(
-        "SELECT (SELECT COUNT(*) FROM comment_hearts h WHERE h.comment_id = c.id), \
+        "SELECT c.hearts, \
          EXISTS (SELECT 1 FROM comment_hearts h WHERE h.comment_id = c.id \
            AND h.user_id = g.owner_id) \
          FROM comments c JOIN games g ON g.id = c.game_id WHERE c.id = ?",

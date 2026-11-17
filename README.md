@@ -24,21 +24,24 @@ npm run dev:desktop            # Tauri window (needs the backend running)
 ```
 To seed a demo account and the example games, see [backend/README.md](backend/README.md).
 
+**Testing on other devices (LAN):** the dev server listens on localhost only. To let phones or other machines on your network reach it, start it with `WEBGAME_LAN=1 npm run dev:web` and open `http://<your-LAN-IP>:5173`. Everyone on that network can then use the dev app and its API, so only do this on a network you trust and always set `JWT_SECRET` for the backend. Without `JWT_SECRET`, the backend uses a random secret per run, so logins don't survive a restart. Vite's file serving is limited to the app sources either way; the database and `.env` files are never served. Browsers block gamepads on plain-`http` LAN addresses, and the engine then simply runs without gamepad input.
+
 ## Features
 - **Play & share**: upload games as `.zip` bundles, browse/search/sort by tags (including Trending), ratings, favorites, "More like this", and release notes with an "Updated" badge.
 - **Leaderboards**: daily, weekly and all-time boards, lower-is-better and time scores, and boards games can show in-game.
-- **Social**: follow creators, an activity feed, threaded comment replies with hearts, creator pin/lock tools, and in-app notifications (with optional desktop OS notifications).
+- **Social**: follow creators, an activity feed, threaded comment replies with hearts, creator pin/lock tools, and in-app notifications (with optional desktop OS notifications, mutes per game or thread, and one polling tab per browser).
+- **Collections**: curated, ordered game lists with notes, public (shareable `/c/{id}` links, shown on profiles and game pages) or private.
 - **Screenshots**: capture with 📷 or a game's own key, share to a per-game gallery or set as the thumbnail; every image is re-encoded before use.
 - **Controls**: games declare named actions; players remap keys per game from a controls panel.
 - **Achievements**: games declare them in `game.json` and call `engine.platform.unlockAchievement(id)`. They show on game pages and profiles.
 - **Cloud saves**: `engine.storage` follows your account across devices, with a localStorage fallback.
 - **Game Studio** (`/studio`): write a game in the browser, starting from a template, with a live sandboxed preview, then publish it or export a `.zip`. On desktop you can also open a local game folder.
 - **Creator analytics**: dashboard totals and a 30-day plays chart for your games overall and per game.
-- **Moderation**: report games and comments, plus an admin queue at `/admin` (admins are set with `ADMIN_USERNAMES`).
+- **Moderation**: report games, comments, screenshots and collections, plus an admin queue at `/admin` (admins are set with `ADMIN_USERNAMES`; register those accounts before listing them).
 - **Security**: untrusted game code runs only in sandboxed iframes, owner previews use short-lived preview tokens, and rate limits protect auth, uploads and comments.
 - **Engine**: WebGL2 sprite batching, input with remappable actions, audio, scenes, tilemaps, physics, particles, tweens, bitmap and pixel fonts, 9-slice panels, simple menu widgets, frame capture, and an F3 debug overlay. There are four example games: Space Dodge, Pixel Peaks, Brick Breaker and Ember Garden.
 - **Studio extras**: open your own published games, publish updates with release notes, and start from templates including Time trial and Menu & HUD.
-- **Desktop**: native menu (Feed, Controls, Notifications, Take Screenshot), F11 fullscreen, native open and save dialogs, local game folders in the Studio, opt-in OS notifications, and a configurable server.
+- **Desktop**: native menu (Feed, Controls, Notifications, Collections, Take Screenshot), F11 fullscreen, native open and save dialogs, local game folders in the Studio, opt-in OS notifications, and a configurable server.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for shipped and upcoming features and [docs/reviews/](docs/reviews/) for the review history.
 

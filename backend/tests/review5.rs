@@ -154,7 +154,7 @@ async fn m1_game_files_gzip_text_but_not_media() {
 
 #[tokio::test]
 async fn m1_spa_caching_maps_and_compression() {
-    let web = tempfile::tempdir().unwrap();
+    let web = common::test_dir();
     let index = format!(
         "<!doctype html><html><head><title>WebGame</title></head><body>{}</body></html>",
         "<div id=\"root\"></div>".repeat(40)

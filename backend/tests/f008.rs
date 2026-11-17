@@ -1509,9 +1509,12 @@ async fn migration_upgrade_from_0015() {
                     FROM reports ORDER BY rowid";
     let idx_sql = "SELECT name, sql FROM sqlite_master WHERE type = 'index' \
                    AND tbl_name = 'reports' AND sql IS NOT NULL ORDER BY name";
-    let trig_sql = "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' ORDER BY name";
+    // Later migrations may add triggers of their own (0018: the `comment_hearts` counters);
+    // this test checks that the 0016 rebuild keeps the existing ones.
+    let trig_sql = "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' \
+                    AND tbl_name <> 'comment_hearts' ORDER BY name";
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::test_dir();
     let data = dir.path().join("data");
     std::fs::create_dir_all(&data).unwrap();
     let url = format!(
@@ -1641,7 +1644,7 @@ async fn migration_upgrade_from_0015() {
         dir,
         clock: webgame_server::ratelimit::ManualClock::new(),
     };
-    let token = webgame_server::auth::create_token("test-secret", "u2").unwrap();
+    let token = webgame_server::auth::create_token(&t.state.config.jwt_secret, "u2").unwrap();
     let v = t.get("/api/admin/reports", Some(&token)).await.json();
     assert_eq!(v["total"], 4);
     assert_eq!(list_ids(&v["items"]), vec!["r20", "r1", "r9", "r5"]);

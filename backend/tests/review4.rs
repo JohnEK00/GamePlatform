@@ -503,7 +503,7 @@ async fn migration_0014_drops_event_less_rows() {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::test_dir();
     let data = dir.path().join("data");
     std::fs::create_dir_all(&data).unwrap();
     let url = format!(

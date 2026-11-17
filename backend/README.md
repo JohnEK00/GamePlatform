@@ -29,7 +29,7 @@ Startup tasks (`serve`), in order:
 | `PORT` | `8080` | |
 | `DATABASE_URL` | `sqlite://data/webgame.db?mode=rwc` | |
 | `DATA_DIR` | `data` | `games/{id}/v{version}/…`, `thumbnails/`, `avatars/` |
-| `JWT_SECRET` | dev default (logs a warning) | **set in production** |
+| `JWT_SECRET` | random per process (logs a warning) | **set in production**. When unset, a random 256-bit secret is generated at every start, so sessions, preview tokens and anonymous play-dedup keys do not survive a restart (everyone has to log in again). There is no fixed fallback secret. Use a long random value, e.g. `openssl rand -hex 32` |
 | `ENGINE_DIST` | `../packages/engine/dist` | must contain `engine.js` |
 | `WEB_DIST` | unset | if set, serves the SPA: any GET not matched by a backend route falls back to `index.html`, including `/games/{id}` and `/games/{id}/edit` (only `/games/{id}/files/*` is backend-owned under `/games`) |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:1420,http://tauri.localhost,tauri://localhost` | applies to `/api/*` only; hosting routes use `*` |

@@ -671,6 +671,14 @@ pub async fn prune(pool: &SqlitePool, now: DateTime<Utc>) -> sqlx::Result<u64> {
 /// Mutes per user, games and threads together (API § F018).
 pub const MUTES_PER_USER: i64 = 500;
 
+/// Review 6 L3: the cap counts only mutes whose game the user can still see (the same rule as
+/// [`list_mutes`]), so mutes on games that were unpublished later neither block new mutes nor
+/// disagree with the listed `total`. Hidden mutes stay in place (they apply again if the game
+/// is republished) and `DELETE` removes them regardless of visibility. Binds: `?1` = user id.
+const VISIBLE_MUTE_COUNT: &str = "SELECT COUNT(*) FROM notification_mutes vm \
+     JOIN games vg ON vg.id = vm.game_id \
+     WHERE vm.user_id = ?1 AND (vg.published = 1 OR vg.owner_id = ?1)";
+
 /// The result of a mute write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MuteResult {
@@ -703,12 +711,12 @@ pub async fn mute_game(
     if muted.is_none() {
         // The `EXISTS` guard turns a game deleted since the lookup into a 404 instead of a
         // foreign key error.
-        let inserted = sqlx::query(
+        let inserted = sqlx::query(&format!(
             "INSERT INTO notification_mutes (user_id, game_id, thread_id, created_at) \
              SELECT ?1, ?2, NULL, ?3 \
-             WHERE (SELECT COUNT(*) FROM notification_mutes WHERE user_id = ?1) < ?4 \
-             AND EXISTS (SELECT 1 FROM games WHERE id = ?2)",
-        )
+             WHERE ({VISIBLE_MUTE_COUNT}) < ?4 \
+             AND EXISTS (SELECT 1 FROM games WHERE id = ?2)"
+        ))
         .bind(user_id)
         .bind(game_id)
         .bind(&now)
@@ -760,13 +768,13 @@ pub async fn mute_thread(
     .fetch_optional(&mut *tx)
     .await?;
     if game_id.is_none() {
-        game_id = sqlx::query_scalar(
+        game_id = sqlx::query_scalar(&format!(
             "INSERT INTO notification_mutes (user_id, game_id, thread_id, created_at) \
              SELECT ?1, c.game_id, c.id, ?3 FROM comments c \
              WHERE c.id = ?2 AND c.parent_id IS NULL \
-             AND (SELECT COUNT(*) FROM notification_mutes WHERE user_id = ?1) < ?4 \
-             RETURNING game_id",
-        )
+             AND ({VISIBLE_MUTE_COUNT}) < ?4 \
+             RETURNING game_id"
+        ))
         .bind(user_id)
         .bind(comment_id)
         .bind(&now)

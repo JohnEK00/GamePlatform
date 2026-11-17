@@ -207,7 +207,7 @@ async fn migration_upgrade_from_0016() {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::test_dir();
     let data = dir.path().join("data");
     std::fs::create_dir_all(&data).unwrap();
     let url = format!(

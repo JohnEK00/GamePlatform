@@ -1337,3 +1337,10 @@ A `collectionUpdated` event is included in `GET /api/feed` when **all** apply:
 
 ### Rate limits
 Unchanged. Events and notifications are written by the F008 collection endpoints, which keep `Limit::Collections`. Feed reads keep `Limit::Feed`; notification reads keep `Limit::Notifications`.
+
+
+## Review-fix additions (REVIEW-2026-11-16-6)
+- **`GET /api/games/{id}/comments`** (all sorts) may return 429 `rate_limited` with `Retry-After`: 120/min per user, or per IP when anonymous. The rate-limit check comes before the 404 for an unknown or hidden game.
+- **"Top" comment sort** reads a trigger-maintained `comments.hearts` count through an index (migration `0018_review6.sql`). Response shapes and values are unchanged.
+- **F018 mute cap:** the 500 cap counts only mutes on games the caller can currently see (the same rule as `GET /api/notifications/mutes`). Mutes on hidden games are kept, come back if the game is republished, and can always be deleted. The cap is enforced only when adding a mute, so the stored total, or the visible list after a republish, can exceed 500.
+- **`JWT_SECRET`:** there is no built-in default secret any more. If it is unset, the server generates a random 256-bit secret at each start and logs a warning, so every restart signs everyone out. Production must set `JWT_SECRET`.
