@@ -41,8 +41,9 @@ fn fmt_time(t: chrono::DateTime<chrono::Utc>) -> String {
 }
 
 /// F020: whole seconds left of a slow-mode interval that started at `last`,
-/// `ceil(last + secs − now)` clamped to `[0, secs]` (a future `last` from a clock step back
-/// never yields more than `secs`). An unparsable `last` counts as no wait.
+/// `ceil(last + secs − now)` clamped to `[0, secs]`. A `last` later than `now` (the clock
+/// stepped back) counts as expired, matching the claim in `create_comment` (L1). An
+/// unparsable `last` counts as no wait.
 fn slow_mode_wait(last: &str, secs: i64, now: chrono::DateTime<chrono::Utc>) -> i64 {
     let Ok(last) = chrono::DateTime::parse_from_rfc3339(last) else {
         tracing::warn!(
@@ -51,6 +52,9 @@ fn slow_mode_wait(last: &str, secs: i64, now: chrono::DateTime<chrono::Utc>) -> 
         );
         return 0;
     };
+    if last.timestamp_millis() > now.timestamp_millis() {
+        return 0;
+    }
     let left_ms = last.timestamp_millis() + secs * 1000 - now.timestamp_millis();
     let left = if left_ms <= 0 {
         0
@@ -491,12 +495,15 @@ pub async fn create_comment(
     let cutoff = fmt_time(now_dt - chrono::Duration::seconds(slow_secs));
     // One transaction: the claim, then the insert, so a rejected post never consumes the slot.
     // `BEGIN IMMEDIATE` takes the write lock up front, so two posts by one user serialise and
-    // the second one sees the first one's claim.
+    // the second one sees the first one's claim. L1: a stored time later than `now` (the clock
+    // stepped back) counts as expired, as in `slow_mode_wait`; both are the same fixed-width
+    // RFC 3339 UTC format, so the text comparison is chronological.
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let claimed = sqlx::query(
         "INSERT INTO comment_post_times (game_id, user_id, last_posted_at) VALUES (?1, ?2, ?3) \
          ON CONFLICT (game_id, user_id) DO UPDATE SET last_posted_at = excluded.last_posted_at \
-         WHERE ?4 = 1 OR comment_post_times.last_posted_at <= ?5",
+         WHERE ?4 = 1 OR comment_post_times.last_posted_at <= ?5 \
+         OR comment_post_times.last_posted_at > ?3",
     )
     .bind(&game_id)
     .bind(&user.id)

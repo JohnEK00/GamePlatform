@@ -703,6 +703,54 @@ async fn slow_mode_edge_rules() {
     assert_eq!(c.json()["createdAt"], at.as_str());
 }
 
+/// Review L1: a stored `last_posted_at` later than now (the server clock stepped back) counts
+/// as expired, so the post is allowed and `waitSecs` is 0 rather than blocking for the clock
+/// step plus the interval.
+#[tokio::test]
+async fn slow_mode_future_last_post_counts_as_expired() {
+    let t = setup().await;
+    let (owner, _) = t.register("owen").await;
+    let (mia, mia_id) = t.register("mia").await;
+    let gid = game(&t, &owner, true).await;
+    set(&t, &owner, &gid, "on", 60).await;
+
+    created(&top(&t, &mia, &gid).await);
+    assert_slow(&top(&t, &mia, &gid).await, 60);
+
+    // Ten minutes in the future: further ahead than the 60 s interval.
+    let done = sqlx::query(
+        "UPDATE comment_post_times \
+         SET last_posted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+600 seconds') \
+         WHERE game_id = ? AND user_id = ?",
+    )
+    .bind(&gid)
+    .bind(&mia_id)
+    .execute(&t.state.db)
+    .await
+    .unwrap()
+    .rows_affected();
+    assert_eq!(done, 1);
+
+    assert_eq!(list(&t, Some(&mia), &gid).await["settings"]["waitSecs"], 0);
+    let c = top(&t, &mia, &gid).await;
+    assert_eq!(c.status, StatusCode::CREATED);
+    // The claim rewrote the slot with the real (earlier) time, so the interval restarts now.
+    let at: String = sqlx::query_scalar(
+        "SELECT last_posted_at FROM comment_post_times WHERE game_id = ? AND user_id = ?",
+    )
+    .bind(&gid)
+    .bind(&mia_id)
+    .fetch_one(&t.state.db)
+    .await
+    .unwrap();
+    assert_eq!(c.json()["createdAt"], at.as_str());
+    assert_slow(&top(&t, &mia, &gid).await, 60);
+    let wait = list(&t, Some(&mia), &gid).await["settings"]["waitSecs"]
+        .as_i64()
+        .unwrap();
+    assert!((1..=60).contains(&wait), "waitSecs {wait}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn slow_mode_concurrent_posts_one_success() {
     let t = setup().await;

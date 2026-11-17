@@ -1504,3 +1504,4 @@ type CommentListPage = { ...F017, settings: CommentSettingsView }  // returned o
 - **Slow-mode 429 when the client's settings are stale:** if the client still has `slowModeSecs` at 0, the notice reads "Slow mode is on. You can post again in {m:ss}."
 - **Reloading the first page:** fetching page 1 again restarts the countdown only when `waitSecs > 0`. It never clears a countdown that is already running.
 - **Header:** the badges, the ⚙ Settings button and the sort toggle appear in that order.
+- **Server clock steps backwards (review 8, L1):** a stored last-post time that is later than the current time counts as expired. The post is allowed, `waitSecs` and `Retry-After` follow the same rule, and a successful post stores the real current time, so the interval starts again from that post.
