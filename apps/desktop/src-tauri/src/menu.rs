@@ -223,6 +223,20 @@ mod tests {
         assert_eq!(accelerator("upload"), None);
     }
 
+    /// F023: while the on-screen keyboard is open, the only bare (unmodified) key the shell takes from the game is
+    /// F11 (fullscreen, which only rescales the game; the panel stays docked in game units). Every other shell
+    /// accelerator needs Ctrl/Cmd, so the engine's F3 overlay and any other function key still reach the game.
+    #[test]
+    fn f11_is_the_only_bare_accelerator() {
+        let bare: Vec<&str> = ACCELERATORS
+            .iter()
+            .filter(|(_, accel)| !accel.contains('+'))
+            .map(|(_, accel)| *accel)
+            .collect();
+        assert_eq!(bare, ["F11"]);
+        assert_eq!(accelerator("controls"), Some("CmdOrCtrl+Shift+K"));
+    }
+
     /// F019: native accelerators win over the game iframe, so none may be a key a text field types or pastes.
     #[test]
     fn accelerators_never_collide_with_text_entry() {
