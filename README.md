@@ -39,7 +39,7 @@ To seed a demo account and the example games, see [backend/README.md](backend/RE
 - **Creator analytics**: dashboard totals and a 30-day plays chart for your games overall and per game.
 - **Moderation**: report games, comments, screenshots and collections, plus an admin queue at `/admin` (admins are set with `ADMIN_USERNAMES`; register those accounts before listing them).
 - **Security**: untrusted game code runs only in sandboxed iframes, owner previews use short-lived preview tokens, and rate limits protect auth, uploads and comments.
-- **Engine**: WebGL2 sprite batching, input with remappable actions, audio, scenes, tilemaps, physics, particles, tweens, bitmap and pixel fonts, 9-slice panels, simple menu widgets, frame capture, and an F3 debug overlay. There are four example games: Space Dodge, Pixel Peaks, Brick Breaker and Ember Garden.
+- **Engine**: WebGL2 sprite batching, input with remappable actions, audio, scenes, tilemaps, physics, particles, tweens, bitmap and pixel fonts, 9-slice panels, simple menu widgets, frame capture, and an F3 debug overlay. There are six example games: Space Dodge, Pixel Peaks, Brick Breaker, Ember Garden, Overclock and Kiln Clash.
 - **Studio extras**: open your own published games, publish updates with release notes, and start from templates including Time trial and Menu & HUD.
 - **Desktop**: native menu (Feed, Controls, Notifications, Collections, Take Screenshot), F11 fullscreen, native open and save dialogs, local game folders in the Studio, opt-in OS notifications, and a configurable server.
 

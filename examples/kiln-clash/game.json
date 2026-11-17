@@ -1,0 +1,70 @@
+{
+  "name": "Kiln Clash",
+  "entry": "main.js",
+  "width": 480,
+  "height": 270,
+  "engine": "1",
+  "description": "Animated pottery golems, fired in a mountain kiln town, duel on side-view stages. Four fighters, motion-input specials and supers, throws and techs, combos with damage scaling, an arcade ladder, local 2-player versus and a training room with frame data.",
+  "controls": "P1: WASD or arrows move, J/K/L (or Z/X/C) light/medium/heavy, I or V throw (or light+medium). 2P versus: P1 WASD + J/K/L/I, P2 arrows + Num1/2/3/0 or , . / '. Pads: X/Y/RB light/medium/heavy, LB throw; P2 uses pad 2. P pause, M mute. Remap with the controls panel.",
+  "actions": [
+    { "id": "up", "name": "Up / jump", "keys": ["KeyW", "ArrowUp"], "gamepad": ["Up"] },
+    { "id": "down", "name": "Down / crouch", "keys": ["KeyS", "ArrowDown"], "gamepad": ["Down"] },
+    { "id": "left", "name": "Left", "keys": ["KeyA", "ArrowLeft"], "gamepad": ["Left"] },
+    { "id": "right", "name": "Right", "keys": ["KeyD", "ArrowRight"], "gamepad": ["Right"] },
+    { "id": "light", "name": "Light attack", "keys": ["KeyJ", "KeyZ"], "gamepad": ["X"] },
+    { "id": "medium", "name": "Medium attack", "keys": ["KeyK", "KeyX"], "gamepad": ["Y"] },
+    { "id": "heavy", "name": "Heavy attack", "keys": ["KeyL", "KeyC"], "gamepad": ["RB", "RT"] },
+    { "id": "throw", "name": "Throw / tech", "keys": ["KeyI", "KeyV"], "gamepad": ["LB", "LT"] },
+    { "id": "pause", "name": "Pause / move list", "keys": ["KeyP"], "gamepad": ["Start"] },
+    { "id": "confirm", "name": "Menu confirm", "keys": ["Enter", "Space", "NumpadEnter"], "gamepad": ["A"] },
+    { "id": "back", "name": "Menu back", "keys": ["Backspace", "KeyQ"], "gamepad": ["B"] },
+    { "id": "mute", "name": "Mute", "keys": ["KeyM"], "gamepad": ["Back"] },
+    { "id": "p2-up", "name": "P2 up / jump", "keys": ["ArrowUp"] },
+    { "id": "p2-down", "name": "P2 down / crouch", "keys": ["ArrowDown"] },
+    { "id": "p2-left", "name": "P2 left", "keys": ["ArrowLeft"] },
+    { "id": "p2-right", "name": "P2 right", "keys": ["ArrowRight"] },
+    { "id": "p2-light", "name": "P2 light attack", "keys": ["Numpad1", "Comma"] },
+    { "id": "p2-medium", "name": "P2 medium attack", "keys": ["Numpad2", "Period"] },
+    { "id": "p2-heavy", "name": "P2 heavy attack", "keys": ["Numpad3", "Slash"] },
+    { "id": "p2-throw", "name": "P2 throw / tech", "keys": ["Numpad0", "Quote"] }
+  ],
+  "leaderboard": { "order": "desc", "format": "number", "label": "Arcade score" },
+  "achievements": [
+    {
+      "id": "perfect_firing",
+      "name": "Perfect Firing",
+      "description": "Win a round without taking any damage.",
+      "icon": "assets/icons/ach_perfect_firing.png"
+    },
+    {
+      "id": "kiln_burst",
+      "name": "Kiln Burst",
+      "description": "Land a super move.",
+      "icon": "assets/icons/ach_kiln_burst.png"
+    },
+    {
+      "id": "ten_hit",
+      "name": "Ten Thousand Shards",
+      "description": "Land a combo of 10 hits or more.",
+      "icon": "assets/icons/ach_ten_hit.png"
+    },
+    {
+      "id": "clean_break",
+      "name": "Clean Break",
+      "description": "Tech an opponent's throw.",
+      "icon": "assets/icons/ach_clean_break.png"
+    },
+    {
+      "id": "ladder_fired",
+      "name": "Fired Through",
+      "description": "Clear the arcade ladder with any golem.",
+      "icon": "assets/icons/ach_ladder_fired.png"
+    },
+    {
+      "id": "hard_fired",
+      "name": "Stoneware Hard",
+      "description": "Clear the arcade ladder on hard.",
+      "icon": "assets/icons/ach_hard_fired.png"
+    }
+  ]
+}
