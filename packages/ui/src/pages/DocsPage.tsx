@@ -122,6 +122,13 @@ const SETTINGS_JS = `update(engine) {
   if (i >= 0) s.level = i;                       // the row the player picked, else -1
 }`;
 
+const OSK_JS = `// You draw your own name picker for controllers: no on-screen keyboard for this field.
+s.name = ui.textField("name", s.name, 120, 120, 160, 16, { keyboard: "never" });
+
+// Move the score up while the keyboard covers the bottom of the screen.
+const k = engine.ui.keyboardRect;               // { x, y, w, h } in game units, or null
+const scoreY = k && k.y > 0 ? k.y - 20 : engine.height - 20;`;
+
 const ACTIONS_AUTO_JS = `render(engine) {
   const { input } = engine;
   // "Press Space" for keyboard players, "Press A" (or their remapped button) after they touch a controller.
@@ -753,10 +760,73 @@ const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
             end editing.
           </li>
           <li>
-            <strong>Touch and controller players:</strong> text fields need a physical keyboard (there is no on-screen
-            keyboard yet). Offer a fallback, such as preset names in a <code>ui.list</code>, or a hint when{" "}
-            <code>input.lastDevice</code> is <code>"touch"</code> or <code>"gamepad"</code>, as the <em>Menu &amp; HUD</em>{" "}
-            template does.
+            <strong>Touch and controller players:</strong> an on-screen keyboard opens when they start typing (see below).
+          </li>
+        </ul>
+        <h3>On-screen keyboard (F023)</h3>
+        <p>
+          Every <code>ui.textField</code> has a built-in on-screen keyboard, set with the <code>keyboard</code> option. With{" "}
+          <code>"auto"</code> (the default) it opens when editing starts and <code>input.lastDevice</code> is{" "}
+          <code>"touch"</code> or <code>"gamepad"</code>; <code>"always"</code> opens it for every player, and{" "}
+          <code>"never"</code> turns it off. It docks at the bottom of the screen (at the top when the field is down there)
+          and hides as soon as the player types on a physical keyboard; a tap on the field brings it back. Its keys go only
+          to the field: they never reach <code>input.textEvents</code> or your actions.
+        </p>
+        <div className="pf-docs__table-wrap" role="region" aria-label="On-screen keyboard" tabIndex={0}>
+          <table className="pf-docs__table">
+            <caption>On-screen keyboard controls</caption>
+            <thead>
+              <tr>
+                <th scope="col">Input</th>
+                <th scope="col">Effect</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>D-pad</td>
+                <td>move the keyboard cursor (hold repeats)</td>
+              </tr>
+              <tr>
+                <td>A</td>
+                <td>press the cursor key</td>
+              </tr>
+              <tr>
+                <td>B</td>
+                <td>cancel: put the old text back</td>
+              </tr>
+              <tr>
+                <td>X</td>
+                <td>delete (DEL)</td>
+              </tr>
+              <tr>
+                <td>Y</td>
+                <td>space</td>
+              </tr>
+              <tr>
+                <td>LB</td>
+                <td>shift: capitals or small letters</td>
+              </tr>
+              <tr>
+                <td>Start</td>
+                <td>OK: save</td>
+              </tr>
+              <tr>
+                <td>Tap</td>
+                <td>press the key under the finger (on release)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <Code label="main.js">{OSK_JS}</Code>
+        <ul>
+          <li>
+            <code>engine.ui.keyboardRect</code> is the panel&apos;s <code>{"{ x, y, w, h }"}</code> in game units, or{" "}
+            <code>null</code> when no keyboard is shown. Use it to move HUD elements, and check it if you read raw{" "}
+            <code>input.mouse</code> or touches while the player types.
+          </li>
+          <li>
+            Keys that would be rejected (<code>maxLength</code> reached, or <code>allow</code> says no) are dimmed. For small
+            pixel-art games, set <code>ui.theme.font = "pixel"</code> so the labels stay crisp.
           </li>
         </ul>
         <p>

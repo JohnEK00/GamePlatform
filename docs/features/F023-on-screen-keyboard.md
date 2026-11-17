@@ -1,6 +1,6 @@
 # F023: Engine on-screen keyboard for `ui.textField`
 
-Status: **specced**. Size: **S** (engine is the only code area; frontend is small: one template change, one docs subsection and two tests; backend not dispatched; desktop verification only; one round).
+Status: **shipped**. Size: **S** (engine is the only code area; frontend is small: one template change, one docs subsection and two tests; backend not dispatched; desktop verification only; one round).
 Areas: engine, frontend (template + docs), desktop (verification only). Backend: none.
 Contracts:
 - `docs/GAME_FORMAT.md` § F023 additions (normative: the layout, sizing, when it opens and closes, input routing, precedence, disabled keys, `TextFieldOptions.keyboard`, `ui.keyboardRect`, exact texts).

@@ -619,7 +619,7 @@ export default {
   // Settings: value in, value out. Each widget takes the current value and returns the new one; save on ui.committed.
   // Keys and gamepad: up/down move between the rows, left/right change the volume, up/down move inside the list.
   settings(engine) {
-    const { ui, input, audio, storage } = engine;
+    const { ui, audio, storage } = engine;
     const cx = engine.width / 2;
     const px = cx - 150; // panel
     const lx = px + 14; // labels
@@ -667,10 +667,7 @@ export default {
 
     if (ui.button("back", "BACK", cx - BTN_W / 2, 192, BTN_W, BTN_H)) this.go(engine, "title", "settings");
 
-    // Text fields need a physical keyboard: tell touch and controller players (there is no on-screen keyboard yet).
-    if (input.lastDevice === "touch" || input.lastDevice === "gamepad") {
-      ui.label("Type your name with a keyboard", cx, 234, { color: "#8b91b0", align: "center" });
-    }
+    // Touch and controller players get the engine's on-screen keyboard when they start typing (F023).
   },
 
   // "MIA 120" on the HUD and the game-over screen once a name is saved, "SCORE 120" before that.

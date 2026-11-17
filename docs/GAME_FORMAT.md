@@ -1009,3 +1009,13 @@ Host and author pauses keep the keyboard open (editing stays on). A key press in
 - For small pixel-art games, use `ui.theme.font = "pixel"` so the key labels fit.
 - Move HUD elements out of `ui.keyboardRect` if they matter while typing. If you read raw `input.mouse` during editing, ignore presses inside it.
 - Gamepad `A` still reports your `confirm` action while typing, so guard gameplay with `engine.ui.editing` (F019).
+
+### F023 implementation notes (engine)
+- **Reopening** a hidden keyboard counts as opening it: the keys go back to capitals and the cursor returns to `Q`.
+- **`ui.navigation = false`:** the D-pad still moves the keyboard cursor. Only the raw `ArrowUp`/`ArrowDown` commit depends on navigation, as in F019.
+- **Holding `DEL`:**
+  - A repeat from `A` held on `DEL` takes `A`'s place in the step order, and a repeat from `X` takes `X`'s place.
+  - Moving the cursor off `DEL` while `A` is held restarts the repeat timer.
+- **Pressing a dimmed key** sends its event as usual, and `applyTextEvents` rejects it under the usual rules (`maxLength`, `allow`, Backspace at caret 0). So a SHIFT earlier in the same step is applied correctly.
+- **Keyboard that doesn't fit:** it counts as not shown. `keyboardRect` is `null` and all F019 rules apply, including gamepad A submitting. In the warning, `{W}x{H}` is the renderer size rounded to whole pixels.
+- **Hover and pressed styles** come from the mouse state at the end of the step. A disabled key never shows them.

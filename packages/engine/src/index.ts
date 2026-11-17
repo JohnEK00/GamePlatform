@@ -13,6 +13,7 @@ export type { Insets, NineSliceOptions, NineQuad } from './nineslice';
 export { Ui, defaultTheme } from './ui';
 export type {
   UiTheme, ButtonOptions, PanelOptions, UiInput, UiRenderer, UiDeps, SliderOptions, ToggleOptions, TextFieldOptions, ListOptions,
+  TextFieldKeyboard,
 } from './ui';
 export { filterText, applyTextEvents, visibleRun, caretFromX, truncateToWidth, TEXT_EDIT_KEYS } from './uitext';
 export type { TextEvent, MeasureFn, TextEditOptions } from './uitext';

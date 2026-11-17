@@ -621,10 +621,11 @@ update(engine) {
   (default `step`, or `(max - min) / 20`). A bad range draws the slider disabled and warns once.
 * `ui.toggle(id, on, label, x, y, w, h, opts) → boolean`: the label is on the left and the switch is right-aligned. It
   flips on a click (button rules) or on activate.
-* `ui.textField(id, text, x, y, w, h, { maxLength = 24, placeholder, allow, … }) → string`: to start editing, click it,
-  activate it, type while it is focused (`Space` then types a space) or set `ui.editing = id`. `Enter`, `confirm` or pad A
-  submit, and so do up/down, which also move focus, and a click elsewhere. `Escape` or pad B revert to the text you had
-  when editing started. The caret is solid. Paste works. There is no selection, undo, IME or on-screen keyboard.
+* `ui.textField(id, text, x, y, w, h, { maxLength = 24, placeholder, allow, keyboard = "auto", … }) → string`: to start
+  editing, click it, activate it, type while it is focused (`Space` then types a space) or set `ui.editing = id`. `Enter`,
+  `confirm` or pad A submit, and so do up/down, which also move focus, and a click elsewhere. `Escape` or pad B revert to
+  the text you had when editing started. The caret is solid. Paste works. There is no selection, undo or IME. Touch and
+  controller players get the [on-screen keyboard](#on-screen-keyboard-f023).
 * `ui.list(id, items, x, y, w, h, { rowHeight = 16, selected = -1, … }) → number`: returns the index activated this step,
   else `-1`. A click on a row activates it. A drag over 4 units scrolls instead and never activates. The wheel scrolls
   whole rows. Long rows end in `...`, and a 3-unit scrollbar shows when the items overflow. At most 1000 items are used.
@@ -650,14 +651,55 @@ update(engine) {
   Gamepad and mouse bindings still count. An action held only by keys reports `actionReleased` once, and keys still held
   when editing ends count only after they are released. Raw `isDown`/`wasPressed`/`typed` are unchanged, so if you read them for gameplay, check `ui.editing`. Text typed
   while the game is paused is discarded on resume.
-* **Touch and controller players** can focus a field but can't type into it. Offer a fallback, for example preset names in
-  a `ui.list`. Typed text is game data, not the player's platform name: it stays in the sandboxed game unless you store it
-  with `engine.storage`, and the platform never shows it to other players.
+* **Touch and controller players** type with the engine's on-screen keyboard (below). Typed text is game data, not the
+  player's platform name: it stays in the sandboxed game unless you store it with `engine.storage`, and the platform never
+  shows it to other players.
 * **New theme fields**: `trackColor` `#0e1224`, `fillColor` `#5a6bc0`, `knobColor` `#ffffff`, `fieldColor` `#0e1224`,
   `fieldBorder` `#5a6bc0`, `caretColor` `#ffd166`, `placeholderColor` `#5d6488`, `rowHoverColor` `#2a3358`,
   `rowSelectedColor` `#3a4780`, and `track` / `knob` / `field` (`NineSlice | null`).
 * The pure helpers `filterText`, `applyTextEvents`, `visibleRun`, `caretFromX` and `truncateToWidth` are exported for
   tools and tests.
+
+#### On-screen keyboard (F023)
+
+Every `ui.textField` has a built-in on-screen keyboard (no extra call, no id, never in the navigation order; `ui.focus`
+stays on the field). It is a 10×5 grid: digits, `QWERTYUIOP`, `ASDFGHJKL'`, `ZXCVBNM-_.`, then `SHIFT`, `SPACE`, `DEL`, `OK`.
+
+* **When it opens**: when editing starts, by the field's `keyboard` option. `"auto"` (default) opens it when
+  `input.lastDevice` is `"touch"` or `"gamepad"`, `"always"` on every start, `"never"` never (draw your own picker). Any
+  other value counts as `"auto"` and warns once. It is drawn from the end of the step editing starts in and takes input
+  from the next step, so the pad A that started editing never also types. Letters start as capitals, and the cursor on `Q`.
+* **Hide and reopen**: a step with any physical `input.textEvents` entry (typing or a paste) applies it and hides the
+  keyboard for the rest of the edit. A pointer press on the field reopens it with `"always"`, or with `"auto"` when that
+  press is a touch. It closes whenever editing ends (submit, commit, revert or a dropped field).
+* **Gamepad (pad 0)**:
+
+  | Input | Effect |
+  |---|---|
+  | D-pad or the declared `up`/`down`/`left`/`right` actions | move the cursor (hold repeats) |
+  | `A` | press the cursor key |
+  | `B` | cancel (revert) |
+  | `X` | `DEL` (hold repeats) |
+  | `Y` | `SPACE` |
+  | `LB` | `SHIFT` (caps lock for letters) |
+  | `Start` | `OK` (submit) |
+
+  While it is shown, pad A and `confirm` don't submit and the D-pad doesn't leave the field. Raw `Enter` still submits,
+  `Escape` reverts, and raw `ArrowUp`/`ArrowDown` still commit and move focus; raw arrow keys never move the cursor.
+* **Pointer**: keys fire on release over the pressed key (no repeat; a cancelled release never fires). A press on the panel
+  never reaches the widgets under it. A press elsewhere (not the field) commits and closes it.
+* **Disabled keys**: keys your `allow` rejects, character keys and `SPACE` once `maxLength` is reached, and `DEL` at the
+  start of the text draw dimmed and do nothing. Restrict names with `allow` and the player sees the filter.
+* **Keyboard events stay in the field**: they never appear in `input.textEvents`, never change `input.lastDevice` and
+  never fire actions. Pad A itself still reports your `confirm` action, so guard gameplay with `ui.editing`.
+* **`ui.keyboardRect`** (read-only): `{ x, y, w, h }` of the panel drawn at the end of the last step, or `null`. It docks
+  at the bottom (at the top when the field would be covered). Move HUD elements out of it, and if you read raw
+  `input.mouse`/`touches` while editing, ignore presses inside it.
+* **Size**: keys scale with the game (480×270: 45×24 keys; 320×180: 29×16). In a game narrower than 106 or shorter
+  than 76 units (keys under 8 units wide, or the panel taller than the game) it isn't shown, with one warning, and the
+  field needs a physical keyboard. For small pixel-art games set `ui.theme.font = "pixel"` so the labels fit.
+* It uses the panel, button, `focusColor` and text theme fields (no new ones), draws on top of all widgets and is in
+  screenshots. With `autoDraw = false` and no `ui.draw()` it still works but is invisible, like other widgets.
 
 ## Examples
 

@@ -38,9 +38,11 @@ describe("Menu & HUD template settings screen (F019)", () => {
     expect(js).toMatch(/ui\.button\("back", "BACK", [^)]*\)\) this\.go\(engine, "title", "settings"\)/);
     expect(js).toMatch(/inSettings && this\.state === "settings" && input\.actionPressed\("pause"\) && !engine\.ui\.editing/);
     expect(js).toMatch(/ui\.button\("settings", "SETTINGS", [^)]*\)\) this\.go\(engine, "settings", "name"\)/);
-    // The hint only for touch and controller players.
-    expect(js).toMatch(/input\.lastDevice === "touch" \|\| input\.lastDevice === "gamepad"/);
-    expect(js).toContain('"Type your name with a keyboard"');
+    // F023: the engine's on-screen keyboard replaces the old hint for touch and controller players.
+    expect(js).not.toContain("Type your name with a keyboard");
+    expect(js).toContain(
+      "// Touch and controller players get the engine's on-screen keyboard when they start typing (F023).",
+    );
     // The name shows on the HUD and the game-over screen.
     expect(js.match(/this\.scoreText\(\)/g)?.length).toBe(2);
   });

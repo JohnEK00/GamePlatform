@@ -12,6 +12,13 @@ import type { ColorLike } from './math';
 import type { NineSlice, NineSliceOptions } from './nineslice';
 import type { BlendMode, ShapeOptions, TextOptions } from './renderer';
 import { applyTextEvents, caretFromX, truncateToWidth, visibleRun, type MeasureFn, type TextEvent } from './uitext';
+import {
+  OSK_DEL, OSK_KEYS, OSK_OK, OSK_SHIFT, OSK_SPACE, oskChar, oskKeyAt, oskKeyIndex, oskLabel, oskLayout, oskMove, oskStartCursor,
+  type OskCursor, type OskLayout,
+} from './osk';
+
+/** F023: when a text field's on-screen keyboard opens (default `"auto"`). */
+export type TextFieldKeyboard = 'auto' | 'always' | 'never';
 
 export type UiTheme = {
   font: string;
@@ -87,6 +94,11 @@ export type TextFieldOptions = {
   font?: string;
   textSize?: number;
   textColor?: ColorLike;
+  /**
+   * F023 on-screen keyboard: `"auto"` (default) opens it when editing starts while `input.lastDevice`
+   * is `"touch"` or `"gamepad"`; `"always"` on every start; `"never"` never.
+   */
+  keyboard?: TextFieldKeyboard;
 };
 export type ListOptions = {
   /** Default 16; integers 4–256. */
@@ -101,7 +113,7 @@ export type ListOptions = {
 };
 export type { TextEvent } from './uitext';
 
-type NavButton = 'Up' | 'Down' | 'Left' | 'Right' | 'A' | 'B';
+type NavButton = 'Up' | 'Down' | 'Left' | 'Right' | 'A' | 'B' | 'X' | 'Y' | 'Start' | 'LB';
 
 /**
  * What Ui reads from `engine.input`. The F019 members are optional so minimal hosts (and the F012
@@ -135,6 +147,8 @@ export interface UiInput {
   setKeyboardCapture?(on: boolean): void;
   /** F019: editing starts in this step: capture keyboard actions from this step on (engine-internal). */
   captureKeyboardNow?(): void;
+  /** F023: the kind of device used last (F016); absent counts as `"keyboard"`. */
+  readonly lastDevice?: string;
 }
 
 /** What Ui draws with (a subset of Renderer). */
@@ -148,6 +162,9 @@ export interface UiRenderer {
   ui(fn: () => void): void;
   setBlend?(mode: BlendMode): void;
   readonly blendMode?: BlendMode;
+  /** F023: game size; without both, the on-screen keyboard is never shown. */
+  readonly width?: number;
+  readonly height?: number;
 }
 
 export interface UiDeps {
@@ -200,7 +217,45 @@ type Cmd =
       hover: number;
       cursor: number;
       style: TextStyle;
+    }
+  | {
+      k: 'osk';
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      keys: { x: number; y: number; w: number; h: number; label: string; disabled: boolean }[];
+      cursor: number;
+      hover: number;
+      down: number;
     };
+
+/** F023: the on-screen keyboard of the field being edited (at most one). */
+interface OskState {
+  field: string;
+  mode: TextFieldKeyboard;
+  shown: boolean;
+  /** Capitals on (letters only). */
+  upper: boolean;
+  cursor: OskCursor;
+  /** Key pressed with the pointer (flat index), or -1. */
+  pressKey: number;
+  /** The layout drawn at the end of the last step (hit-tested in the next one), or null. */
+  layout: OskLayout | null;
+  fieldRect: { x: number; y: number; w: number; h: number };
+  /** The field's text, caret and filters after this step's edits (disabled keys). */
+  text: string;
+  caret: number;
+  maxLength: number;
+  allow: ((ch: string) => boolean) | undefined;
+}
+
+/** A hold-repeat timer (F019 timing). */
+interface RepTimer {
+  dir: number;
+  t: number;
+  next: number;
+}
 
 interface Hit {
   id: string;
@@ -377,6 +432,20 @@ export class Ui {
   private rep: { focus: string; dir: number; t: number; next: number } | null = null;
   private stepDt = 1 / 60;
 
+  // --- F023 ---
+  private osk: OskState | null = null;
+  /** The keyboard was drawn at the end of the last step and the field is still editing: it takes input this step. */
+  private oskLive = false;
+  /** The key fired by a pointer release in this step, or -1. */
+  private oskPointerKey = -1;
+  /** This step's keyboard events for `field` (built in beginStep). */
+  private oskStep: { field: string; events: TextEvent[] } | null = null;
+  /** Hold-repeat timers: cursor vertical, cursor horizontal, DEL. */
+  private oskRepV: RepTimer | null = null;
+  private oskRepH: RepTimer | null = null;
+  private oskRepDel: RepTimer | null = null;
+  private _keyboardRect: Readonly<{ x: number; y: number; w: number; h: number }> | null = null;
+
   constructor(deps: UiDeps) {
     this.input = deps.input;
     this.renderer = deps.renderer;
@@ -432,6 +501,14 @@ export class Ui {
     if (this._focus !== next) this.focusChanged();
     this._focus = next;
     this.editRequestNext = next;
+  }
+
+  /**
+   * F023: the on-screen keyboard panel drawn at the end of the last completed step (game units,
+   * frozen), or null. Raw `input.mouse` / `touches` still see presses on it.
+   */
+  get keyboardRect(): Readonly<{ x: number; y: number; w: number; h: number }> | null {
+    return this._keyboardRect;
   }
 
   /** The player changed the widget's value in this step (after its call; F019 § "Change signals"). */
@@ -507,6 +584,14 @@ export class Ui {
     this.editRequestNow = this.editRequestNext;
     this.editRequestNext = null;
     this.pendingStart = null;
+    // F023: the keyboard takes input only when it was drawn at the end of the last step for the
+    // field that is still editing (so the press that started editing never also types).
+    this.oskPointerKey = -1;
+    this.oskStep = null;
+    const osk = this.osk;
+    this.oskLive = osk !== null && osk.shown && osk.layout !== null && this._keyboardRect !== null && this._editing === osk.field;
+    if (!this.oskLive) this.oskRepV = this.oskRepH = this.oskRepDel = null;
+    if (!this.oskLive && osk) osk.pressKey = -1;
     this.pointerStep();
     this.navigateStep();
     // F019: editing that starts in this step captures the keyboard from this step on, so the key
@@ -524,7 +609,12 @@ export class Ui {
     // as "inside": on touch, pointerleave follows pointerup before the step sees the release.
     this._hot = null;
     let hotHit: Hit | null = null;
-    if (m.inside || m.pressed || m.released) {
+    const seen = m.inside || m.pressed || m.released;
+    // F023: the keyboard panel (previous step's layout) is tested before the widgets and hides them.
+    const osk = this.oskLive ? this.osk : null;
+    const lay = osk?.layout ?? null;
+    const inPanel = !!lay && seen && m.x >= lay.x && m.x < lay.x + lay.w && m.y >= lay.y && m.y < lay.y + lay.h;
+    if (seen && !inPanel) {
       for (let i = this.prevHits.length - 1; i >= 0; i--) {
         const r = this.prevHits[i]!;
         if (m.x >= r.x && m.x < r.x + r.w && m.y >= r.y && m.y < r.y + r.h) {
@@ -535,6 +625,12 @@ export class Ui {
       }
     }
     const press = (): void => {
+      if (osk && lay && inPanel) {
+        // Taken by the keyboard: no widget, no commit, focus unchanged, hot stays null.
+        osk.pressKey = oskKeyAt(lay, m.x, m.y);
+        this._active = null;
+        return;
+      }
       // A press anywhere but on the editing field commits it.
       if (this._editing !== null && this._hot !== this._editing) this.stopEditing(this._editing);
       this._focus = null; // a pointer press hides the focus ring (:focus-visible)
@@ -558,6 +654,12 @@ export class Ui {
       }
     };
     const release = (): void => {
+      if (osk && osk.pressKey >= 0) {
+        // A key fires on a real release over the key that was pressed (F012 button rules).
+        const k = lay && inPanel ? oskKeyAt(lay, m.x, m.y) : -1;
+        if (!m.cancelled && k === osk.pressKey) this.oskPointerKey = k;
+        osk.pressKey = -1;
+      }
       const id = this._active;
       const st = id !== null ? this.states.get(id) : undefined;
       if (id !== null && st) {
@@ -606,6 +708,10 @@ export class Ui {
       this.rep = null;
       const id = this._editing;
       const revert = inp.wasPressed('Escape') || pad.wasPressed('B');
+      if (this.oskLive && this.osk) {
+        this.oskNavigate(id, this.osk, revert, order);
+        return;
+      }
       const submit =
         inp.wasPressed('Enter') || inp.wasPressed('NumpadEnter') || (declared('confirm') && inp.actionPressed('confirm')) || pad.wasPressed('A');
       if (revert) this.editAction = 'revert';
@@ -678,6 +784,113 @@ export class Ui {
     if (activate && !clear && this._focus !== null) this.navFire = this._focus;
   }
 
+  /**
+   * F023 routing while the keyboard is shown (GAME_FORMAT § F023 "Input while the keyboard is
+   * shown"): a revert wins and drops the keyboard's events; otherwise the events are built in the
+   * normative order (pointer key, pad A on the start-of-step cursor key, the cursor move, X / Y / LB /
+   * Start), then OK / Start / raw Enter submit, or raw ArrowUp / ArrowDown commit and move focus.
+   */
+  private oskNavigate(id: string, osk: OskState, revert: boolean, order: readonly string[]): void {
+    const inp = this.input;
+    const pad = inp.gamepad(0);
+    if (revert) {
+      this.editAction = 'revert';
+      this.oskRepV = this.oskRepH = this.oskRepDel = null;
+      return;
+    }
+    const startKey = Math.max(0, oskKeyIndex(osk.cursor.row, osk.cursor.col));
+    const onDel = startKey === OSK_DEL;
+    const aPressed = pad.wasPressed('A');
+    const xPressed = pad.wasPressed('X');
+    // DEL hold repeat: pad X held, or pad A held with the cursor on DEL.
+    let delRepeat = false;
+    const aHeldDel = onDel && !!pad.isDown?.('A');
+    const delHeld = !!pad.isDown?.('X') || aHeldDel;
+    if (xPressed || (aPressed && onDel)) this.oskRepDel = { dir: 1, t: 0, next: UI_REPEAT_DELAY };
+    else if (!delHeld) this.oskRepDel = null;
+    else if (!this.oskRepDel) this.oskRepDel = { dir: 1, t: 0, next: UI_REPEAT_DELAY };
+    else delRepeat = this.tickRepeat(this.oskRepDel);
+
+    const ops: number[] = [];
+    if (this.oskPointerKey >= 0) ops.push(this.oskPointerKey);
+    if (aPressed) ops.push(startKey);
+    else if (delRepeat && aHeldDel) ops.push(OSK_DEL);
+    // Cursor: D-pad or the declared direction actions (never the raw arrow keys), vertical first.
+    const vy = this.oskRepeat('V', this.padDir('up', 'Up'), this.padDir('down', 'Down'));
+    const vx = this.oskRepeat('H', this.padDir('left', 'Left'), this.padDir('right', 'Right'));
+    if (vx !== 0 || vy !== 0) osk.cursor = oskMove(osk.cursor, vx as -1 | 0 | 1, vy as -1 | 0 | 1);
+    if (xPressed || (delRepeat && !aHeldDel)) ops.push(OSK_DEL);
+    if (pad.wasPressed('Y')) ops.push(OSK_SPACE);
+    if (pad.wasPressed('LB')) ops.push(OSK_SHIFT);
+    if (pad.wasPressed('Start')) ops.push(OSK_OK);
+
+    const events: TextEvent[] = [];
+    let submit = false;
+    for (const k of ops) {
+      const def = OSK_KEYS[k]!.def;
+      if (def.kind === 'shift') osk.upper = !osk.upper;
+      else if (def.kind === 'ok') submit = true;
+      else if (def.kind === 'del') events.push({ kind: 'key', key: 'Backspace' });
+      else events.push({ kind: 'text', text: oskChar(def, osk.upper)! });
+    }
+    this.oskStep = { field: id, events };
+    if (submit || inp.wasPressed('Enter') || inp.wasPressed('NumpadEnter')) this.editAction = 'submit';
+    else if (this.navigation) {
+      const up = inp.wasPressed('ArrowUp');
+      const down = inp.wasPressed('ArrowDown');
+      if (up !== down) {
+        this.editAction = 'commit';
+        this._focus = id;
+        this.moveFocus(order, down ? 1 : -1);
+      }
+    }
+  }
+
+  /** A direction for the keyboard cursor: the declared action (gamepad / mouse under capture) or the pad 0 D-pad. */
+  private padDir(action: string, padButton: NavButton): Dir {
+    const inp = this.input;
+    const pad = inp.gamepad(0);
+    const isDeclared = inp.actions.some((a) => a.id === action);
+    return {
+      pressed: (isDeclared && inp.actionPressed(action)) || pad.wasPressed(padButton),
+      held: (isDeclared && !!inp.actionDown?.(action)) || !!pad.isDown?.(padButton),
+    };
+  }
+
+  /** Hold repeat for one keyboard-cursor axis (own timer per axis; F019 timing). */
+  private oskRepeat(axis: 'V' | 'H', neg: Dir, pos: Dir): number {
+    const set = (r: RepTimer | null): void => {
+      if (axis === 'V') this.oskRepV = r;
+      else this.oskRepH = r;
+    };
+    const rep = axis === 'V' ? this.oskRepV : this.oskRepH;
+    if (neg.pressed !== pos.pressed) {
+      const d = pos.pressed ? 1 : -1;
+      set({ dir: d, t: 0, next: UI_REPEAT_DELAY });
+      return d;
+    }
+    const held = neg.pressed || neg.held === pos.held ? 0 : pos.held ? 1 : -1;
+    if (held === 0) {
+      set(null);
+      return 0;
+    }
+    if (!rep || rep.dir !== held) {
+      set({ dir: held, t: 0, next: UI_REPEAT_DELAY });
+      return 0;
+    }
+    return this.tickRepeat(rep) ? held : 0;
+  }
+
+  /** Advance a hold-repeat timer by one step; true when it fires. */
+  private tickRepeat(rep: RepTimer): boolean {
+    rep.t += this.stepDt;
+    if (rep.t + 1e-9 >= rep.next) {
+      rep.next += UI_REPEAT_INTERVAL;
+      return true;
+    }
+    return false;
+  }
+
   /** One intent: pressed edge and held state (declared action, else the fallback key; plus the D-pad). */
   private dir(action: string, key: string, padButton: NavButton): Dir {
     const inp = this.input;
@@ -742,6 +955,10 @@ export class Ui {
     this.editRequestNow = null;
     this.pendingStart = null;
     this.input.setKeyboardCapture?.(this._editing !== null);
+    this.oskEndStep();
+    this.oskStep = null;
+    this.oskPointerKey = -1;
+    this.oskLive = false;
     this.committedList = this.building;
     this.building = [];
     this.prevHits = this.hits;
@@ -774,6 +991,9 @@ export class Ui {
     this._active = null;
     this._hot = null;
     this.rep = null;
+    // F023: a key press in progress is dropped, and so are the repeat timers; the keyboard stays open.
+    if (this.osk) this.osk.pressKey = -1;
+    this.oskRepV = this.oskRepH = this.oskRepDel = null;
   }
 
   /** Engine-internal: a new rendered frame starts (re-arms `draw()`). */
@@ -1043,6 +1263,13 @@ export class Ui {
         maxLength = Number.isNaN(f) ? 24 : clamp(f, 1, 256);
       }
     }
+    // F023: keyboard mode; an invalid value counts as "auto" with a warning (once per id).
+    let mode: TextFieldKeyboard = 'auto';
+    if (o.keyboard !== undefined) {
+      const kb: unknown = o.keyboard;
+      if (kb === 'auto' || kb === 'always' || kb === 'never') mode = kb;
+      else this.warnOnce(`keyboard:${vid}`, `textField "${vid}" keyboard must be "auto", "always" or "never"`);
+    }
     this.register(vid, 'textField', x, y, w, h, !disabled, o.nav !== false);
     const st = this.stateFor(vid, 'textField');
     let out = str;
@@ -1077,20 +1304,33 @@ export class Ui {
         if (byPointer && st.pressX !== null) st.caret = caretFromX(str, 0, st.pressX - (x + 4), measure);
         st.pressX = null;
         startedNow = true;
+        // F023: the keyboard opens (or not) when editing starts; it takes input from the next step.
+        const dev = this.input.lastDevice ?? 'keyboard';
+        const show = mode === 'always' || (mode === 'auto' && (dev === 'touch' || dev === 'gamepad'));
+        this.osk = this.newOsk(vid, mode, show);
       }
     } else if (this.pointerEdit === vid && st.pressX !== null) {
       // A press on the editing field moves the caret.
       const run = visibleRun(str, st.caret, st.runStart, inner, measure);
       st.caret = caretFromX(str, run.start, st.pressX - (x + 4), measure);
       st.pressX = null;
+      // F023: and reopens a hidden keyboard ("always", or "auto" with a touch press).
+      const osk = this.osk;
+      if (osk && osk.field === vid && !osk.shown && (mode === 'always' || (mode === 'auto' && this.input.lastDevice === 'touch'))) {
+        this.osk = this.newOsk(vid, mode, true);
+      }
     }
+    const allow = typeof o.allow === 'function' ? o.allow : undefined;
     if (this._editing === vid) {
       const action = startedNow ? null : this.editAction;
       if (action === 'revert') {
         out = st.original ?? str;
         this.endEdit(st);
       } else {
-        const r = applyTextEvents({ text: out, caret: st.caret }, events, { maxLength, allow: typeof o.allow === 'function' ? o.allow : undefined });
+        // F023: physical events first, then the keyboard's (never in input.textEvents).
+        const ok = this.oskStep;
+        const all = !startedNow && ok && ok.field === vid && ok.events.length > 0 ? [...events, ...ok.events] : events;
+        const r = applyTextEvents({ text: out, caret: st.caret }, all, { maxLength, allow });
         if (r.allowThrew) this.warnOnce(`allow:${vid}`, `textField "${vid}" allow threw; the character was rejected`);
         out = r.text;
         st.caret = r.caret;
@@ -1105,6 +1345,20 @@ export class Ui {
     }
     const editing = this._editing === vid;
     if (editing) st.runStart = visibleRun(out, st.caret, st.runStart, inner, measure).start;
+    const osk = this.osk;
+    if (editing && osk && osk.field === vid) {
+      // Physical typing (or a paste) hides the keyboard for the rest of this edit.
+      if (events.length > 0) {
+        osk.shown = false;
+        osk.pressKey = -1;
+      }
+      osk.mode = mode;
+      osk.fieldRect = { x, y, w, h };
+      osk.text = out;
+      osk.caret = st.caret;
+      osk.maxLength = maxLength;
+      osk.allow = allow;
+    }
     this.signals.set(vid, { changed: out !== str, committed });
     draw(out, editing, st.caret, st.runStart, true);
     return out;
@@ -1115,6 +1369,79 @@ export class Ui {
     st.original = null;
     st.runStart = 0;
     st.pendingCommit = false;
+  }
+
+  /** F023: a fresh keyboard state (capitals, cursor on Q). */
+  private newOsk(field: string, mode: TextFieldKeyboard, shown: boolean): OskState {
+    this.oskRepV = this.oskRepH = this.oskRepDel = null;
+    return {
+      field, mode, shown, upper: true, cursor: oskStartCursor(), pressKey: -1, layout: null,
+      fieldRect: { x: 0, y: 0, w: 0, h: 0 }, text: '', caret: 0, maxLength: 24, allow: undefined,
+    };
+  }
+
+  /**
+   * F023, end of step: close the keyboard when editing ended; otherwise lay it out, evaluate the
+   * disabled keys against the field's text and caret, and append the panel command after the widgets
+   * (outside the 256-command cap). Sets `keyboardRect`.
+   */
+  private oskEndStep(): void {
+    const osk = this.osk;
+    if (osk === null || this._editing !== osk.field) {
+      this.osk = null;
+      this.oskRepV = this.oskRepH = this.oskRepDel = null;
+      this._keyboardRect = null;
+      return;
+    }
+    osk.layout = null;
+    this._keyboardRect = null;
+    if (!osk.shown) {
+      osk.pressKey = -1;
+      this.oskRepV = this.oskRepH = this.oskRepDel = null;
+      return;
+    }
+    const W = this.renderer.width;
+    const H = this.renderer.height;
+    if (!finite(W) || !finite(H)) return;
+    const lay = oskLayout(W, H, osk.fieldRect);
+    if (!lay) {
+      this.warnOnce('#osk-fit', `on-screen keyboard does not fit a ${Math.round(W)}x${Math.round(H)} game; it is not shown`);
+      return;
+    }
+    osk.layout = lay;
+    this._keyboardRect = Object.freeze({ x: lay.x, y: lay.y, w: lay.w, h: lay.h });
+    const full = Array.from(osk.text).length >= osk.maxLength;
+    const allowed = new Map<string, boolean>();
+    const allowOk = (ch: string): boolean => {
+      const cached = allowed.get(ch);
+      if (cached !== undefined) return cached;
+      let ok = true;
+      if (osk.allow) {
+        try {
+          ok = !!osk.allow(ch);
+        } catch {
+          ok = false;
+          this.warnOnce(`allow:${osk.field}`, `textField "${osk.field}" allow threw; the character was rejected`);
+        }
+      }
+      allowed.set(ch, ok);
+      return ok;
+    };
+    const m = this.input.mouse;
+    const hover = m.inside ? oskKeyAt(lay, m.x, m.y) : -1;
+    const keys = lay.keys.map((k, i) => {
+      const def = OSK_KEYS[i]!.def;
+      const ch = oskChar(def, osk.upper);
+      const disabled = ch !== null ? full || !allowOk(ch) : def.kind === 'del' ? osk.caret <= 0 : false;
+      return { x: k.x, y: k.y, w: k.w, h: k.h, label: oskLabel(def, osk.upper), disabled };
+    });
+    const live = (i: number): boolean => i >= 0 && !keys[i]!.disabled;
+    this.building.push({
+      k: 'osk', x: lay.x, y: lay.y, w: lay.w, h: lay.h, keys,
+      cursor: oskKeyIndex(osk.cursor.row, osk.cursor.col),
+      hover: live(hover) ? hover : -1,
+      down: live(osk.pressKey) && osk.pressKey === hover ? osk.pressKey : -1,
+    });
   }
 
   /** A vertical list of rows; returns the index activated in this step, else -1. */
@@ -1246,6 +1573,40 @@ export class Ui {
     if (live && this._focus === id) this.renderer.strokeRect(x - 4, y - 4, w + 8, h + 8, this.theme.focusColor, 2, 1);
   }
 
+  /** F023 panel: panel style, keys in button styles, labels centred, a 2-unit cursor outline inside its key. */
+  private execOsk(c: Extract<Cmd, { k: 'osk' }>): void {
+    const r = this.renderer;
+    const t = this.theme;
+    const scale = this.scale();
+    if (t.panel) r.drawNineSlice(t.panel, c.x, c.y, c.w, c.h, { scale, alpha: 1 });
+    else {
+      r.drawRect(c.x, c.y, c.w, c.h, t.panelColor, { alpha: 1 });
+      r.strokeRect(c.x, c.y, c.w, c.h, t.panelBorder, 1, 1);
+    }
+    for (let i = 0; i < c.keys.length; i++) {
+      const k = c.keys[i]!;
+      const alpha = k.disabled ? 0.5 : 1;
+      const down = c.down === i;
+      const hover = c.hover === i;
+      const style = down ? (t.buttonDown ?? t.buttonHover ?? t.button) : hover ? (t.buttonHover ?? t.button) : t.button;
+      if (style) r.drawNineSlice(style, k.x, k.y, k.w, k.h, { scale, alpha });
+      else {
+        r.drawRect(k.x, k.y, k.w, k.h, down ? t.buttonDownColor : hover ? t.buttonHoverColor : t.buttonColor, { alpha });
+        r.strokeRect(k.x, k.y, k.w, k.h, t.buttonBorder, 1, alpha);
+      }
+      r.drawText(k.label, k.x + k.w / 2, k.y + k.h / 2, {
+        align: 'center',
+        baseline: 'middle',
+        font: t.font,
+        size: t.textSize ?? undefined,
+        color: k.disabled ? t.disabledTextColor : t.textColor,
+        alpha,
+      });
+    }
+    const cur = c.cursor >= 0 ? c.keys[c.cursor] : undefined;
+    if (cur) r.strokeRect(cur.x, cur.y, cur.w, cur.h, t.focusColor, 2, 1);
+  }
+
   private exec(c: Cmd): void {
     const r = this.renderer;
     const t = this.theme;
@@ -1325,6 +1686,8 @@ export class Ui {
         });
       if (c.caretX !== null) r.drawRect(c.caretX, c.y + (c.h - c.caretH) / 2, 1, c.caretH, t.caretColor, { alpha });
       this.ring(c.id, c.live, c.x, c.y, c.w, c.h);
+    } else if (c.k === 'osk') {
+      this.execOsk(c);
     } else {
       const alpha = c.live ? 1 : 0.5;
       this.frame(c.x, c.y, c.w, c.h, alpha);

@@ -41,7 +41,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | M | shipped |
 | F020 | Game comment settings: comments on / replies only / off, slow mode | S | shipped |
 | F015 | Screenshots in the feed and on profiles | S | shipped |
-| F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | specced |
+| F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | shipped |
 | F022 | Announce a collection when it goes public | S | proposed |
 | F024 | "Screenshot of your game" notifications for creators | S | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
@@ -243,7 +243,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: the common "curate privately, then publish" flow reaches followers, which F021 deliberately skips.
 - **Areas**: backend (one more activity kind, no rebuild; hook in `PATCH /api/collections/{id}`; a once-per-collection guard), frontend (feed item). No engine or desktop changes.
 
-### F023: Engine on-screen keyboard for `ui.textField` (S, specced → [spec](features/F023-on-screen-keyboard.md))
+### F023: Engine on-screen keyboard for `ui.textField` (S, shipped → [spec](features/F023-on-screen-keyboard.md))
 - **Pitch**:
   - An engine-drawn keyboard (a 10×5 grid: digits, QWERTY letters with caps-lock `SHIFT`, `' - _ .`, `SPACE`, `DEL`, `OK`) that is part of the field being edited, not a separate widget.
   - It opens when editing starts and `input.lastDevice` is `"touch"` or `"gamepad"`. Fields can set `keyboard: "auto" | "always" | "never"`. It hides as soon as the player types on a physical keyboard.
