@@ -203,7 +203,7 @@ describe("StudioPreview controls (F009)", () => {
     let spy = vi.spyOn(win(), "postMessage");
     post(win(), { type: "webgame:hello" });
     expect(spy.mock.calls.map((c) => (c[0] as { type: string }).type)).toEqual(["webgame:load", "webgame:controls"]);
-    expect(sent(spy, "webgame:controls")[0]).toEqual({ type: "webgame:controls", overrides: {} });
+    expect(sent(spy, "webgame:controls")[0]).toEqual({ type: "webgame:controls", overrides: {}, gamepad: {} });
 
     fireEvent.click(screen.getByRole("button", { name: "Controls" }));
     expect(sent(spy, "webgame:pause")).toHaveLength(1);
@@ -214,7 +214,7 @@ describe("StudioPreview controls (F009)", () => {
     const s = within(dialog).getByRole("button", { name: /^Jump, key 2: / });
     fireEvent.click(s);
     fireEvent.keyDown(s, { code: "KeyK", key: "k" });
-    expect(sent(spy, "webgame:controls").at(-1)).toEqual({ type: "webgame:controls", overrides: { jump: ["Space", "KeyK"] } });
+    expect(sent(spy, "webgame:controls").at(-1)).toEqual({ type: "webgame:controls", overrides: { jump: ["Space", "KeyK"] }, gamepad: {} });
     fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
     expect(sent(spy, "webgame:resume")).toHaveLength(1);
 
@@ -226,7 +226,7 @@ describe("StudioPreview controls (F009)", () => {
     rerun(2);
     spy = vi.spyOn(win(), "postMessage");
     post(win(), { type: "webgame:hello" });
-    expect(sent(spy, "webgame:controls")).toEqual([{ type: "webgame:controls", overrides: { jump: ["Space", "KeyK"] } }]);
+    expect(sent(spy, "webgame:controls")).toEqual([{ type: "webgame:controls", overrides: { jump: ["Space", "KeyK"] }, gamepad: {} }]);
   });
 
   it("has no ⌨ button and posts no controls for a project without actions or hint", () => {

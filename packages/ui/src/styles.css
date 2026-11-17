@@ -4397,7 +4397,22 @@ a.pf-tab {
 }
 .pf-controls__pad {
   color: var(--pf-text-2);
-  white-space: nowrap;
+}
+/* F016: gamepad slots reuse the key-slot look, with a rounder "button" shape. */
+.pf-keycap--pad .pf-keycap__btn {
+  min-width: 56px;
+  border-radius: 999px;
+}
+.pf-keycap--pad.is-capturing .pf-keycap__btn {
+  min-width: 120px;
+}
+/* The gamepad column is on the right: open messages leftwards and let the longer ones wrap. */
+.pf-keycap--pad .pf-keycap__msg {
+  left: auto;
+  right: 0;
+  width: max-content;
+  max-width: min(260px, 70vw);
+  white-space: normal;
 }
 .pf-controls__note {
   margin: 0;
@@ -4419,6 +4434,10 @@ a.pf-tab {
 }
 .pf-controls__saved {
   margin-right: auto;
+}
+.pf-controls__saved--failed {
+  color: var(--pf-warning);
+  max-width: 34ch;
 }
 .pf-controls__foot .pf-btn--ghost {
   order: -1;

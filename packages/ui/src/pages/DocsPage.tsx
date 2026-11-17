@@ -102,6 +102,13 @@ render(engine) {
   engine.renderer.drawText("Press " + engine.input.actionLabel("jump") + " to start", 20, 20);
 }`;
 
+const ACTIONS_AUTO_JS = `render(engine) {
+  const { input } = engine;
+  // "Press Space" for keyboard players, "Press A" (or their remapped button) after they touch a controller.
+  engine.renderer.drawText("Press " + input.actionLabel("jump", "auto") + " to start", 20, 20);
+  if (input.lastDevice === "touch") engine.renderer.drawText("Tap to start", 20, 40);
+}`;
+
 /**
  * The numbered sections, in order: the single source for the "On this page" list and the headings (review 5, L4),
  * so the two can't drift apart.
@@ -280,8 +287,8 @@ export function DocsPage() {
           <div className="pf-panel">
             <h3>actions &amp; remapping</h3>
             <p>
-              <code>actionDown(id)</code>, <code>actionPressed</code>, <code>actionReleased</code>, <code>actionLabel(id)</code> for
-              prompts, <code>actions</code>. Declared in <code>game.json</code>; players remap them (see 15).
+              <code>actionDown(id)</code>, <code>actionPressed</code>, <code>actionReleased</code>, <code>actionLabel(id, device?)</code> for
+              prompts, <code>lastDevice</code>, <code>actions</code>. Declared in <code>game.json</code>; players remap them (see 15).
             </p>
           </div>
           <div className="pf-panel">
@@ -531,8 +538,9 @@ const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
         <DocsHeading n={15} />
         <p>
           Declare the keys your game uses as named <strong>actions</strong>. Players see them under <strong>⌨</strong> in the
-          player and on your game page, and can remap the keys (up to 3 per action). Their changes reach your running game at
-          once and are saved on their device.
+          player and on your game page, and can remap the keys (up to 3 per action) and the gamepad buttons (up to 2 per
+          action). Their changes reach your running game at once. They are saved on their device and, when they are signed
+          in, in their account, so they follow them to other devices and the desktop app.
         </p>
         <Code label="game.json">{ACTIONS_JSON}</Code>
         <Code label="main.js">{ACTIONS_JS}</Code>
@@ -550,6 +558,18 @@ const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
           <li>
             Read actions, not raw codes: <code>isDown("Space")</code> still reports the physical key and ignores remapping. Use{" "}
             <code>actionLabel</code> in prompts so they show the player's key (US-layout names).
+          </li>
+          <li>
+            Gamepad buttons are remappable too: read <code>actionPressed("jump")</code>, not{" "}
+            <code>gamepad(0).wasPressed("A")</code>, for everything you declared. Menus built with <code>engine.ui</code> keep
+            the fixed D-pad, <code>A</code> and <code>B</code> fallbacks, so a remap can't lock players out.
+          </li>
+          <li>
+            <code>input.lastDevice</code> is <code>"keyboard"</code>, <code>"mouse"</code>, <code>"touch"</code> or{" "}
+            <code>"gamepad"</code>: the device the player used last. <code>actionLabel(id, "auto")</code> names the gamepad
+            button after they touch a controller and the key otherwise (<code>"keyboard"</code> and <code>"gamepad"</code>{" "}
+            force one). A button still held when the game resumes doesn't fire <code>actionPressed</code>.
+            <Code label="main.js">{ACTIONS_AUTO_JS}</Code>
           </li>
           <li>
             Keep the free-text <code>"controls"</code> string (up to 300 chars) for what actions can't describe, like mouse aiming

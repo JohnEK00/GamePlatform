@@ -3,7 +3,7 @@
 // overrides store and the keyboard-layout hook. GAME_FORMAT.md § F009 is the normative source of the tables; the
 // engine (packages/engine/src/actions.ts) and the backend keep their own copies.
 import { useEffect, useState } from "react";
-import type { ControlAction, GamepadButtonName } from "./api/types";
+import type { ControlAction, ControlBindings, ControlOverrides, GamepadButtonName, GamepadOverrides } from "./api/types";
 
 /**
  * Window CustomEvent a host (e.g. the desktop View → Controls menu) dispatches to open the controls panel of the
@@ -17,8 +17,8 @@ export const MAX_ACTION_KEYS = 3;
 export const MAX_ACTION_GAMEPAD = 2;
 export const ACTION_NAME_MAX = 40;
 export const CONTROLS_HINT_MAX = 300;
-/** Max serialised size of one stored overrides entry (ARCHITECTURE § F009). */
-export const CONTROLS_OVERRIDES_MAX_BYTES = 4096;
+/** Max serialised size of one stored bindings entry (ARCHITECTURE § F009, raised to 8192 by § F016). */
+export const CONTROLS_OVERRIDES_MAX_BYTES = 8192;
 export const ACTION_ID_PATTERN = /^[a-z0-9_-]{1,32}$/;
 
 // ---------- tables ----------
@@ -270,24 +270,56 @@ export function hasControls(actions: readonly ControlAction[] | undefined, hint:
 
 // ---------- overrides ----------
 
-/** Player key overrides: action id → keyboard codes (replaces that action's default keys). */
-export type ControlOverrides = Record<string, string[]>;
+export type { ControlOverrides, GamepadOverrides, ControlBindings };
+
+function sanitizeMap<T extends string>(raw: unknown, ok: (x: unknown) => x is T, max: number): Record<string, T[]> {
+  if (!isPlainObject(raw)) return {};
+  const entries: [string, T[]][] = [];
+  for (const id of Object.keys(raw)) {
+    if (entries.length >= MAX_ACTIONS) break;
+    const v = raw[id];
+    if (!ACTION_ID_PATTERN.test(id) || !Array.isArray(v)) continue;
+    entries.push([id, uniqueValid(v, ok, max)]);
+  }
+  // Object.fromEntries defines own data properties, so an id like "__proto__" can't touch the prototype.
+  return Object.fromEntries(entries);
+}
 
 /**
  * Sanitises an overrides object: ids matching the action id rule, array values only, bindable codes, de-duplicated,
  * at most 3 per action and 32 actions. Anything else → {}.
  */
 export function sanitizeOverrides(raw: unknown): ControlOverrides {
-  if (!isPlainObject(raw)) return {};
-  const entries: [string, string[]][] = [];
-  for (const id of Object.keys(raw)) {
-    if (entries.length >= MAX_ACTIONS) break;
-    const v = raw[id];
-    if (!ACTION_ID_PATTERN.test(id) || !Array.isArray(v)) continue;
-    entries.push([id, uniqueValid(v, isBindableKey, MAX_ACTION_KEYS)]);
-  }
-  // Object.fromEntries defines own data properties, so an id like "__proto__" can't touch the prototype.
-  return Object.fromEntries(entries);
+  return sanitizeMap(raw, isBindableKey, MAX_ACTION_KEYS);
+}
+
+/**
+ * F016: sanitises gamepad overrides: ids matching the action id rule, array values only, names from the gamepad table
+ * (no `Home`), de-duplicated, at most 2 per action and 32 actions. Anything else → {}.
+ */
+export function sanitizeGamepadOverrides(raw: unknown): GamepadOverrides {
+  return sanitizeMap(raw, isGamepadButton, MAX_ACTION_GAMEPAD);
+}
+
+/** F016: `{ keys, gamepad }`, each sanitised. A non-object (or `null`) → both empty. */
+export function sanitizeBindings(raw: unknown): ControlBindings {
+  const o = isPlainObject(raw) ? raw : {};
+  return { keys: sanitizeOverrides(o.keys), gamepad: sanitizeGamepadOverrides(o.gamepad) };
+}
+
+/** F016: a fresh, empty `ControlBindings`. */
+export function emptyBindings(): ControlBindings {
+  return { keys: {}, gamepad: {} };
+}
+
+/** True when neither keys nor gamepad buttons are overridden. */
+export function isEmptyBindings(b: ControlBindings): boolean {
+  return Object.keys(b.keys).length === 0 && Object.keys(b.gamepad).length === 0;
+}
+
+/** Same ids, in the same order, with the same values in the same order. */
+export function sameBindings(a: ControlBindings, b: ControlBindings): boolean {
+  return JSON.stringify(a.keys) === JSON.stringify(b.keys) && JSON.stringify(a.gamepad) === JSON.stringify(b.gamepad);
 }
 
 function sameKeys(a: readonly string[], b: readonly string[]): boolean {
@@ -296,38 +328,71 @@ function sameKeys(a: readonly string[], b: readonly string[]): boolean {
 
 /**
  * Defaults with the overrides applied (the engine's `applyOverrides`): for each declared action with an array
- * override, `keys` becomes its valid, de-duplicated bindable codes (first 3). `gamepad` is never overridden.
+ * override, `keys` becomes its valid, de-duplicated bindable codes (first 3) and, with F016 `gamepad` overrides,
+ * `gamepad` becomes its valid, de-duplicated button names (first 2). `[]` means "none"; anything invalid is ignored.
  */
-export function effectiveActions(defaults: readonly ControlAction[], overrides: unknown): ControlAction[] {
+export function effectiveActions(defaults: readonly ControlAction[], overrides: unknown, gamepad?: unknown): ControlAction[] {
   const o = isPlainObject(overrides) ? overrides : {};
+  const g = isPlainObject(gamepad) ? gamepad : {};
   return defaults.map((a) => {
-    const v = Object.hasOwn(o, a.id) ? o[a.id] : undefined;
-    return Array.isArray(v) ? { ...a, keys: uniqueValid(v, isBindableKey, MAX_ACTION_KEYS) } : a;
+    const k = Object.hasOwn(o, a.id) ? o[a.id] : undefined;
+    const p = Object.hasOwn(g, a.id) ? g[a.id] : undefined;
+    if (!Array.isArray(k) && !Array.isArray(p)) return a;
+    return {
+      ...a,
+      keys: Array.isArray(k) ? uniqueValid(k, isBindableKey, MAX_ACTION_KEYS) : a.keys,
+      gamepad: Array.isArray(p) ? uniqueValid(p, isGamepadButton, MAX_ACTION_GAMEPAD) : a.gamepad,
+    };
   });
 }
 
-/**
- * Overrides reduced to what is worth storing / sending: only declared ids, only entries whose keys differ from the
- * defaults. Without `defaults`, only sanitised.
- */
-export function pruneOverrides(overrides: unknown, defaults?: readonly ControlAction[]): ControlOverrides {
-  const clean = sanitizeOverrides(overrides);
-  if (!defaults) return clean;
+function pruneMap<T extends string>(clean: Record<string, T[]>, defaults: readonly ControlAction[], field: "keys" | "gamepad"): Record<string, T[]> {
   return Object.fromEntries(
-    defaults.filter((a) => Object.hasOwn(clean, a.id) && !sameKeys(clean[a.id], a.keys)).map((a) => [a.id, clean[a.id]] as [string, string[]]),
+    defaults.filter((a) => Object.hasOwn(clean, a.id) && !sameKeys(clean[a.id], a[field])).map((a) => [a.id, clean[a.id]] as [string, T[]]),
   );
 }
 
-/** True when the action's effective keys differ from its defaults. */
-export function isActionChanged(action: ControlAction, overrides: ControlOverrides): boolean {
-  return Object.hasOwn(overrides, action.id) && !sameKeys(uniqueValid(overrides[action.id], isBindableKey, MAX_ACTION_KEYS), action.keys);
+/**
+ * Overrides reduced to what is worth storing / sending: only declared ids (in manifest order), only entries whose
+ * keys differ from the defaults. Without `defaults`, only sanitised.
+ */
+export function pruneOverrides(overrides: unknown, defaults?: readonly ControlAction[]): ControlOverrides {
+  const clean = sanitizeOverrides(overrides);
+  return defaults ? pruneMap(clean, defaults, "keys") : clean;
 }
 
-/** For each action id, the ids of the other actions that share at least one key (manifest order). */
+/** F016: gamepad overrides reduced like {@link pruneOverrides}. */
+export function pruneGamepadOverrides(gamepad: unknown, defaults?: readonly ControlAction[]): GamepadOverrides {
+  const clean = sanitizeGamepadOverrides(gamepad);
+  return defaults ? pruneMap(clean, defaults, "gamepad") : clean;
+}
+
+/**
+ * F016: bindings reduced to what is worth storing / sending: sanitised, and with `defaults`, only declared ids (manifest
+ * order) and only entries that differ from that action's defaults, for keys and gamepad separately.
+ */
+export function pruneBindings(bindings: unknown, defaults?: readonly ControlAction[]): ControlBindings {
+  const clean = sanitizeBindings(bindings);
+  return { keys: pruneOverrides(clean.keys, defaults), gamepad: pruneGamepadOverrides(clean.gamepad, defaults) };
+}
+
+/** True when the action's effective keys (or, with F016 `gamepad` overrides, its gamepad buttons) differ from its defaults. */
+export function isActionChanged(action: ControlAction, overrides: ControlOverrides, gamepad?: GamepadOverrides): boolean {
+  const keys = Object.hasOwn(overrides, action.id) && !sameKeys(uniqueValid(overrides[action.id], isBindableKey, MAX_ACTION_KEYS), action.keys);
+  if (keys || !gamepad) return keys;
+  return Object.hasOwn(gamepad, action.id) && !sameKeys(uniqueValid(gamepad[action.id], isGamepadButton, MAX_ACTION_GAMEPAD), action.gamepad);
+}
+
+/**
+ * For each action id, the ids of the other actions that share at least one key or at least one gamepad button
+ * (one combined list, manifest order, no duplicates). Keys are compared with keys and buttons with buttons.
+ */
 export function findConflicts(actions: readonly ControlAction[]): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const a of actions) {
-    const others = actions.filter((b) => b.id !== a.id && b.keys.some((k) => a.keys.includes(k))).map((b) => b.id);
+    const others = actions
+      .filter((b) => b.id !== a.id && (b.keys.some((k) => a.keys.includes(k)) || b.gamepad.some((g) => a.gamepad.includes(g))))
+      .map((b) => b.id);
     if (others.length) Object.defineProperty(out, a.id, { value: others, enumerable: true, writable: true, configurable: true });
   }
   return out;
@@ -350,7 +415,7 @@ export function controlsHintedKey(gameId: string): string {
 
 /** Session fallback when localStorage throws (disabled storage, quota). `null` = "removed". */
 const memory = new Map<string, string | null>();
-const listeners = new Map<string, Set<(o: ControlOverrides) => void>>();
+const listeners = new Map<string, Set<(b: ControlBindings) => void>>();
 
 function storageGet(key: string): string | null {
   if (memory.has(key)) return memory.get(key) ?? null;
@@ -371,55 +436,104 @@ function storageSet(key: string, value: string | null): void {
   }
 }
 
-function parseStored(raw: string | null): ControlOverrides | null {
-  if (raw === null) return {};
-  if (new TextEncoder().encode(raw).length > CONTROLS_OVERRIDES_MAX_BYTES) return null;
+/** A parsed device entry (ARCHITECTURE § F016 "Device store"). */
+type StoredEntry = { bindings: ControlBindings; unsynced: string | null };
+
+function byteLength(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
+/**
+ * `{ v: 1, overrides, gamepad?, unsynced? }`. Malformed JSON, `v !== 1`, a non-object `overrides` or an oversize entry
+ * → null (the caller removes the key). A missing or non-object `gamepad` reads as {}, and an `unsynced` that is not a
+ * non-empty string as absent, so entries written by F009 code stay valid.
+ */
+function parseStored(raw: string | null): StoredEntry | null {
+  if (raw === null) return { bindings: emptyBindings(), unsynced: null };
+  if (byteLength(raw) > CONTROLS_OVERRIDES_MAX_BYTES) return null;
   try {
     const v: unknown = JSON.parse(raw);
     if (!isPlainObject(v) || v.v !== 1 || !isPlainObject(v.overrides)) return null;
-    return sanitizeOverrides(v.overrides);
+    return {
+      bindings: { keys: sanitizeOverrides(v.overrides), gamepad: sanitizeGamepadOverrides(v.gamepad) },
+      unsynced: typeof v.unsynced === "string" && v.unsynced !== "" ? v.unsynced : null,
+    };
   } catch {
     return null;
   }
 }
 
-/** The stored overrides of a game on this device. Malformed, unknown-version or oversize entries → {} (and removed). */
-export function readOverrides(gameId: string): ControlOverrides {
+function readEntry(gameId: string): StoredEntry {
   const key = controlsStorageKey(gameId);
   const parsed = parseStored(storageGet(key));
   if (parsed) return parsed;
   storageSet(key, null);
-  return {};
+  return { bindings: emptyBindings(), unsynced: null };
+}
+
+/** F016: the stored bindings (keys and gamepad) of a game on this device. Bad entries → empty (and removed). */
+export function readBindings(gameId: string): ControlBindings {
+  return readEntry(gameId).bindings;
+}
+
+/** F016: the id of the signed-in user whose latest change on this device is not yet confirmed by a `PUT`, or null. */
+export function readUnsynced(gameId: string): string | null {
+  return readEntry(gameId).unsynced;
+}
+
+/** The stored key overrides of a game on this device. Malformed, unknown-version or oversize entries → {} (and removed). */
+export function readOverrides(gameId: string): ControlOverrides {
+  return readBindings(gameId).keys;
 }
 
 /**
- * Stores a game's overrides and notifies subscribers. With `defaults` (the game's declared actions), ids that are no
- * longer declared and entries equal to the defaults are dropped; an empty result removes the key. Returns what is
- * stored. When localStorage throws, the value is kept in memory for this session.
+ * F016: stores a game's bindings and notifies subscribers when they changed. With `defaults` (the game's declared
+ * actions), ids that are no longer declared and entries equal to the defaults are dropped (keys and gamepad
+ * separately). `opts.unsynced`: a user id sets the marker, `null` clears it, absent keeps the stored one. The key is
+ * removed only when the bindings are empty and no marker is left. Returns the stored bindings. When localStorage
+ * throws, the value is kept in memory for this session.
  */
-export function writeOverrides(gameId: string, overrides: unknown, defaults?: readonly ControlAction[]): ControlOverrides {
+export function writeBindings(
+  gameId: string,
+  bindings: unknown,
+  defaults?: readonly ControlAction[],
+  opts: { unsynced?: string | null } = {},
+): ControlBindings {
   const key = controlsStorageKey(gameId);
-  const clean = pruneOverrides(overrides, defaults);
-  if (Object.keys(clean).length === 0) storageSet(key, null);
+  const prev = readEntry(gameId);
+  const clean = pruneBindings(bindings, defaults);
+  const unsynced = opts.unsynced === undefined ? prev.unsynced : opts.unsynced || null;
+  if (isEmptyBindings(clean) && !unsynced) storageSet(key, null);
   else {
-    // Sanitised overrides (32 ids × 3 codes) stay well under the cap; the check guards future table changes.
-    const json = JSON.stringify({ v: 1, overrides: clean });
-    storageSet(key, new TextEncoder().encode(json).length > CONTROLS_OVERRIDES_MAX_BYTES ? null : json);
+    const entry: Record<string, unknown> = { v: 1, overrides: clean.keys };
+    if (Object.keys(clean.gamepad).length > 0) entry.gamepad = clean.gamepad;
+    if (unsynced) entry.unsynced = unsynced;
+    // Sanitised bindings (32 ids × (3 codes + 2 names)) stay well under the cap; the check guards future table changes.
+    const json = JSON.stringify(entry);
+    storageSet(key, byteLength(json) > CONTROLS_OVERRIDES_MAX_BYTES ? null : json);
   }
-  notify(gameId, clean);
+  if (!sameBindings(prev.bindings, clean)) notify(gameId, clean);
   return clean;
 }
 
-function notify(gameId: string, o: ControlOverrides) {
+/**
+ * Stores a game's key overrides (F009 API) and notifies subscribers. The stored gamepad overrides and sync marker are
+ * kept. Returns the stored key overrides.
+ */
+export function writeOverrides(gameId: string, overrides: unknown, defaults?: readonly ControlAction[]): ControlOverrides {
+  return writeBindings(gameId, { keys: overrides, gamepad: readBindings(gameId).gamepad }, defaults).keys;
+}
+
+function notify(gameId: string, b: ControlBindings) {
   const set = listeners.get(gameId);
-  if (set) [...set].forEach((fn) => fn(o));
+  if (set) [...set].forEach((fn) => fn(b));
 }
 
 /**
- * Calls `fn` with the new overrides whenever they change in this window (`writeOverrides`) or in another tab of the
- * same origin (the `storage` event). Returns the unsubscribe function.
+ * F016: calls `fn` with the new bindings whenever they change in this window (`writeBindings`, `writeOverrides`) or in
+ * another tab of the same origin (the `storage` event). Returns the unsubscribe function.
  */
-export function subscribeOverrides(gameId: string, fn: (overrides: ControlOverrides) => void): () => void {
+export function subscribeBindings(gameId: string, fn: (bindings: ControlBindings) => void): () => void {
   let set = listeners.get(gameId);
   if (!set) listeners.set(gameId, (set = new Set()));
   set.add(fn);
@@ -427,7 +541,7 @@ export function subscribeOverrides(gameId: string, fn: (overrides: ControlOverri
   const onStorage = (e: StorageEvent) => {
     if (e.key !== key && e.key !== null) return;
     memory.delete(key);
-    fn(readOverrides(gameId));
+    fn(readBindings(gameId));
   };
   window.addEventListener("storage", onStorage);
   return () => {
@@ -437,14 +551,24 @@ export function subscribeOverrides(gameId: string, fn: (overrides: ControlOverri
   };
 }
 
-/** React hook: the stored overrides of a game, updated live. */
-export function useStoredOverrides(gameId: string): ControlOverrides {
-  const [state, setState] = useState(() => ({ gameId, value: readOverrides(gameId) }));
+/** Like {@link subscribeBindings}, with the key overrides only (F009 API). */
+export function subscribeOverrides(gameId: string, fn: (overrides: ControlOverrides) => void): () => void {
+  return subscribeBindings(gameId, (b) => fn(b.keys));
+}
+
+/** F016 React hook: the stored bindings of a game, updated live. */
+export function useStoredBindings(gameId: string): ControlBindings {
+  const [state, setState] = useState(() => ({ gameId, value: readBindings(gameId) }));
   useEffect(() => {
-    setState({ gameId, value: readOverrides(gameId) });
-    return subscribeOverrides(gameId, (value) => setState({ gameId, value }));
+    setState({ gameId, value: readBindings(gameId) });
+    return subscribeBindings(gameId, (value) => setState({ gameId, value }));
   }, [gameId]);
-  return state.gameId === gameId ? state.value : readOverrides(gameId);
+  return state.gameId === gameId ? state.value : readBindings(gameId);
+}
+
+/** React hook: the stored key overrides of a game, updated live (F009 API). */
+export function useStoredOverrides(gameId: string): ControlOverrides {
+  return useStoredBindings(gameId).keys;
 }
 
 /** True (and remembered) the first time it is called for a game on this device: the one-time first-play hint. */
@@ -518,7 +642,14 @@ export function useKeyboardLayout(): Map<string, string> | null {
   return layout;
 }
 
-/** The message posted to the game iframe: action ids and key codes only (no labels, no layout, no user data). */
-export function controlsMessage(defaults: readonly ControlAction[], overrides: unknown): { type: "webgame:controls"; overrides: ControlOverrides } {
-  return { type: "webgame:controls", overrides: pruneOverrides(overrides, defaults) };
+export type ControlsMessage = { type: "webgame:controls"; overrides: ControlOverrides; gamepad: GamepadOverrides };
+
+/**
+ * The message posted to the game iframe (GAME_FORMAT § F016): declared action ids, key codes and gamepad button names
+ * only, both pruned against the defaults. `gamepad` is always present (possibly {}), so each message replaces both
+ * sets. No labels, no layout, no `Gamepad.id`, no user data, no sync state.
+ */
+export function controlsMessage(defaults: readonly ControlAction[], bindings: ControlBindings): ControlsMessage {
+  const b = pruneBindings(bindings, defaults);
+  return { type: "webgame:controls", overrides: b.keys, gamepad: b.gamepad };
 }

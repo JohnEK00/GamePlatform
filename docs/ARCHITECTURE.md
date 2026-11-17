@@ -1237,3 +1237,16 @@ Gamepad remapping and synced control bindings (spec: `docs/features/F016-gamepad
   - backend-dev: the migration, `routes/controls.rs`, the router entry and body limit, `Limit::Controls` and `tests/f016.rs`.
   - frontend-dev: types, the client, `controls.ts`, `gamepadCapture.ts`, `controlsSync.ts`, `GamepadCaptureButton`, `ControlsPanel`, `ControlsSummary`, `GamePlayer`, `StudioPreview`, templates, the docs page, styles and tests.
   - desktop-dev: verification only (WebView2 gamepad capture, cross-app sync, CSP).
+
+### F016 implementation notes (frontend)
+- **Uploads stay with the user who made the change.** Each pending upload records the user id and token from when it was scheduled. Right before any `PUT`, the client checks them against the current session. If either differs, nothing is sent and the entry stays marked unsynced for the original user.
+  - The check covers the debounce timer, the `pagehide` and unmount keepalive flushes, the upload at sign-in, and adopting or uploading after a `GET`.
+  - There is no automatic retry. A later change or sign-in triggers the next attempt.
+- **Another user's unsynced change on the device:** if the device holds an unsynced change that belongs to a different user, the signed-in user skips the `GET`. Their footer reads "Saved on this device".
+  - The other user's change is neither overwritten nor uploaded into this account.
+  - The signed-in user's own next change takes the entry over and uploads it to their account.
+- **The unsynced marker in `writeBindings`:** leaving out `opts.unsynced` keeps the stored marker, `null` clears it, and a user id sets it. Writes that change only the marker don't notify subscribers, so no duplicate `webgame:controls` message is sent.
+- **Failed `GET`:** the "Couldn't save to your account" note shows only when the device holds bindings the account might be missing. A 404 from a server older than F016 counts as an upload failure.
+- **Games with no declared actions** never call the controls endpoints.
+- **Capture:** only one capture slot, key or gamepad, can be listening at a time.
+- **The row's Reset button** comes after the gamepad slots, because it resets both keys and gamepad buttons.

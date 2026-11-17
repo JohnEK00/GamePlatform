@@ -50,6 +50,9 @@ async function setup(game: GamePlayerGame = { ...base, actions: ACTIONS, control
   vi.spyOn(client, "recordPlay").mockResolvedValue({ plays: 1 });
   vi.spyOn(client, "listMyFavorites").mockResolvedValue({ items: [], total: 0, page: 1, perPage: 100 });
   vi.spyOn(client, "getSave").mockImplementation(() => (saveNever ? new Promise(() => {}) : Promise.resolve({ data: null, updatedAt: null })));
+  // F016: signed-in players sync bindings; these tests use an account without any.
+  vi.spyOn(client, "getControls").mockResolvedValue({ bindings: null, updatedAt: null });
+  vi.spyOn(client, "putControls").mockImplementation(async (_id, bindings) => ({ bindings, updatedAt: "2026-11-17T00:00:00Z" }));
   const ui = (g: GamePlayerGame) => (
     <WebGameProviders config={{ apiBaseUrl: "http://api.test", routerMode: "browser" }} client={client}>
       <MemoryRouter>
@@ -95,7 +98,7 @@ describe("GamePlayer controls (F009)", () => {
     await flush();
     const types = msgs(frameSpy).map((m) => m.type);
     expect(types).toEqual(["webgame:load", "webgame:controls"]);
-    expect(sent(frameSpy, "webgame:controls")[0]).toEqual({ type: "webgame:controls", overrides: { jump: ["KeyK"] } });
+    expect(sent(frameSpy, "webgame:controls")[0]).toEqual({ type: "webgame:controls", overrides: { jump: ["KeyK"] }, gamepad: {} });
     // A restart's hello gets it again.
     post(win, { type: "webgame:hello" });
     await flush();
@@ -120,7 +123,7 @@ describe("GamePlayer controls (F009)", () => {
     await flush(CLOUD_LOAD_TIMEOUT_MS);
     const types = msgs(frameSpy).map((m) => m.type);
     expect(types.slice(-2)).toEqual(["webgame:load", "webgame:controls"]);
-    expect(sent(frameSpy, "webgame:controls").at(-1)).toEqual({ type: "webgame:controls", overrides: { fire: ["KeyX"] } });
+    expect(sent(frameSpy, "webgame:controls").at(-1)).toEqual({ type: "webgame:controls", overrides: { fire: ["KeyX"] }, gamepad: {} });
   });
 
   it("posts the new overrides after a change in the panel and stores them on the device", async () => {
@@ -131,13 +134,13 @@ describe("GamePlayer controls (F009)", () => {
     const s = screen.getByRole("button", { name: /^Jump, key 3: / });
     fireEvent.click(s);
     fireEvent.keyDown(s, { code: "KeyK", key: "k" });
-    expect(sent(frameSpy, "webgame:controls").at(-1)).toEqual({ type: "webgame:controls", overrides: { jump: ["Space", "ArrowUp", "KeyK"] } });
+    expect(sent(frameSpy, "webgame:controls").at(-1)).toEqual({ type: "webgame:controls", overrides: { jump: ["Space", "ArrowUp", "KeyK"] }, gamepad: {} });
     expect(JSON.parse(localStorage.getItem(controlsStorageKey("g1"))!)).toEqual({ v: 1, overrides: { jump: ["Space", "ArrowUp", "KeyK"] } });
     // Nothing but ids and codes: no labels, no layout.
     const json = JSON.stringify(sent(frameSpy, "webgame:controls"));
     expect(json).not.toMatch(/Jump|Space,|↑|label|layout/);
     fireEvent.click(screen.getByRole("button", { name: "Reset all" }));
-    expect(sent(frameSpy, "webgame:controls").at(-1)).toEqual({ type: "webgame:controls", overrides: {} });
+    expect(sent(frameSpy, "webgame:controls").at(-1)).toEqual({ type: "webgame:controls", overrides: {}, gamepad: {} });
     expect(localStorage.getItem(controlsStorageKey("g1"))).toBeNull();
   });
 

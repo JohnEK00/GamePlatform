@@ -116,6 +116,18 @@ export {
   hasControls,
   sanitizeOverrides,
   pruneOverrides,
+  sanitizeGamepadOverrides,
+  sanitizeBindings,
+  pruneGamepadOverrides,
+  pruneBindings,
+  emptyBindings,
+  isEmptyBindings,
+  sameBindings,
+  readBindings,
+  readUnsynced,
+  writeBindings,
+  subscribeBindings,
+  useStoredBindings,
   effectiveActions,
   isActionChanged,
   findConflicts,
@@ -130,9 +142,16 @@ export {
   useKeyboardLayout,
   controlsMessage,
 } from "./controls";
-export type { ActionsProblem, ControlOverrides } from "./controls";
+export type { ActionsProblem, ControlsMessage } from "./controls";
 export { ControlsPanel } from "./components/ControlsPanel";
-export type { ControlsPanelProps } from "./components/ControlsPanel";
+export type { ControlsPanelProps, ControlsSyncState } from "./components/ControlsPanel";
+// F016: gamepad remapping and synced bindings
+export { startGamepadCapture, STANDARD_GAMEPAD_BUTTONS } from "./gamepadCapture";
+export type { GamepadCaptureMessage, GamepadCaptureOptions, GamepadLike } from "./gamepadCapture";
+export { GamepadCaptureButton, GAMEPAD_CAPTURE_TIMEOUT_MS } from "./components/GamepadCaptureButton";
+export type { GamepadCaptureButtonProps } from "./components/GamepadCaptureButton";
+export { useControlsSync, CONTROLS_SYNC_DEBOUNCE_MS } from "./controlsSync";
+export type { ControlsSync, ControlsSyncApi } from "./controlsSync";
 export { KeyCaptureButton, KEY_CAPTURE_TIMEOUT_MS } from "./components/KeyCaptureButton";
 export type { KeyCaptureButtonProps } from "./components/KeyCaptureButton";
 export { ControlsSummary } from "./components/ControlsSummary";

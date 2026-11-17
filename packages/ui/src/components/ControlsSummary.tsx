@@ -8,7 +8,7 @@ import {
   normalizeActions,
   PLAYER_CONTROLS_EVENT,
   useKeyboardLayout,
-  useStoredOverrides,
+  useStoredBindings,
 } from "../controls";
 
 export type ControlsSummaryProps = {
@@ -25,9 +25,9 @@ export function ControlsSummary({ game, className = "" }: ControlsSummaryProps) 
   const headingId = useId();
   const defaults = useMemo(() => normalizeActions(game.actions), [game.actions]);
   const hint = (game.controlsHint ?? "").trim();
-  const overrides = useStoredOverrides(game.id);
+  const bindings = useStoredBindings(game.id);
   const layout = useKeyboardLayout();
-  const effective = useMemo(() => effectiveActions(defaults, overrides), [defaults, overrides]);
+  const effective = useMemo(() => effectiveActions(defaults, bindings.keys, bindings.gamepad), [defaults, bindings]);
   if (!hasControls(defaults, hint)) return null;
 
   return (

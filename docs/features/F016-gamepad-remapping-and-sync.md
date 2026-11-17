@@ -28,7 +28,7 @@ Non-goals (later items): remapping analog sticks or axes, dead-zone and trigger-
 ## 2. UX notes
 
 ### 2.1 Controls panel (`ControlsPanel`)
-- The **Gamepad** column becomes two `GamepadCaptureButton` slots per action (same layout as the three key slots). A filled slot shows the label (`gamepadLabel`, e.g. "A", "D-pad ↑") and a small × "Clear" button (`aria-label="Clear {button} from {action}"`). An empty slot shows "—".
+- The **Gamepad** column becomes two `GamepadCaptureButton` slots per action (same layout as the three key slots). A filled slot shows the label (`gamepadLabel`, e.g. "A", "D-pad ↑") and a small × "Clear" button (`aria-label="Clear gamepad {button} from {action}"`). An empty slot shows "—".
 - Clicking a slot enters **gamepad capture** (§ 2.2). Only one slot (key or gamepad) can be in capture mode at a time.
 - **Changed** tag and the row **Reset** button now cover keys **and** gamepad buttons: Reset restores both to the defaults. **Reset all** likewise.
 - **Unbound** ("Unbound" in the warning colour) uses the effective keys and effective gamepad buttons.

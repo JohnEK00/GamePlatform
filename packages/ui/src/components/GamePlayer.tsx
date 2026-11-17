@@ -17,12 +17,12 @@ import {
   hasControls,
   normalizeActions,
   PLAYER_CONTROLS_EVENT,
-  readOverrides,
-  subscribeOverrides,
+  readBindings,
+  subscribeBindings,
   takeControlsHint,
-  useStoredOverrides,
-  writeOverrides,
+  useStoredBindings,
 } from "../controls";
+import { useControlsSync } from "../controlsSync";
 import {
   GAME_LEADERBOARD_MAX_LIMIT,
   isRequestId,
@@ -221,11 +221,13 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
   // F005: 📷 requests, game shares, PLAYER_SCREENSHOT_EVENT and the in-memory tray.
   const shots = useScreenshotCapture(iframeRef, { mode: "player", title: game.title, ready: ready && !error });
 
-  // F009: declared actions (defaults), the hint, on-device overrides and the ⌨ panel.
+  // F009/F016: declared actions (defaults), the hint, on-device bindings (synced with the account when signed in) and
+  // the ⌨ panel.
   const defaults = useMemo(() => normalizeActions(game.actions), [game.actions]);
   const controlsHint = (game.controlsHint ?? "").trim();
   const showControls = hasControls(defaults, controlsHint);
-  const overrides = useStoredOverrides(game.id);
+  const bindings = useStoredBindings(game.id);
+  const controlsSync = useControlsSync(game.id, defaults, user, api);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [controlsHinting, setControlsHinting] = useState(false);
 
@@ -406,11 +408,11 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           const reply = (d: Record<string, unknown> | null) => {
             source.postMessage({ type: "webgame:load", data: d }, "*");
             // F009: right after the first load reply to each hello (restarts too). Reads the latest actions and
-            // overrides when it runs, which may be after the cloud-load timeout.
+            // bindings when it runs, which may be after the cloud-load timeout.
             if (controlsSent) return;
             controlsSent = true;
             const { defaults: d0, game: g0 } = latest.current;
-            if (d0.length > 0) source.postMessage(controlsMessage(d0, readOverrides(g0.id)), "*");
+            if (d0.length > 0) source.postMessage(controlsMessage(d0, readBindings(g0.id)), "*");
           };
           const st = cloud.current;
           const best = (): Record<string, unknown> | null => {
@@ -647,12 +649,12 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
     if (!showControls) setControlsOpen(false);
   }, [showControls]);
 
-  // F009: every override change (this panel, another tab) goes to the running game at once.
+  // F009/F016: every binding change (this panel, another tab, an adopted account copy) goes to the running game at once.
   useEffect(
     () =>
-      subscribeOverrides(game.id, (o) => {
+      subscribeBindings(game.id, (b) => {
         const d = latest.current.defaults;
-        if (d.length > 0) post(controlsMessage(d, o));
+        if (d.length > 0) post(controlsMessage(d, b));
       }),
     [game.id, post],
   );
@@ -823,8 +825,9 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
           title={game.title}
           hint={controlsHint}
           actions={defaults}
-          overrides={overrides}
-          onChange={(o) => writeOverrides(game.id, o, defaults)}
+          bindings={bindings}
+          onChange={controlsSync.change}
+          syncState={controlsSync.syncState}
           onClose={() => setControlsOpen(false)}
         />
       )}

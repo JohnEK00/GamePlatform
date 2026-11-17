@@ -5,7 +5,8 @@ import { GAME_IFRAME_SANDBOX } from "../components/GamePlayer";
 import { Spinner } from "../components/common";
 import { ControlsPanel } from "../components/ControlsPanel";
 import { usePauseReasons } from "../components/usePauseReasons";
-import { controlsMessage, hasControls, normalizeActions, normalizeControlsHint, PLAYER_CONTROLS_EVENT, pruneOverrides, type ControlOverrides } from "../controls";
+import type { ControlBindings } from "../api/types";
+import { controlsMessage, emptyBindings, hasControls, normalizeActions, normalizeControlsHint, PLAYER_CONTROLS_EVENT, pruneBindings } from "../controls";
 import { ScreenshotTray } from "../components/ScreenshotTray";
 import { useScreenshotCapture } from "../components/useScreenshotCapture";
 import { asManifest, leaderboardOf, manifestForBundle, type StudioProject } from "./project";
@@ -78,16 +79,16 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
   const runTitle = String(asManifest(run.current.project.manifest).name ?? "") || "game";
   const shots = useScreenshotCapture(iframeRef, { mode: "studio", title: runTitle, ready });
 
-  // F009: the running snapshot's actions (parsed leniently, like the engine) and hint; overrides live in memory for
-  // the Studio session only (never localStorage, never the API).
+  // F009/F016: the running snapshot's actions (parsed leniently, like the engine) and hint; key and gamepad bindings live
+  // in memory for the Studio session only (never localStorage, never the API).
   const runManifest = run.current.project.manifest;
   const defaults = useMemo(() => normalizeActions(asManifest(runManifest).actions), [runManifest]);
   const controlsHint = useMemo(() => normalizeControlsHint(asManifest(runManifest).controls), [runManifest]);
   const showControls = hasControls(defaults, controlsHint);
-  const [overrides, setOverrides] = useState<ControlOverrides>({});
+  const [bindings, setBindings] = useState<ControlBindings>(emptyBindings);
   const [controlsOpen, setControlsOpen] = useState(false);
-  const controls = useRef({ defaults, overrides, showControls });
-  controls.current = { defaults, overrides, showControls };
+  const controls = useRef({ defaults, bindings, showControls });
+  controls.current = { defaults, bindings, showControls };
 
   const post = useCallback((msg: object) => iframeRef.current?.contentWindow?.postMessage(msg, "*"), []);
   const setPause = usePauseReasons(post);
@@ -108,9 +109,9 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
     return () => window.removeEventListener(PLAYER_CONTROLS_EVENT, onOpen);
   }, []);
 
-  const changeOverrides = (o: ControlOverrides) => {
-    const next = pruneOverrides(o, defaults);
-    setOverrides(next);
+  const changeBindings = (b: ControlBindings) => {
+    const next = pruneBindings(b, defaults);
+    setBindings(next);
     if (defaults.length > 0) post(controlsMessage(defaults, next));
   };
 
@@ -139,9 +140,9 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
         }
         case "webgame:hello": {
           source.postMessage({ type: "webgame:load", data: save.current }, "*");
-          // F009: the in-memory overrides, right after the load reply (each run and restart).
-          const { defaults: d, overrides: o } = controls.current;
-          if (d.length > 0) source.postMessage(controlsMessage(d, o), "*");
+          // F009/F016: the in-memory bindings, right after the load reply (each run and restart).
+          const { defaults: d, bindings: b } = controls.current;
+          if (d.length > 0) source.postMessage(controlsMessage(d, b), "*");
           return;
         }
         case "webgame:save": {
@@ -272,8 +273,8 @@ export function StudioPreview({ project, runId, onLog, className = "" }: StudioP
           title={runTitle}
           hint={controlsHint}
           actions={defaults}
-          overrides={overrides}
-          onChange={changeOverrides}
+          bindings={bindings}
+          onChange={changeBindings}
           onClose={() => setControlsOpen(false)}
         />
       )}

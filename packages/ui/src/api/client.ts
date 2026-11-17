@@ -2,6 +2,9 @@ import type {
   ApiErrorCode,
   AuthResponse,
   CloudSave,
+  ControlBindings,
+  ControlBindingsResponse,
+  PutControlsResponse,
   Collection,
   CollectionItemResponse,
   CollectionRemoveResponse,
@@ -531,6 +534,19 @@ export class ApiClient {
   }
   deleteSave(id: string): Promise<void> {
     return this.request(`/api/games/${encodeURIComponent(id)}/save`, { method: "DELETE" });
+  }
+
+  // ---------- F016: synced control bindings ----------
+  /** The caller's bindings for a game: `{ bindings: null, updatedAt: null }` when none were ever stored. */
+  getControls(id: string, signal?: AbortSignal): Promise<ControlBindingsResponse> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/controls`, { signal });
+  }
+  /**
+   * Stores the caller's bindings for a game; returns the normalised copy. `opts.keepalive` as for
+   * {@link ApiClient.putSave} (use it for the unmount / pagehide flush).
+   */
+  putControls(id: string, bindings: ControlBindings, opts: { keepalive?: boolean } = {}): Promise<PutControlsResponse> {
+    return this.request(`/api/games/${encodeURIComponent(id)}/controls`, { method: "PUT", json: { bindings }, keepalive: opts.keepalive });
   }
 
   // ---------- v2: Analytics ----------

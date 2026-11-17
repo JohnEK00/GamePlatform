@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { isBindableKeyboardCode, keyLabel } from "../controls";
+import { claimCapture } from "./captureSlot";
 
 /** How long capture mode waits for a key before giving up (F009 § 2.2). */
 export const KEY_CAPTURE_TIMEOUT_MS = 10_000;
@@ -63,9 +64,11 @@ export function KeyCaptureButton({ code, actionName, slot, onAssign, onClear, la
       stop();
     };
     const timer = setTimeout(stop, KEY_CAPTURE_TIMEOUT_MS);
+    const release = claimCapture(stop);
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("mousedown", onPointer, true);
     return () => {
+      release();
       clearTimeout(timer);
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("mousedown", onPointer, true);

@@ -6,10 +6,9 @@ import { useState } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "../api/client";
-import type { ControlAction, NotificationListQuery, NotificationPage } from "../api/types";
+import type { ControlAction, ControlBindings, ControlOverrides, NotificationListQuery, NotificationPage } from "../api/types";
 import { ControlsPanel } from "../components/ControlsPanel";
 import { useModal } from "../components/useModal";
-import type { ControlOverrides } from "../controls";
 import { NotificationsPage } from "../pages/NotificationsPage";
 import { WebGameProviders } from "../WebGameApp";
 import { ava, me, mia, noah, notif } from "./notifFixtures";
@@ -26,8 +25,8 @@ const ACTIONS: ControlAction[] = [
 ];
 
 function ControlsHarness({ initial = {} }: { initial?: ControlOverrides }) {
-  const [o, setO] = useState<ControlOverrides>(initial);
-  return <ControlsPanel mode="player" title="Pixel Peaks" actions={ACTIONS} overrides={o} onChange={setO} onClose={() => {}} />;
+  const [b, setB] = useState<ControlBindings>({ keys: initial, gamepad: {} });
+  return <ControlsPanel mode="player" title="Pixel Peaks" actions={ACTIONS} bindings={b} onChange={setB} onClose={() => {}} />;
 }
 
 const slot = (action: string, n: number) => screen.getByRole("button", { name: new RegExp(`^${action}, key ${n}: `) });

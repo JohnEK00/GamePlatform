@@ -1,21 +1,29 @@
 import { useId, useMemo, useRef, useState } from "react";
-import type { ControlAction } from "../api/types";
+import type { ControlAction, ControlBindings, GamepadButtonName } from "../api/types";
 import {
   effectiveActions,
+  emptyBindings,
   findConflicts,
   gamepadLabel,
   hasCtrlShortcutRisk,
   isActionChanged,
   keyLabel,
+  MAX_ACTION_GAMEPAD,
   MAX_ACTION_KEYS,
   useKeyboardLayout,
-  type ControlOverrides,
 } from "../controls";
+import { GamepadCaptureButton } from "./GamepadCaptureButton";
 import { KeyCaptureButton } from "./KeyCaptureButton";
 import { useModal } from "./useModal";
 
+/**
+ * Where a player's bindings are kept, for the footer (F016 § 2.1): `"device"` (anonymous), `"account"` (signed in, last
+ * sync OK or pending) or `"failed"` (signed in, the last upload failed).
+ */
+export type ControlsSyncState = "device" | "account" | "failed";
+
 export type ControlsPanelProps = {
-  /** "player": changes are saved on this device. "studio": kept in memory for the Studio session. */
+  /** "player": changes are saved on this device (and the account when signed in). "studio": kept in memory. */
   mode: "player" | "studio";
   /** Game title (subtitle). */
   title: string;
@@ -23,69 +31,104 @@ export type ControlsPanelProps = {
   hint?: string;
   /** The game's declared actions (defaults), in manifest order. */
   actions: readonly ControlAction[];
-  /** Current overrides (action id → keys). */
-  overrides: ControlOverrides;
+  /** Current bindings (key and gamepad overrides). */
+  bindings: ControlBindings;
   /** Every change is applied at once: the parent stores it and posts `webgame:controls`. */
-  onChange: (overrides: ControlOverrides) => void;
+  onChange: (bindings: ControlBindings) => void;
+  /** Player mode footer. Default "device". Ignored in Studio mode. */
+  syncState?: ControlsSyncState;
   onClose: () => void;
 };
 
-function withKeys(overrides: ControlOverrides, action: ControlAction, keys: string[]): ControlOverrides {
-  const rest = Object.fromEntries(Object.entries(overrides).filter(([id]) => id !== action.id));
-  const same = keys.length === action.keys.length && keys.every((k, i) => k === action.keys[i]);
-  return same ? rest : { ...rest, [action.id]: keys };
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+function withEntry<T extends string>(map: Record<string, T[]>, id: string, value: T[], defaults: readonly T[]): Record<string, T[]> {
+  const rest = Object.fromEntries(Object.entries(map).filter(([k]) => k !== id));
+  return sameList(value, defaults) ? rest : { ...rest, [id]: value };
+}
+
+/** Puts `value` into `slot` (compacting to the filled slots); the same value in another slot moves here. */
+function placeInSlot<T extends string>(current: readonly T[], slot: number, value: T, slots: number): T[] {
+  const list: (T | null)[] = Array.from({ length: slots }, (_, i) => current[i] ?? null);
+  for (let i = 0; i < list.length; i++) if (i !== slot && list[i] === value) list[i] = null;
+  list[Math.min(slot, current.length)] = value;
+  return list.filter((k): k is T => k !== null);
 }
 
 /**
- * The ⌨ controls dialog (F009 § 2.2): the hint text, then one row per action with three key slots and the read-only
- * gamepad buttons. Conflicts are warnings, never blocking. Labels follow the parent's keyboard layout when the
- * browser exposes it.
+ * The ⌨ controls dialog (F009 § 2.2, F016 § 2.1): the hint text, then one row per action with three key slots and two
+ * gamepad slots. Changed / Reset / Unbound and conflicts cover keys and gamepad buttons. Conflicts are warnings, never
+ * blocking. Key labels follow the parent's keyboard layout when the browser exposes it; controller names are never
+ * shown.
  */
-export function ControlsPanel({ mode, title, hint, actions, overrides, onChange, onClose }: ControlsPanelProps) {
+export function ControlsPanel({ mode, title, hint, actions, bindings, onChange, syncState = "device", onClose }: ControlsPanelProps) {
   const uid = useId();
   const ref = useModal<HTMLDivElement>(true, onClose, { initialFocus: "[data-autofocus]" });
   const layout = useKeyboardLayout();
-  const effective = useMemo(() => effectiveActions(actions, overrides), [actions, overrides]);
+  const effective = useMemo(() => effectiveActions(actions, bindings.keys, bindings.gamepad), [actions, bindings]);
   const conflicts = useMemo(() => findConflicts(effective), [effective]);
   const ctrlRisk = hasCtrlShortcutRisk(effective);
   const nameOf = (id: string) => actions.find((a) => a.id === id)?.name ?? id;
-  const anyChanged = actions.some((a) => isActionChanged(a, overrides));
+  const changedAt = (i: number) => isActionChanged(actions[i], bindings.keys, bindings.gamepad);
+  const anyChanged = actions.some((_, i) => changedAt(i));
   const hintText = (hint ?? "").trim();
   const tableRef = useRef<HTMLTableElement>(null);
   const doneRef = useRef<HTMLButtonElement>(null);
   // Polite announcement of a conflict created by an assignment (review 4, L6b).
   const [live, setLive] = useState<{ text: string; n: number }>({ text: "", n: 0 });
 
-  const setKeys = (index: number, keys: string[]) => onChange(withKeys(overrides, actions[index], keys));
+  const withKeys = (index: number, keys: string[]): ControlBindings => ({
+    ...bindings,
+    keys: withEntry(bindings.keys, actions[index].id, keys, actions[index].keys),
+  });
+  const withPad = (index: number, pad: GamepadButtonName[]): ControlBindings => ({
+    ...bindings,
+    gamepad: withEntry(bindings.gamepad, actions[index].id, pad, actions[index].gamepad),
+  });
 
-  const assign = (index: number, slot: number, code: string) => {
-    const cur = effective[index].keys;
-    const slots: (string | null)[] = Array.from({ length: MAX_ACTION_KEYS }, (_, i) => cur[i] ?? null);
-    // A code already in another slot of this action moves here.
-    for (let i = 0; i < slots.length; i++) if (i !== slot && slots[i] === code) slots[i] = null;
-    slots[Math.min(slot, cur.length)] = code;
-    const keys = slots.filter((k): k is string => k !== null);
-    const next = withKeys(overrides, actions[index], keys);
+  const commit = (index: number, next: ControlBindings, what: string) => {
     const id = actions[index].id;
     const before = new Set(conflicts[id] ?? []);
-    const fresh = (findConflicts(effectiveActions(actions, next))[id] ?? []).filter((o) => !before.has(o));
+    const fresh = (findConflicts(effectiveActions(actions, next.keys, next.gamepad))[id] ?? []).filter((o) => !before.has(o));
     onChange(next);
     if (fresh.length) {
-      const text = `${keyLabel(code, layout)} is also used by ${fresh.map(nameOf).join(", ")}`;
+      const text = `${what} is also used by ${fresh.map(nameOf).join(", ")}`;
       setLive((l) => ({ text, n: l.n + 1 }));
     }
   };
-  const clear = (index: number, slot: number) => setKeys(index, effective[index].keys.filter((_, i) => i !== slot));
+
+  const assignKey = (index: number, slot: number, code: string) =>
+    commit(index, withKeys(index, placeInSlot(effective[index].keys, slot, code, MAX_ACTION_KEYS)), keyLabel(code, layout));
+  const clearKey = (index: number, slot: number) => onChange(withKeys(index, effective[index].keys.filter((_, i) => i !== slot)));
+  const assignPad = (index: number, slot: number, name: GamepadButtonName) =>
+    commit(index, withPad(index, placeInSlot(effective[index].gamepad, slot, name, MAX_ACTION_GAMEPAD)), gamepadLabel(name));
+  const clearPad = (index: number, slot: number) => onChange(withPad(index, effective[index].gamepad.filter((_, i) => i !== slot)));
+
   // "Reset" unmounts once the row is back to defaults: focus moves to the row's first key button first (L6a).
   const resetRow = (index: number) => {
     tableRef.current?.querySelector<HTMLElement>(`tr[data-action-row="${index}"] .pf-keycap__btn`)?.focus();
-    onChange(withKeys(overrides, actions[index], actions[index].keys));
+    const id = actions[index].id;
+    const drop = <T,>(m: Record<string, T>) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== id));
+    onChange({ keys: drop(bindings.keys), gamepad: drop(bindings.gamepad) });
   };
   // "Reset all" unmounts after a click: focus moves to Done.
   const resetAll = () => {
     doneRef.current?.focus();
-    onChange({});
+    onChange(emptyBindings());
   };
+
+  const footer =
+    mode === "studio" ? (
+      <span className="pf-muted pf-small pf-controls__saved">Kept for this Studio session</span>
+    ) : syncState === "failed" ? (
+      <span className="pf-small pf-controls__saved pf-controls__saved--failed" role="status">
+        Saved on this device. Couldn't save to your account; it will be retried.
+      </span>
+    ) : (
+      <span className="pf-muted pf-small pf-controls__saved">{syncState === "account" ? "Saved to your account" : "Saved on this device"}</span>
+    );
 
   return (
     <div className="pf-modal-backdrop pf-controls-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -117,7 +160,7 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
               <tbody>
                 {effective.map((a, i) => {
                   const others = conflicts[a.id];
-                  const changed = isActionChanged(actions[i], overrides);
+                  const changed = changedAt(i);
                   const unbound = a.keys.length === 0 && a.gamepad.length === 0;
                   const warnId = `${uid}-warn-${i}`;
                   const warn = others?.length || unbound;
@@ -142,8 +185,23 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
                               slot={s}
                               layout={layout}
                               describedBy={warn ? warnId : undefined}
-                              onAssign={(code) => assign(i, s, code)}
-                              onClear={() => clear(i, s)}
+                              onAssign={(code) => assignKey(i, s, code)}
+                              onClear={() => clearKey(i, s)}
+                            />
+                          ))}
+                        </div>
+                      </td>
+                      <td className="pf-controls__pad">
+                        <div className="pf-controls__keys">
+                          {Array.from({ length: MAX_ACTION_GAMEPAD }, (_, s) => (
+                            <GamepadCaptureButton
+                              key={s}
+                              button={a.gamepad[s] ?? null}
+                              actionName={a.name}
+                              slot={s}
+                              describedBy={warn ? warnId : undefined}
+                              onAssign={(name) => assignPad(i, s, name)}
+                              onClear={() => clearPad(i, s)}
                             />
                           ))}
                           {changed && (
@@ -153,7 +211,6 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
                           )}
                         </div>
                       </td>
-                      <td className="pf-controls__pad">{a.gamepad.length ? a.gamepad.map(gamepadLabel).join(", ") : "—"}</td>
                     </tr>
                   );
                 })}
@@ -174,7 +231,7 @@ export function ControlsPanel({ mode, title, hint, actions, overrides, onChange,
               Reset all
             </button>
           )}
-          {effective.length > 0 && <span className="pf-muted pf-small pf-controls__saved">{mode === "studio" ? "Kept for this Studio session" : "Saved on this device"}</span>}
+          {effective.length > 0 && footer}
           <button type="button" className="pf-btn pf-btn--primary pf-btn--sm" onClick={onClose} data-autofocus ref={doneRef}>
             Done
           </button>

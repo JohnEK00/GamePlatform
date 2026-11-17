@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlAction } from "../api/types";
 import { ControlsSummary } from "../components/ControlsSummary";
-import { controlsStorageKey, PLAYER_CONTROLS_EVENT, resetControlsStoreForTests, writeOverrides } from "../controls";
+import { controlsStorageKey, PLAYER_CONTROLS_EVENT, resetControlsStoreForTests, writeBindings, writeOverrides } from "../controls";
 
 const ACTIONS: ControlAction[] = [
   { id: "jump", name: "Jump", keys: ["Space", "ArrowUp"], gamepad: ["A"] },
@@ -41,6 +41,16 @@ describe("ControlsSummary", () => {
       window.dispatchEvent(new StorageEvent("storage", { key: controlsStorageKey("g1") }));
     });
     expect(items()[0]).toBe("Jump — A");
+  });
+
+  it("shows the effective gamepad buttons, updated live (F016)", () => {
+    localStorage.setItem(controlsStorageKey("g1"), JSON.stringify({ v: 1, overrides: {}, gamepad: { jump: ["B"], menu: [] } }));
+    render(<ControlsSummary game={{ id: "g1", actions: ACTIONS }} />);
+    expect(items()).toEqual(["Jump — Space, ↑ · B", "Move left — ← · D-pad ←", "Menu — Unbound"]);
+    act(() => {
+      writeBindings("g1", { keys: { left: ["KeyA"] }, gamepad: { left: ["LB", "Left"] } }, ACTIONS);
+    });
+    expect(items()).toEqual(["Jump — Space, ↑ · A", "Move left — A · LB, D-pad ←", "Menu — Start"]);
   });
 
   it("Customize dispatches PLAYER_CONTROLS_EVENT; hidden for hint-only games", () => {

@@ -119,6 +119,26 @@ export type ControlAction = {
   gamepad: GamepadButtonName[];
 };
 
+/** F009: player key overrides: action id → bindable codes (replaces that action's default keys). */
+export type ControlOverrides = Record<string, string[]>;
+
+/** F016: player gamepad overrides: action id → gamepad button names (replaces that action's default buttons). */
+export type GamepadOverrides = Record<string, GamepadButtonName[]>;
+
+/** F016: a player's control bindings for one game (API.md § F016). */
+export type ControlBindings = {
+  /** Up to 32 ids; each value 0–3 unique bindable codes (Mouse0..2 allowed). */
+  keys: ControlOverrides;
+  /** Up to 32 ids; each value 0–2 unique gamepad button names (no `Home`). */
+  gamepad: GamepadOverrides;
+};
+
+/** F016: `GET /api/games/{id}/controls`. Both null when the caller never stored bindings for the game. */
+export type ControlBindingsResponse = { bindings: ControlBindings | null; updatedAt: string | null };
+
+/** F016: `PUT /api/games/{id}/controls` → the normalised copy that was stored. */
+export type PutControlsResponse = { bindings: ControlBindings; updatedAt: string };
+
 /** F004: one row of a game's version history. */
 export type GameVersion = {
   /** >= 1 */

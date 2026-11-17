@@ -556,7 +556,8 @@ export default {
       if (ui.button("help", "HOW TO PLAY", bx, 164, BTN_W, BTN_H)) this.go(engine, "help", "back");
       ui.label("BEST " + this.best, cx, 214, { color: "#8b91b0", align: "center" });
     } else if (this.state === "help") {
-      const key = (id) => input.actionLabel(id).toUpperCase();
+      // "auto": the player's key, or their gamepad button after they last touched a controller (F016).
+      const key = (id) => input.actionLabel(id, "auto").toUpperCase();
       ui.panel(cx - 110, 60, 220, 130);
       ui.label(
         ["CATCH THE FALLING STARS.", "MISS THREE AND IT'S OVER.", "", "MOVE: LEFT / RIGHT", "CHOOSE: " + key("confirm"), "PAUSE: " + key("pause")].join("\\n"),

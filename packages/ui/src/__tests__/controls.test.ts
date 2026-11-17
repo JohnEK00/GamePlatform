@@ -2,6 +2,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlAction } from "../api/types";
 import {
   BINDABLE_KEYS,
+  CONTROLS_OVERRIDES_MAX_BYTES,
+  isActionChanged,
+  pruneBindings,
+  readBindings,
+  readUnsynced,
+  sanitizeBindings,
+  sanitizeGamepadOverrides,
+  subscribeBindings,
+  writeBindings,
   controlsMessage,
   controlsStorageKey,
   effectiveActions,
@@ -152,6 +161,8 @@ describe("validateActions (backend rules)", () => {
     expect(validateActions(t.manifest)).toEqual([]);
     expect(normalizeActions(t.manifest.actions).map((a) => a.id)).toContain("confirm");
     expect(t.files["main.js"]).toContain("engine.ui.button(");
+    // F016: its prompts follow the last device.
+    expect(t.files["main.js"]).toContain('actionLabel(id, "auto")');
   });
 });
 
@@ -212,7 +223,7 @@ describe("overrides", () => {
       expect(readOverrides("g2")).toEqual({});
       expect(localStorage.getItem(key)).toBeNull();
     }
-    localStorage.setItem(key, JSON.stringify({ v: 1, overrides: { jump: ["KeyK"] }, pad: "x".repeat(5000) }));
+    localStorage.setItem(key, JSON.stringify({ v: 1, overrides: { jump: ["KeyK"] }, pad: "x".repeat(8200) }));
     expect(readOverrides("g2")).toEqual({});
     expect(localStorage.getItem(key)).toBeNull();
     // Invalid codes and ids inside a valid entry are dropped.
@@ -249,8 +260,19 @@ describe("overrides", () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("controlsMessage carries only declared ids and codes", () => {
-    expect(controlsMessage(defaults, { jump: ["KeyK"], gone: ["KeyQ"], fire: ["KeyZ"] })).toEqual({ type: "webgame:controls", overrides: { jump: ["KeyK"] } });
+  it("controlsMessage carries only declared ids, codes and button names, and always has gamepad", () => {
+    expect(controlsMessage(defaults, { keys: { jump: ["KeyK"], gone: ["KeyQ"], fire: ["KeyZ"] }, gamepad: {} })).toEqual({
+      type: "webgame:controls",
+      overrides: { jump: ["KeyK"] },
+      gamepad: {},
+    });
+    expect(controlsMessage(defaults, { keys: {}, gamepad: { jump: ["B", "Home" as never], fire: [], gone: ["A"] } })).toEqual({
+      type: "webgame:controls",
+      overrides: {},
+      gamepad: { jump: ["B"] }, // fire has no default buttons, so its [] equals the defaults and is pruned
+    });
+    expect(controlsMessage(defaults, { keys: {}, gamepad: { jump: ["A"] } }).gamepad).toEqual({});
+    expect(controlsMessage(defaults, null as never)).toEqual({ type: "webgame:controls", overrides: {}, gamepad: {} });
   });
 
   it("the first-play hint is taken once per game", () => {
@@ -266,11 +288,149 @@ function readOverridesFrom(raw: string) {
   return readOverrides("gp");
 }
 
+describe("gamepad bindings (F016)", () => {
+  const defaults = [act("jump", ["Space", "ArrowUp"], ["A"]), act("fire", ["KeyZ"]), act("menu", [], ["Start", "Up"])];
+
+  it("sanitizeGamepadOverrides keeps valid ids, arrays, table names, unique, ≤ 2, ≤ 32 ids", () => {
+    expect(sanitizeGamepadOverrides({ jump: ["B", "B", "Home", "Triangle", 3, "X", "Y"], BAD: ["A"], fire: "A", menu: [] })).toEqual({
+      jump: ["B", "X"],
+      menu: [],
+    });
+    expect(sanitizeGamepadOverrides([["A"]])).toEqual({});
+    expect(sanitizeGamepadOverrides(null)).toEqual({});
+    const many = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`a${i}`, ["A"]]));
+    expect(Object.keys(sanitizeGamepadOverrides(many))).toHaveLength(32);
+    const proto = sanitizeGamepadOverrides(JSON.parse('{"__proto__":["A"]}'));
+    expect(Object.getPrototypeOf(proto)).toBe(Object.prototype);
+  });
+
+  it("sanitizeBindings handles missing, null and bad parts", () => {
+    expect(sanitizeBindings(null)).toEqual({ keys: {}, gamepad: {} });
+    expect(sanitizeBindings({ keys: null, gamepad: [] })).toEqual({ keys: {}, gamepad: {} });
+    expect(sanitizeBindings({ keys: { jump: ["KeyK", "Escape"] }, gamepad: { jump: ["B"] }, extra: 1 })).toEqual({ keys: { jump: ["KeyK"] }, gamepad: { jump: ["B"] } });
+  });
+
+  it("effectiveActions applies gamepad overrides like the engine", () => {
+    expect(effectiveActions(defaults, {}, { jump: ["B"] })[0]).toEqual({ ...defaults[0], gamepad: ["B"] });
+    expect(effectiveActions(defaults, {}, { jump: [] })[0].gamepad).toEqual([]);
+    expect(effectiveActions(defaults, {}, { jump: [] })[0].keys).toEqual(["Space", "ArrowUp"]);
+    expect(effectiveActions(defaults, {}, { jump: ["Home", "X", "X", "Y", "B"] })[0].gamepad).toEqual(["X", "Y"]);
+    expect(effectiveActions(defaults, {}, { nope: ["B"], jump: "B" })).toEqual(defaults);
+    expect(effectiveActions(defaults, { jump: ["KeyK"] }, { jump: ["B"] })[0]).toMatchObject({ keys: ["KeyK"], gamepad: ["B"] });
+    expect(effectiveActions(defaults, { jump: ["KeyK"] })[0].gamepad).toEqual(["A"]);
+  });
+
+  it("pruneBindings drops undeclared ids and entries equal to the defaults, keys and gamepad separately", () => {
+    expect(
+      pruneBindings(
+        { keys: { gone: ["KeyQ"], jump: ["Space", "ArrowUp"], fire: ["KeyX"] }, gamepad: { menu: ["Start", "Up"], jump: ["B"], gone: ["A"], fire: ["X"] } },
+        defaults,
+      ),
+    ).toEqual({ keys: { fire: ["KeyX"] }, gamepad: { jump: ["B"], fire: ["X"] } });
+    // Manifest order.
+    expect(Object.keys(pruneBindings({ keys: {}, gamepad: { menu: ["A"], jump: ["B"] } }, defaults).gamepad)).toEqual(["jump", "menu"]);
+    // Same buttons in another order differ from the defaults.
+    expect(pruneBindings({ keys: {}, gamepad: { menu: ["Up", "Start"] } }, defaults).gamepad).toEqual({ menu: ["Up", "Start"] });
+  });
+
+  it("isActionChanged covers keys and gamepad buttons", () => {
+    expect(isActionChanged(defaults[0], {}, { jump: ["B"] })).toBe(true);
+    expect(isActionChanged(defaults[0], {}, { jump: ["A"] })).toBe(false);
+    expect(isActionChanged(defaults[0], { jump: ["KeyK"] }, {})).toBe(true);
+    expect(isActionChanged(defaults[0], {}, {})).toBe(false);
+    expect(isActionChanged(defaults[0], {})).toBe(false);
+  });
+
+  it("round-trips bindings and the unsynced marker through the store", () => {
+    const stored = writeBindings("g1", { keys: { jump: ["KeyK"] }, gamepad: { jump: ["B"], gone: ["A"] } }, defaults, { unsynced: "u1" });
+    expect(stored).toEqual({ keys: { jump: ["KeyK"] }, gamepad: { jump: ["B"] } });
+    expect(JSON.parse(localStorage.getItem(controlsStorageKey("g1"))!)).toEqual({
+      v: 1,
+      overrides: { jump: ["KeyK"] },
+      gamepad: { jump: ["B"] },
+      unsynced: "u1",
+    });
+    expect(readBindings("g1")).toEqual(stored);
+    expect(readUnsynced("g1")).toBe("u1");
+    // Absent opts keep the marker; null clears it.
+    writeBindings("g1", { keys: {}, gamepad: { jump: ["X"] } }, defaults);
+    expect(readUnsynced("g1")).toBe("u1");
+    writeBindings("g1", { keys: {}, gamepad: { jump: ["X"] } }, defaults, { unsynced: null });
+    expect(readUnsynced("g1")).toBeNull();
+    expect(JSON.parse(localStorage.getItem(controlsStorageKey("g1"))!)).toEqual({ v: 1, overrides: {}, gamepad: { jump: ["X"] } });
+  });
+
+  it("an empty entry is kept while unsynced, and removed once synced", () => {
+    writeBindings("g1", { keys: {}, gamepad: {} }, defaults, { unsynced: "u1" });
+    expect(JSON.parse(localStorage.getItem(controlsStorageKey("g1"))!)).toEqual({ v: 1, overrides: {}, unsynced: "u1" });
+    writeBindings("g1", { keys: {}, gamepad: {} }, defaults, { unsynced: null });
+    expect(localStorage.getItem(controlsStorageKey("g1"))).toBeNull();
+  });
+
+  it("reads an F009 entry (no gamepad) with empty gamepad, and tolerates bad gamepad / unsynced values", () => {
+    const key = controlsStorageKey("g2");
+    localStorage.setItem(key, JSON.stringify({ v: 1, overrides: { jump: ["KeyK"] } }));
+    expect(readBindings("g2")).toEqual({ keys: { jump: ["KeyK"] }, gamepad: {} });
+    expect(readUnsynced("g2")).toBeNull();
+    localStorage.setItem(key, JSON.stringify({ v: 1, overrides: { jump: ["KeyK"] }, gamepad: ["A"], unsynced: "" }));
+    expect(readBindings("g2")).toEqual({ keys: { jump: ["KeyK"] }, gamepad: {} });
+    expect(readUnsynced("g2")).toBeNull();
+    localStorage.setItem(key, JSON.stringify({ v: 1, overrides: {}, gamepad: { jump: ["B", "Home"] }, unsynced: 7 }));
+    expect(readBindings("g2")).toEqual({ keys: {}, gamepad: { jump: ["B"] } });
+    expect(readUnsynced("g2")).toBeNull();
+    // A non-object overrides still discards the whole entry (F009 rule).
+    localStorage.setItem(key, JSON.stringify({ v: 1, gamepad: { jump: ["B"] } }));
+    expect(readBindings("g2")).toEqual({ keys: {}, gamepad: {} });
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it("a keys-only write keeps the stored gamepad (and the marker)", () => {
+    writeBindings("g3", { keys: {}, gamepad: { jump: ["B"] } }, defaults, { unsynced: "u1" });
+    writeOverrides("g3", { fire: ["KeyX"] }, defaults);
+    expect(readBindings("g3")).toEqual({ keys: { fire: ["KeyX"] }, gamepad: { jump: ["B"] } });
+    expect(readUnsynced("g3")).toBe("u1");
+    expect(readOverrides("g3")).toEqual({ fire: ["KeyX"] });
+  });
+
+  it("caps the serialised entry at 8192 bytes", () => {
+    expect(CONTROLS_OVERRIDES_MAX_BYTES).toBe(8192);
+    const key = controlsStorageKey("g4");
+    const under = JSON.stringify({ v: 1, overrides: { jump: ["KeyK"] }, pad: "" });
+    const fill = (n: number) => JSON.stringify({ v: 1, overrides: { jump: ["KeyK"] }, pad: "x".repeat(n - under.length) });
+    localStorage.setItem(key, fill(8192));
+    expect(new TextEncoder().encode(localStorage.getItem(key)!).length).toBe(8192);
+    expect(readBindings("g4").keys).toEqual({ jump: ["KeyK"] });
+    localStorage.setItem(key, fill(8193));
+    expect(readBindings("g4").keys).toEqual({});
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it("subscribers get the bindings when they change, not on marker-only writes", () => {
+    const fn = vi.fn();
+    const keysFn = vi.fn();
+    const off = subscribeBindings("g5", fn);
+    const offKeys = subscribeOverrides("g5", keysFn);
+    writeBindings("g5", { keys: {}, gamepad: { jump: ["B"] } }, defaults, { unsynced: "u1" });
+    expect(fn).toHaveBeenLastCalledWith({ keys: {}, gamepad: { jump: ["B"] } });
+    expect(keysFn).toHaveBeenLastCalledWith({});
+    writeBindings("g5", { keys: {}, gamepad: { jump: ["B"] } }, defaults, { unsynced: null });
+    expect(fn).toHaveBeenCalledTimes(1);
+    off();
+    offKeys();
+  });
+});
+
 describe("findConflicts and the Ctrl warning", () => {
   it("reports other actions sharing a key", () => {
     const list = [act("a", ["KeyA", "Space"]), act("b", ["Space"]), act("c", ["KeyC"]), act("d", ["KeyA"])];
     expect(findConflicts(list)).toEqual({ a: ["b", "d"], b: ["a"], d: ["a"] });
     expect(findConflicts([act("a", ["KeyA"]), act("b", [], ["A"])])).toEqual({});
+  });
+
+  it("covers gamepad buttons in one combined list (manifest order, no duplicates)", () => {
+    const list = [act("a", ["Space"], ["A"]), act("b", ["KeyB"], ["A", "B"]), act("c", ["Space"], ["B"]), act("d", ["KeyD"], ["X"])];
+    expect(findConflicts(list)).toEqual({ a: ["b", "c"], b: ["a", "c"], c: ["a", "b"] });
+    expect(findConflicts([act("a", [], ["Start"]), act("b", [], ["Start"])])).toEqual({ a: ["b"], b: ["a"] });
   });
 
   it("warns about Ctrl+W/T/N", () => {
