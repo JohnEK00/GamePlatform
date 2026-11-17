@@ -1027,3 +1027,7 @@ None. Screenshot notifications for creators are written by the existing F005 pos
 
 ## F028 additions
 None. Public profiles 2 (banner, links, profile sections) is a platform-only feature. There are no engine, message, game.json, bundle or player page changes.
+
+### F023 known limits (review 10, L1 and L2)
+- **Accessibility:** the on-screen keyboard is drawn only on the canvas. It has no DOM content, so screen readers don't announce the panel, its keys or the typed text, and explore-by-touch taps don't reach the keys. Screen-reader users should type on a physical keyboard; the first key they press hides the panel.
+- **Cancelling and moving the caret:** touch players can't cancel an edit, because OK and a tap outside the panel both commit. Gamepad players can't move the caret. Both are planned for F025.

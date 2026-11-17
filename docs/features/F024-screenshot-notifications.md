@@ -83,7 +83,7 @@ User stories:
 
 ## 2. UX notes
 See § 0 items 7–12 for the exact texts, placement and focus. Additional notes:
-- **Bell panel and `/notifications` page:** the same component (`NotificationItem`) is used in both. The thumbnail box is 48×48 CSS px, `object-fit: cover`, `border-radius: 6px`, `flex: none`, with a 1 px `var(--pf-border)` border so dark shots are visible on dark themes. It never grows the row beyond the two-avatar height.
+- **Bell panel and `/notifications` page:** the same component (`NotificationItem`) is used in both. The thumbnail box is 48×48 CSS px, `object-fit: cover`, `border-radius: 6px`, `flex: none`, with a 1 px `var(--pf-border)` border so dark shots are visible on dark themes. It makes screenshot rows 48 px tall, slightly taller than other rows (about 39 px); this is accepted (review 10, L5).
 - **Contrast and motion:** no new colours (existing tokens) and no animation.
 - **Unread dot, time and mute button:** unchanged.
 - **Error states:** a thumbnail that fails to load shows the browser's empty box at 48×48. There is no `onError` handling, because the image is decorative and the link still works.

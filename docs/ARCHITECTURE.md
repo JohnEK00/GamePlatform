@@ -1445,7 +1445,7 @@ On-screen keyboard for `ui.textField` (spec: `docs/features/F023-on-screen-keybo
     - `TextFieldOptions.keyboard` and the exported type `TextFieldKeyboard`.
     - One private keyboard state: `{ field, shown, upper, cursor { row, col, anchor }, pressKey, layout, fieldRect, mode }`, plus three repeat timers (vertical, horizontal, `DEL`).
     - The read-only `keyboardRect`.
-    - A `keyboard` command kind drawn by `exec`.
+    - An `osk` command kind drawn by `exec` (review 10, L4).
     - `UiInput` gains an optional `lastDevice`, and its gamepad button type widens to `A`, `B`, `X`, `Y`, `LB`, `Start` and the D-pad. `UiRenderer` gains optional `width`/`height`.
 
     `engine.input` and `engine.renderer` already provide all of these. Test doubles without them never show a keyboard.

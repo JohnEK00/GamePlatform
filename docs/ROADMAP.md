@@ -318,6 +318,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (`screenshots.featured_at`, PUT/DELETE feature endpoints, kind), frontend (gallery badge and button, header strip, notification text). No engine changes.
 
 ### F025: On-screen keyboard 2: symbols page and accented letters (S, proposed; after F023)
+- **Also (review 10, L2):** a way for touch players to cancel an edit (a ✕ key that reverts), and gamepad caret movement (for example LT/RT). Today OK and a tap outside both commit, and the caret can only be moved by pointer or physical keys.
 - **Pitch**: a `?123` key switching the F023 keyboard to a symbols page (`! ? , : ; ( ) & @ # + = / *`), and a long-press or `RB` accent row for the letter under the cursor (é, ñ, ü…), shown only for glyphs the theme font has.
 - **User value**: names and short messages beyond plain ASCII for phone and controller players, without bloating the default layout.
 - **Areas**: engine (`osk.ts` pages, `ui.ts`), frontend (docs table). No backend or desktop changes.
