@@ -366,6 +366,7 @@ engine.input.actionPressed(id: string): boolean
 engine.input.actionReleased(id: string): boolean
 engine.input.actionLabel(id: string): string           // label of the first effective key, else of the first gamepad button, else ""
 engine.input.keyLabel(code: string): string            // default label table; an unknown code returns the code
+engine.input.gamepadLabel(name: string): string        // default label of a gamepad button name ("Up" → "D-pad ↑"); an unknown name returns the name
 ```
 - Unknown ids return `false` / `""` and warn once per id.
 - **Edge rules** (per fixed update step, like `wasPressed`). Let `prevDown` be the action's `down` at the previous step:
