@@ -93,7 +93,7 @@ src/seed.rs        demo seeding
 src/ratelimit.rs   token buckets, play dedupe, client IP extractor
 src/locks.rs       per-game bundle-replace claims
 src/routes/        auth, users, games, comments, scores, tags, play, files,
-                   favorites, achievements, saves, stats, reports (+ admin)
+                   favorites, achievements, saves, controls, stats, reports (+ admin)
 ```
 
 ## Behaviour notes
@@ -110,6 +110,7 @@ src/routes/        auth, users, games, comments, scores, tags, play, files,
 - **Roles**: `User.role` is `"user"` or `"admin"`, driven only by `ADMIN_USERNAMES`. `/api/admin/*` returns 401 without a token and 403 for non-admins.
 - **Achievements**: definitions come from `achievements` in game.json (max 50; id `^[a-z0-9_-]{1,32}$`, unique; name 1-60 chars after trimming; description up to 200 and optional; icon optional, must be a png/jpg/jpeg/webp/gif/svg path that exists in the bundle). They're stored per game and synced on every upload. On a bundle replace, unlocks of ids that still exist are kept and unlocks of removed ids are deleted. `iconUrl` is `/games/{id}/files/{icon}` (percent-encoded).
 - **User achievements** (`GET /api/users/{username}/achievements`) list unlocks on published games only, plus games the viewer owns.
+- **Control bindings (F016)**: `GET`/`PUT 🔒 /api/games/{id}/controls` (`src/routes/controls.rs`, table `control_bindings` from `0020_f016.sql`) store one `ControlBindings` (`{keys, gamepad}`) per user per game. Visibility follows the cloud-save rule (unpublished → 404 unless owner). `PUT` validates strictly against the F009 tables in `src/bundle.rs` (first violation → 422 naming the path, e.g. `bindings.gamepad.jump[0] "Home" can't be bound`), then normalises against the game's current actions (undeclared ids and entries equal to the defaults dropped, manifest order) before storing; `GET` re-applies the normalisation, so a bundle replace filters stale entries without rewriting rows. An empty result is still a row (`{"keys":{},"gamepad":{}}`). Bodies over 16 KiB → 413. Rows cascade on game and user deletion. `tests/f016.rs` covers it.
 - **Saves**: `data` must be a JSON object (anything else → 422). The size limit (256KB) applies to its compact serialization (→ 413). Key order is not preserved.
 - **Plays/stats**: each `POST /play` also inserts a `play_events` row (UTC day, user id when authed). `daily` always has 30 entries ending today (UTC), oldest first, zero-filled. Totals `plays` use the game counters, which include plays from before v2.
 - **Reports**: `targetPreview` is captured when the report is created, so it survives deletion of the target. Resolving an already-resolved report → 409. `unpublish` on a comment report → 422. Resolving applies the action, then resolves every open report on the same target with the same resolution. Acting on a target that's already gone is a no-op.
@@ -123,6 +124,7 @@ src/routes/        auth, users, games, comments, scores, tags, play, files,
   | Report | `POST /api/reports` | 10/hour | user |
   | Score | `POST …/scores` | 60/min | user |
   | Save | `PUT …/save` | 60/min | user |
+  | Controls | `PUT …/controls` (F016; `GET` is not limited) | 60/min | user |
   | Leaderboard | `GET …/leaderboard` | 120/min | user, else IP |
   | ScoreList | `GET …/scores` (own bucket) | 120/min | user, else IP |
   | Play | `POST …/play` | 30/min | user, else IP |

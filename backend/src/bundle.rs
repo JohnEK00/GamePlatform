@@ -420,7 +420,7 @@ pub fn parse_leaderboard(v: &Value) -> Result<LeaderboardMeta, AppError> {
     Ok(meta)
 }
 
-fn valid_action_id(id: &str) -> bool {
+pub(crate) fn valid_action_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= ACTION_ID_MAX
         && id
@@ -429,7 +429,7 @@ fn valid_action_id(id: &str) -> bool {
 }
 
 /// A user-supplied value quoted for an error message (JSON-escaped, at most 40 chars).
-fn quoted(s: &str) -> String {
+pub(crate) fn quoted(s: &str) -> String {
     let short: String = s.chars().take(40).collect();
     let short = if short.len() < s.len() {
         format!("{short}…")
@@ -441,7 +441,7 @@ fn quoted(s: &str) -> String {
 
 /// A `keys` / `gamepad` list of one action: optional (absent or `null` → `[]`), at most `max`
 /// unique strings from `table`.
-fn parse_binding_list(
+pub(crate) fn parse_binding_list(
     obj: &serde_json::Map<String, Value>,
     at: &str,
     field: &str,

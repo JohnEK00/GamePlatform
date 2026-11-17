@@ -1392,3 +1392,24 @@ type ControlBindingsResponse = { bindings: ControlBindings | null; updatedAt: st
 ### Privacy
 - Bindings are visible only to their owner. They are not part of `Game`, stats, profiles, the feed or any admin view.
 - The server never receives controller names (`Gamepad.id`) or keyboard layouts.
+
+
+### F016 implementation notes (backend)
+- **Duplicates:** a duplicate entry within one action's list is a 422 (`bindings.keys.jump[1] "KeyA" is a duplicate`). `normalize_bindings` also removes duplicates, which protects rows that were stored earlier.
+- **Error messages** name the failing path. Examples:
+  - `bindings must be a JSON object`
+  - `bindings.keys must be an object`
+  - `bindings.keys must have at most 32 actions`
+  - `bindings.keys "Jump!" is not a valid action id (^[a-z0-9_-]{1,32}$)`
+  - `bindings.keys.jump must be an array`
+  - `… must have at most 3 entries`
+  - `…[0] must be a string`
+  - `…[0] "Home" can't be bound`, used for any name not in the binding tables
+- **Which error is reported:** when a body has several violations, `keys` is checked before `gamepad`, and action ids within each are checked in sorted order.
+- **Null per action:** an action value of `null` (for example `"jump": null`) is a 422, because each action's value must be an array. This differs from the `game.json` rule, where `null` counts as `[]`.
+- **Corrupt stored row:** a stored row that fails validation reads as no row (`bindings: null`) and is logged as a warning.
+- **Games not yet backfilled:** for a game whose actions haven't been backfilled from F009 yet, a PUT normalises against an empty action list and stores `{keys:{}, gamepad:{}}`.
+- **Check order:**
+  - Authentication (401) comes first.
+  - For signed-in callers, the body limit (413) and malformed JSON (400) come next, then visibility (404), then the rate limit (429).
+  - Requests that fail before the rate-limit check don't use up rate-limit tokens.

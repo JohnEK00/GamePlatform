@@ -65,6 +65,8 @@ pub enum Limit {
     /// Review 6 L2: comment list reads (`GET /api/games/{id}/comments`, every sort): 120/min,
     /// per user or per IP when anonymous. Thread pages (`…/replies`) are not limited.
     CommentList,
+    /// F016 control bindings `PUT …/controls`: 60/min, per user
+    Controls,
 }
 
 impl Limit {
@@ -91,6 +93,7 @@ impl Limit {
             Limit::ThreadTools => (60, Duration::from_secs(600)),
             Limit::Collections => (120, Duration::from_secs(600)),
             Limit::CommentList => (120, Duration::from_secs(60)),
+            Limit::Controls => (60, Duration::from_secs(60)),
         }
     }
 }

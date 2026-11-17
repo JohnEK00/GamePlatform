@@ -4,6 +4,7 @@ pub mod achievements;
 pub mod auth;
 pub mod collections;
 pub mod comments;
+pub mod controls;
 pub mod favorites;
 pub mod feed;
 pub mod files;
@@ -35,6 +36,8 @@ use crate::error::AppError;
 
 pub const UPLOAD_BODY_LIMIT: usize = 60 * 1024 * 1024;
 pub const IMAGE_BODY_LIMIT: usize = 3 * 1024 * 1024;
+/// F016: `PUT /api/games/{id}/controls` bodies above this → 413 `payload_too_large`.
+pub const CONTROLS_BODY_LIMIT: usize = 16 * 1024;
 /// F013: the version a downloaded bundle belongs to (lowercase for `HeaderName::from_static`).
 pub const GAME_VERSION_HEADER: &str = "x-game-version";
 
@@ -195,6 +198,13 @@ pub fn api_router() -> Router<AppState> {
             get(saves::get_save)
                 .put(saves::put_save)
                 .delete(saves::delete_save),
+        )
+        // F016 synced control bindings
+        .route(
+            "/games/{id}/controls",
+            get(controls::get_controls)
+                .put(controls::put_controls)
+                .layer(DefaultBodyLimit::max(CONTROLS_BODY_LIMIT)),
         )
         .route("/games/{id}/stats", get(stats::game_stats))
         // F008 collections
