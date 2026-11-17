@@ -2,7 +2,7 @@
 
 Status: **specced**. Size: **M** (backend medium: one migration with an `activity_events` rebuild, one activity writer, a third feed branch, one notification kind with a read-time filter; frontend small: one feed item, one feed tab, one notification text, one settings switch; desktop verification only; one round). Areas: backend, frontend, desktop (verification only). No engine changes.
 Contracts: `docs/API.md` § F021 additions (feed kind and types, notification kind, setting, triggers, visibility, withdrawal), `docs/ARCHITECTURE.md` § F021 additions (migration `0019_f021.sql` with the exact SQL, writer, feed branch, notification write and read paths), `docs/GAME_FORMAT.md` § F021 additions (no changes).
-Depends on: F002 (feed), F007 (notifications), F008 (collections) and F018 (no `notifications.kind` CHECK, mutes, group dedupe, `withdraw_pool`), all shipped. The migration is **`0019_f021.sql`** and runs after `0017_f018.sql`. **No new Rust or JS dependencies.**
+Depends on: F002 (feed), F007 (notifications), F008 (collections) and F018 (no `notifications.kind` CHECK, mutes, group dedupe, `withdraw_pool`), all shipped. The migration is **`0019_f021.sql`** and runs after `0018_review6.sql`. **No new Rust or JS dependencies.**
 Unblocks: F015 (`screenshotPosted` feed kind) needs no `activity_events` rebuild after this one.
 
 ## 1. Goal and user stories
@@ -89,7 +89,7 @@ Non-goals (later items): announcing a collection when it changes from private to
    - `pub fn collection_group(collection_id, game_id) -> String` = `"coll:{collectionId}:{gameId}"`.
    - `NewNotification.collection_id: Option<String>` (`Some` only for this kind; every existing constructor passes `None`). `try_notify`'s insert writes it (`?10`).
    - `VISIBLE`: the collection predicate in ARCHITECTURE § F021 "Notification read path" (used by the count and the list).
-   - `list_page`: `LEFT JOIN collections c ON c.id = n.collection_id`, select `n.collection_id, c.title AS c_title`; for the new kind: `commentId`/`excerpt`/`threadId` null, `ownsThread`/`creatorHeart` false, `eventCount = actorCount`, `path = "/c/{collectionId}"`, `collection = { id, title, path }`. Other kinds: `collection: null`.
+   - `list_page`: `LEFT JOIN collections col ON col.id = n.collection_id`, select `n.collection_id, col.title AS col_title`; for the new kind: `commentId`/`excerpt`/`threadId` null, `ownsThread`/`creatorHeart` false, `eventCount = actorCount`, `path = "/c/{collectionId}"`, `collection = { id, title, path }`. Other kinds: `collection: null`.
    - Settings: `collections` in `NotificationSettings`, `SettingsPatch`, `load_settings`, `update_settings`.
    - Unit test `kinds()` covers the new kind and column.
 6. **`src/models.rs`** (or `feed.rs`): `FeedCollection`, `FeedCollectionGame`, `NotificationCollection`, all `#[serde(rename_all = "camelCase")]`.
@@ -144,7 +144,7 @@ backend-dev and frontend-dev work in parallel against API § F021 (frontend mock
 ## 6. Test expectations
 
 ### Backend (`tests/f021.rs`)
-- **Upgrade test (required):** build a database at migration version ≤ 17 (pattern of `tests/f018.rs`), insert users, a published game, `activity_events` rows of all four kinds with explicit ids `3`, `7`, `8`, `15` (including `from_version`, `ach_count`, `first_score`), insert and delete a row with id `30` (so the sequence is 30), plus a `notifications` row with an event and a `notification_settings` row. Run the full migrator, then assert:
+- **Upgrade test (required):** build a database at migration version ≤ 18 (pattern of `tests/f018.rs`), insert users, a published game, `activity_events` rows of all four kinds with explicit ids `3`, `7`, `8`, `15` (including `from_version`, `ach_count`, `first_score`), insert and delete a row with id `30` (so the sequence is 30), plus a `notifications` row with an event and a `notification_settings` row. Run the full migrator, then assert:
   1. `activity_events` holds exactly the same rows with equal columns, and the new columns are NULL;
   2. `PRAGMA foreign_key_check` is empty and `PRAGMA integrity_check` is `ok`; no schema object mentions `activity_events_new`;
   3. the table `sql` has no `CHECK (kind`; inserting a `collectionUpdated` row with `game_id` NULL succeeds; a row with both `game_id` and `collection_id` NULL fails;

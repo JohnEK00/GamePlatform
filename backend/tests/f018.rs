@@ -183,9 +183,11 @@ const NOTIF_ROWS: &str = "SELECT id, recipient_id, kind, group_key, game_id, com
      read_at, created_at, updated_at FROM notifications ORDER BY id";
 const EVENT_ROWS: &str = "SELECT id, notification_id, actor_id, comment_id, created_at, \
      retracted_at FROM notification_events ORDER BY id";
+/// Later migrations may add their own indexes (0019: `idx_notifications_collection`); this
+/// test checks that the 0017 rebuild keeps the existing ones.
 const SCHEMA_OF: &str = "SELECT type, name, tbl_name, sql FROM sqlite_master \
      WHERE tbl_name IN ('notifications', 'notification_events') AND type IN ('index', 'trigger') \
-     AND sql IS NOT NULL ORDER BY type, name";
+     AND sql IS NOT NULL AND name <> 'idx_notifications_collection' ORDER BY type, name";
 
 /// `sqlite_master` entries whose name or SQL contains `_new`.
 const WITH_NEW: &str = "SELECT name FROM sqlite_master WHERE instr(name, '_new') > 0 \

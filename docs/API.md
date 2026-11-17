@@ -1344,3 +1344,6 @@ Unchanged. Events and notifications are written by the F008 collection endpoints
 - **"Top" comment sort** reads a trigger-maintained `comments.hearts` count through an index (migration `0018_review6.sql`). Response shapes and values are unchanged.
 - **F018 mute cap:** the 500 cap counts only mutes on games the caller can currently see (the same rule as `GET /api/notifications/mutes`). Mutes on hidden games are kept, come back if the game is republished, and can always be deleted. The cap is enforced only when adding a mute, so the stored total, or the visible list after a republish, can exceed 500.
 - **`JWT_SECRET`:** there is no built-in default secret any more. If it is unset, the server generates a random 256-bit secret at each start and logs a warning, so every restart signs everyone out. Production must set `JWT_SECRET`.
+
+### F021 implementation note
+- **Withdrawn "added to a collection" notifications stay stored:** if a game is added and then removed while its notification is unread, the notification is withdrawn. It is not listed or counted, but it stays in the database (re-adding restores it without moving it) and is deleted when the collection is. This follows the same pattern as F018 pinned notifications.

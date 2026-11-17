@@ -483,6 +483,44 @@ impl GameRow {
 }
 
 // ---------------------------------------------------------------------------
+// F021 collection activity (docs/API.md § F021 additions)
+// ---------------------------------------------------------------------------
+
+/// `FeedCollectionGame`: one announced game of a `collectionUpdated` item.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedCollectionGame {
+    pub game: GameSummary,
+    /// The curator's current note; `""` = none.
+    pub note: String,
+}
+
+/// `FeedCollection`: the collection of a `collectionUpdated` item.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedCollection {
+    pub id: String,
+    /// The collection's current title.
+    pub title: String,
+    /// `/c/{id}`
+    pub path: String,
+    /// 1–4 entries, newest added first.
+    pub games: Vec<FeedCollectionGame>,
+    /// All games of the item (`>= games.len() >= 1`).
+    pub game_count: i64,
+}
+
+/// `NotificationCollection`: the collection of an `addedToCollection` notification.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationCollection {
+    pub id: String,
+    pub title: String,
+    /// `/c/{id}`
+    pub path: String,
+}
+
+// ---------------------------------------------------------------------------
 // F008 collections (docs/API.md § F008 additions)
 // ---------------------------------------------------------------------------
 

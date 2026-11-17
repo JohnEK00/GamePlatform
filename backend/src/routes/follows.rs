@@ -114,6 +114,7 @@ pub async fn put_follow(
                 event_comment_id: None,
                 dedupe: Dedupe::Actor,
                 thread_id: None,
+                collection_id: None,
                 now: chrono::Utc::now(),
             };
             notif::notify_pool(&state.db, &n).await;

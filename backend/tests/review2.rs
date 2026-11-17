@@ -39,7 +39,8 @@ async fn n1_feed_plan_is_index_driven() {
     // Run the planner with statistics too: the plan must not depend on them.
     webgame_server::db::optimize(&t.state.db, true).await;
     sqlx::query("ANALYZE").execute(&t.state.db).await.unwrap();
-    let kinds = r#"["gamePublished","gameUpdated","personalBest","achievementUnlocked"]"#;
+    // F021: every kind, so branch (c) is planned too.
+    let kinds = r#"["gamePublished","gameUpdated","personalBest","achievementUnlocked","collectionUpdated"]"#;
     for cursor in [None, Some("100")] {
         let p = plan(
             &t,
@@ -58,7 +59,16 @@ async fn n1_feed_plan_is_index_driven() {
                 !(l.starts_with("scan g") || l.contains("scan games")),
                 "scan of games:\n{text}"
             );
+            // F021 branch (c): primary-key probes of collections and collection_games only.
+            assert!(
+                !(l.starts_with("scan c") || l.contains("scan collection")),
+                "scan of collections / collection_games:\n{text}"
+            );
         }
+        assert!(
+            text.contains("sqlite_autoindex_collections_1 (id=?)"),
+            "branch (c) probes collections by id:\n{text}"
+        );
         assert!(
             !text.contains("idx_games_pub_top"),
             "plan walks published games:\n{text}"

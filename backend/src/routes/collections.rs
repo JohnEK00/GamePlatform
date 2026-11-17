@@ -9,6 +9,12 @@
 //! (400/422) → the endpoint's own rules. Bodies are therefore read as raw bytes and parsed
 //! only after the earlier checks. Writes that check a cap run under `BEGIN IMMEDIATE`, and
 //! every successful change bumps `collections.updated_at` in the same transaction.
+//!
+//! F021: an add of a published game to a public collection (`PUT …/games/{gameId}` with
+//! `added: true`, or `POST` with `gameId`) writes a `collectionUpdated` activity event inside
+//! the add transaction and, after the commit, an `addedToCollection` notification to the game's
+//! owner. Removing the game withdraws that notification while unread. No other collection
+//! write produces activity.
 
 use std::collections::{HashMap, HashSet};
 
@@ -22,6 +28,7 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
 use crate::AppState;
+use crate::activity;
 use crate::auth::{AuthUser, MaybeAuthUser};
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiPath, ApiQuery};
@@ -30,6 +37,7 @@ use crate::models::{
     CollectionSummary, GAME_SELECT, GameCollectionsPage, MyCollection, Page, UserRef,
     game_row_from_row, now_rfc3339, thumbnail_url, user_ref_from_row,
 };
+use crate::notifications::{self as notif, Dedupe, Kind, NewNotification};
 use crate::ratelimit::Limit;
 use crate::routes::games::{fetch_visible_game, limit_user, parse_paging};
 use crate::routes::screenshots::is_admin;
@@ -393,6 +401,62 @@ pub async fn build_collection(
     })
 }
 
+/// F021: called in the add transaction right after the guarded item insert. When the
+/// collection is public and the game published (read in the same transaction, so a concurrent
+/// PATCH to private can't slip in between), records the `collectionUpdated` event and returns
+/// the game's owner for the notification sent after the commit; otherwise writes nothing.
+async fn announce_add(
+    conn: &mut SqliteConnection,
+    actor_id: &str,
+    collection_id: &str,
+    game_id: &str,
+    now: &str,
+) -> AppResult<Option<String>> {
+    let row: Option<(String, bool, String)> = sqlx::query_as(
+        "SELECT c.visibility, g.published, g.owner_id FROM collections c, games g \
+         WHERE c.id = ?1 AND g.id = ?2",
+    )
+    .bind(collection_id)
+    .bind(game_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    match row {
+        Some((visibility, true, owner_id)) if visibility == "public" => {
+            activity::record_collection_added(conn, actor_id, collection_id, game_id, now).await;
+            Ok(Some(owner_id))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// F021: the `addedToCollection` notification after an announced add commits (best effort;
+/// skipped for the curator's own game).
+async fn notify_added(
+    state: &AppState,
+    actor_id: &str,
+    collection_id: &str,
+    game_id: &str,
+    owner_id: &str,
+) {
+    if owner_id == actor_id {
+        return;
+    }
+    let n = NewNotification {
+        recipient_id: owner_id.to_string(),
+        kind: Kind::AddedToCollection,
+        group_key: notif::collection_group(collection_id, game_id),
+        game_id: Some(game_id.to_string()),
+        comment_id: None,
+        actor_id: actor_id.to_string(),
+        event_comment_id: None,
+        dedupe: Dedupe::Group,
+        thread_id: None,
+        collection_id: Some(collection_id.to_string()),
+        now: chrono::Utc::now(),
+    };
+    notif::notify_pool(&state.db, &n).await;
+}
+
 /// Delete a collection (items cascade) and resolve every open report on it with resolution
 /// `delete`, in one transaction. A missing collection is a no-op. Shared by
 /// `DELETE /api/collections/{id}` and the admin resolve `delete` action.
@@ -466,6 +530,7 @@ pub async fn create_collection(
             "You can have at most {COLLECTIONS_PER_USER_MAX} collections"
         )));
     }
+    let mut announced: Option<String> = None;
     if let Some(gid) = &game_id {
         sqlx::query(
             "INSERT INTO collection_games (collection_id, game_id, position, note, added_at) \
@@ -476,8 +541,12 @@ pub async fn create_collection(
         .bind(&now)
         .execute(&mut *tx)
         .await?;
+        announced = announce_add(&mut tx, &user.id, &id, gid, &now).await?;
     }
     tx.commit().await?;
+    if let (Some(gid), Some(owner)) = (&game_id, &announced) {
+        notify_added(&state, &user.id, &id, gid, owner).await;
+    }
 
     let row = load_collection(&state, &id, Some(&user.id), true).await?;
     let c = build_collection(&state, &row, Some(&user.id), false).await?;
@@ -570,6 +639,7 @@ pub async fn put_collection_game(
         .transpose()?;
 
     let now = now_rfc3339();
+    let mut announced: Option<String> = None;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     ensure_exists(&mut tx, &id).await?;
     let existing: Option<String> = sqlx::query_scalar(
@@ -619,10 +689,14 @@ pub async fn put_collection_game(
                 )));
             }
             bump(&mut tx, &id, &now).await?;
+            announced = announce_add(&mut tx, &user.id, &id, &game_id, &now).await?;
             true
         }
     };
     tx.commit().await?;
+    if let Some(owner) = &announced {
+        notify_added(&state, &user.id, &id, &game_id, owner).await;
+    }
 
     let c = owner_view(&state, &id, &user.id).await?;
     let item = c
@@ -660,6 +734,27 @@ pub async fn delete_collection_game(
         bump(&mut tx, &id, &now_rfc3339()).await?;
     }
     tx.commit().await?;
+    if removed {
+        // F021: withdraw the owner's unread `addedToCollection` (best effort). A deleted game
+        // needs nothing: its notifications cascaded.
+        let owner: Option<String> = sqlx::query_scalar("SELECT owner_id FROM games WHERE id = ?")
+            .bind(&game_id)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "failed to look up the game owner for a withdrawal");
+                None
+            });
+        if let Some(owner) = owner {
+            notif::withdraw_pool(
+                &state.db,
+                &owner,
+                Kind::AddedToCollection,
+                &notif::collection_group(&id, &game_id),
+            )
+            .await;
+        }
+    }
     let c = owner_view(&state, &id, &user.id).await?;
     Ok(Json(CollectionRemoveResponse {
         removed,

@@ -5,6 +5,10 @@
 //! transaction (a SAVEPOINT when the caller is already in one), so a failure rolls back only
 //! the event write: it is logged with `tracing::warn!` and never fails the request. SQLite
 //! keeps the outer transaction usable after a failed statement.
+//!
+//! Since F021 (migration `0019_f021.sql`) `activity_events.kind` has no CHECK constraint:
+//! [`KINDS`] is the only guard on the stored kinds, as `notifications::Kind` is for
+//! notifications. Every writer here uses one of its constants.
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::pool::PoolConnection;
@@ -14,12 +18,19 @@ pub const KIND_GAME_PUBLISHED: &str = "gamePublished";
 pub const KIND_GAME_UPDATED: &str = "gameUpdated";
 pub const KIND_PERSONAL_BEST: &str = "personalBest";
 pub const KIND_ACHIEVEMENT: &str = "achievementUnlocked";
-pub const KINDS: [&str; 4] = [
+/// F021: a curator added published games to a public collection (one row per collection and
+/// UTC day; `game_id` NULL, `collection_id` and `game_ids` set).
+pub const KIND_COLLECTION_UPDATED: &str = "collectionUpdated";
+pub const KINDS: [&str; 5] = [
     KIND_GAME_PUBLISHED,
     KIND_GAME_UPDATED,
     KIND_PERSONAL_BEST,
     KIND_ACHIEVEMENT,
+    KIND_COLLECTION_UPDATED,
 ];
+
+/// F021: at most this many game ids in one `collectionUpdated` row's `game_ids`.
+pub const COLLECTION_EVENT_GAMES_MAX: usize = 100;
 
 /// `gameUpdated` rows for the same game within this window are replaced.
 pub const UPDATE_COALESCE_HOURS: i64 = 24;
@@ -203,4 +214,87 @@ pub async fn record_achievement(
     }
     .await;
     log_failure(KIND_ACHIEVEMENT, game_id, res);
+}
+
+/// F021 `game_ids` of a coalesced `collectionUpdated` row: `game_id` first, then the ids of
+/// every earlier array in order, without `game_id` and without duplicates, truncated to
+/// [`COLLECTION_EVENT_GAMES_MAX`]. Unparseable arrays count as empty.
+pub fn merge_collection_game_ids(game_id: &str, previous: &[Option<String>]) -> Vec<String> {
+    let mut merged = vec![game_id.to_string()];
+    for raw in previous.iter().flatten() {
+        let ids: Vec<String> = serde_json::from_str(raw).unwrap_or_default();
+        for id in ids {
+            if merged.len() >= COLLECTION_EVENT_GAMES_MAX {
+                return merged;
+            }
+            if !merged.contains(&id) {
+                merged.push(id);
+            }
+        }
+    }
+    merged.truncate(COLLECTION_EVENT_GAMES_MAX);
+    merged
+}
+
+/// F021 `collectionUpdated`: one row per (collection, UTC day). Each announced add replaces
+/// the day's row (new, higher id) and puts the game first. `now` is the exact `added_at` just
+/// written; its first 10 characters are the day. The caller checked, in the same transaction,
+/// that the collection is public and the game published.
+pub async fn record_collection_added(
+    conn: &mut SqliteConnection,
+    actor_id: &str,
+    collection_id: &str,
+    game_id: &str,
+    now: &str,
+) {
+    let res = async {
+        let day = now.get(..10).unwrap_or(now);
+        let mut tx = conn.begin().await?;
+        let previous: Vec<Option<String>> = sqlx::query_scalar(
+            "DELETE FROM activity_events              WHERE collection_id = ?1 AND kind = 'collectionUpdated' AND day = ?2              RETURNING game_ids",
+        )
+        .bind(collection_id)
+        .bind(day)
+        .fetch_all(&mut *tx)
+        .await?;
+        let merged = merge_collection_game_ids(game_id, &previous);
+        let merged = serde_json::to_string(&merged).unwrap_or_else(|_| "[]".into());
+        sqlx::query(
+            "INSERT INTO activity_events              (actor_id, kind, game_id, collection_id, game_ids, day, created_at)              VALUES (?3, 'collectionUpdated', NULL, ?1, ?4, ?2, ?5)",
+        )
+        .bind(collection_id)
+        .bind(day)
+        .bind(actor_id)
+        .bind(merged)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await
+    }
+    .await;
+    log_failure(KIND_COLLECTION_UPDATED, game_id, res);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_puts_the_new_game_first_without_duplicates() {
+        let prev = vec![
+            Some(r#"["b","a"]"#.to_string()),
+            None,
+            Some("not json".to_string()),
+            Some(r#"["c","b"]"#.to_string()),
+        ];
+        assert_eq!(merge_collection_game_ids("a", &prev), ["a", "b", "c"]);
+        let many: Vec<String> = (0..150).map(|i| format!("g{i}")).collect();
+        let prev = vec![Some(serde_json::to_string(&many).unwrap())];
+        let merged = merge_collection_game_ids("new", &prev);
+        assert_eq!(merged.len(), COLLECTION_EVENT_GAMES_MAX);
+        assert_eq!(merged[0], "new");
+        assert_eq!(merged[1], "g0");
+        assert_eq!(KINDS.len(), 5);
+        assert!(KINDS.contains(&KIND_COLLECTION_UPDATED));
+    }
 }

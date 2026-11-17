@@ -15,7 +15,7 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::Serialize;
 use sqlx::{Connection, Row, SqliteConnection, SqlitePool};
 
-use crate::models::{UserRef, thumbnail_url, user_ref_from_row};
+use crate::models::{NotificationCollection, UserRef, thumbnail_url, user_ref_from_row};
 
 /// Notification kinds. The API strings come from [`Kind::as_str`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,16 +27,19 @@ pub enum Kind {
     GamePublished,
     /// F018: a creator (or an admin) pinned the recipient's comment.
     Pinned,
+    /// F021: a curator added the recipient's game to a public collection.
+    AddedToCollection,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Comment,
         Kind::Reply,
         Kind::Heart,
         Kind::Follow,
         Kind::GamePublished,
         Kind::Pinned,
+        Kind::AddedToCollection,
     ];
 
     /// The `NotificationKind` string (also the stored `kind` column). Since F018 the column has
@@ -49,6 +52,7 @@ impl Kind {
             Kind::Follow => "follow",
             Kind::GamePublished => "gamePublished",
             Kind::Pinned => "pinned",
+            Kind::AddedToCollection => "addedToCollection",
         }
     }
 
@@ -62,6 +66,7 @@ impl Kind {
             Kind::Follow => "follows",
             Kind::GamePublished => "new_games",
             Kind::Pinned => "pins",
+            Kind::AddedToCollection => "collections",
         }
     }
 
@@ -86,6 +91,11 @@ pub fn comment_group(comment_id: &str) -> String {
 /// F018: the `pinned` group of one comment.
 pub fn pin_group(comment_id: &str) -> String {
     format!("pin:{comment_id}")
+}
+
+/// F021: the `addedToCollection` group of one (collection, game).
+pub fn collection_group(collection_id: &str, game_id: &str) -> String {
+    format!("coll:{collection_id}:{game_id}")
 }
 
 pub const FOLLOW_GROUP: &str = "follow";
@@ -148,6 +158,8 @@ pub struct NewNotification {
     /// `heart`: the hearted comment's parent, or itself when top-level; `pinned`: the comment;
     /// else `None`).
     pub thread_id: Option<String>,
+    /// F021: the collection of an `addedToCollection` notification; else `None`.
+    pub collection_id: Option<String>,
     pub now: DateTime<Utc>,
 }
 
@@ -221,8 +233,8 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     }
     let id: Option<i64> = sqlx::query_scalar(&format!(
         "INSERT INTO notifications (recipient_id, kind, group_key, game_id, comment_id, \
-         created_at, updated_at) \
-         SELECT ?1, ?2, ?3, ?5, ?6, ?7, ?7 \
+         collection_id, created_at, updated_at) \
+         SELECT ?1, ?2, ?3, ?5, ?6, ?10, ?7, ?7 \
          WHERE NOT EXISTS (SELECT 1 FROM notification_settings s WHERE s.user_id = ?1 \
            AND s.{col} = 0) \
          AND NOT {MUTED} \
@@ -246,6 +258,7 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     .bind(&now)
     .bind(dedupe)
     .bind(&n.thread_id)
+    .bind(&n.collection_id)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(id) = id else {
@@ -948,6 +961,8 @@ pub struct Notification {
     pub created_at: String,
     pub updated_at: String,
     pub path: String,
+    /// F021: `addedToCollection` only; `null` for every other kind.
+    pub collection: Option<NotificationCollection>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -976,6 +991,8 @@ pub struct NotificationSettings {
     pub new_games: bool,
     /// F018: the `pinned` kind.
     pub pins: bool,
+    /// F021: the `addedToCollection` kind.
+    pub collections: bool,
 }
 
 impl Default for NotificationSettings {
@@ -987,6 +1004,7 @@ impl Default for NotificationSettings {
             follows: true,
             new_games: true,
             pins: true,
+            collections: true,
         }
     }
 }
@@ -1063,10 +1081,13 @@ fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Shared visibility filter (binds `?1` = recipient).
+/// Shared visibility filter (binds `?1` = recipient). F021: a notification with a collection
+/// is visible only while that collection exists and is public.
 const VISIBLE: &str = "(n.game_id IS NULL OR g.published = 1 OR g.owner_id = ?1) \
      AND EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id \
-       AND e.retracted_at IS NULL)";
+       AND e.retracted_at IS NULL) \
+     AND (n.collection_id IS NULL OR EXISTS (SELECT 1 FROM collections vc \
+       WHERE vc.id = n.collection_id AND vc.visibility = 'public'))";
 
 /// `(unread, latestAt)`: visible unread notifications (capped at [`UNREAD_CAP`]).
 pub async fn unread_count(db: &SqlitePool, recipient: &str) -> sqlx::Result<(i64, Option<String>)> {
@@ -1107,23 +1128,27 @@ pub async fn mark_read(
 }
 
 pub async fn load_settings(db: &SqlitePool, user_id: &str) -> sqlx::Result<NotificationSettings> {
-    let row: Option<(bool, bool, bool, bool, bool, bool)> = sqlx::query_as(
-        "SELECT comments, replies, hearts, follows, new_games, pins FROM notification_settings \
-         WHERE user_id = ?",
+    type Row = (bool, bool, bool, bool, bool, bool, bool);
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT comments, replies, hearts, follows, new_games, pins, collections \
+         FROM notification_settings WHERE user_id = ?",
     )
     .bind(user_id)
     .fetch_optional(db)
     .await?;
     Ok(match row {
         None => NotificationSettings::default(),
-        Some((comments, replies, hearts, follows, new_games, pins)) => NotificationSettings {
-            comments,
-            replies,
-            hearts,
-            follows,
-            new_games,
-            pins,
-        },
+        Some((comments, replies, hearts, follows, new_games, pins, collections)) => {
+            NotificationSettings {
+                comments,
+                replies,
+                hearts,
+                follows,
+                new_games,
+                pins,
+                collections,
+            }
+        }
     })
 }
 
@@ -1136,6 +1161,8 @@ pub struct SettingsPatch {
     pub follows: Option<bool>,
     pub new_games: Option<bool>,
     pub pins: Option<bool>,
+    /// F021
+    pub collections: Option<bool>,
 }
 
 impl SettingsPatch {
@@ -1146,6 +1173,7 @@ impl SettingsPatch {
             && self.follows.is_none()
             && self.new_games.is_none()
             && self.pins.is_none()
+            && self.collections.is_none()
     }
 }
 
@@ -1158,13 +1186,15 @@ pub async fn update_settings(
 ) -> sqlx::Result<()> {
     sqlx::query(
         "INSERT INTO notification_settings \
-           (user_id, comments, replies, hearts, follows, new_games, pins, updated_at) \
+           (user_id, comments, replies, hearts, follows, new_games, pins, collections, \
+            updated_at) \
          VALUES (?1, COALESCE(?2, 1), COALESCE(?3, 1), COALESCE(?4, 1), COALESCE(?5, 1), \
-           COALESCE(?6, 1), COALESCE(?8, 1), ?7) \
+           COALESCE(?6, 1), COALESCE(?8, 1), COALESCE(?9, 1), ?7) \
          ON CONFLICT (user_id) DO UPDATE SET \
            comments = COALESCE(?2, comments), replies = COALESCE(?3, replies), \
            hearts = COALESCE(?4, hearts), follows = COALESCE(?5, follows), \
-           new_games = COALESCE(?6, new_games), pins = COALESCE(?8, pins), updated_at = ?7",
+           new_games = COALESCE(?6, new_games), pins = COALESCE(?8, pins), \
+           collections = COALESCE(?9, collections), updated_at = ?7",
     )
     .bind(user_id)
     .bind(patch.comments)
@@ -1174,6 +1204,7 @@ pub async fn update_settings(
     .bind(patch.new_games)
     .bind(stamp(now))
     .bind(patch.pins)
+    .bind(patch.collections)
     .execute(db)
     .await?;
     Ok(())
@@ -1191,8 +1222,10 @@ pub async fn list_page(
         "SELECT n.id, n.kind, n.game_id, n.comment_id, n.read_at, n.created_at, n.updated_at, \
            g.title, g.owner_id, g.thumbnail_ext, g.thumbnail_version, \
            EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id \
-             AND e.actor_id = g.owner_id AND e.retracted_at IS NULL) AS creator_heart \
+             AND e.actor_id = g.owner_id AND e.retracted_at IS NULL) AS creator_heart, \
+           n.collection_id, col.title AS col_title \
          FROM notifications n LEFT JOIN games g ON g.id = n.game_id \
+         LEFT JOIN collections col ON col.id = n.collection_id \
          WHERE n.recipient_id = ?1 AND {VISIBLE} \
            AND (?2 = 0 OR n.read_at IS NULL) \
            AND (?3 IS NULL OR n.updated_at < ?3 OR (n.updated_at = ?3 AND n.id < ?4)) \
@@ -1218,6 +1251,8 @@ pub async fn list_page(
         thumb_ext: Option<String>,
         thumb_version: Option<i64>,
         creator_heart: bool,
+        collection_id: Option<String>,
+        collection_title: Option<String>,
     }
     let mut bases = Vec::with_capacity(rows.len());
     for r in &rows {
@@ -1239,6 +1274,8 @@ pub async fn list_page(
             thumb_ext: r.try_get("thumbnail_ext")?,
             thumb_version: r.try_get("thumbnail_version")?,
             creator_heart: r.try_get("creator_heart")?,
+            collection_id: r.try_get("collection_id")?,
+            collection_title: r.try_get("col_title")?,
         });
     }
     let more = bases.len() as i64 > limit;
@@ -1322,7 +1359,7 @@ pub async fn list_page(
         match b.kind {
             Kind::Comment | Kind::Reply => newest.get(&b.id).cloned(),
             Kind::Heart | Kind::Pinned => b.comment_id.clone(),
-            Kind::Follow | Kind::GamePublished => None,
+            Kind::Follow | Kind::GamePublished | Kind::AddedToCollection => None,
         }
     };
     let mut comment_ids: HashSet<String> = HashSet::new();
@@ -1425,7 +1462,7 @@ pub async fn list_page(
                     .get(c)
                     .map(|info| info.parent_id.clone().unwrap_or_else(|| c.clone()))
             }),
-            Kind::Comment | Kind::Follow | Kind::GamePublished => None,
+            Kind::Comment | Kind::Follow | Kind::GamePublished | Kind::AddedToCollection => None,
         };
         let gid = b.game_id.as_deref().unwrap_or("");
         let path = match b.kind {
@@ -1435,6 +1472,17 @@ pub async fn list_page(
             },
             Kind::Follow => format!("/u/{recipient_name}/followers"),
             Kind::GamePublished => format!("/games/{gid}"),
+            Kind::AddedToCollection => {
+                format!("/c/{}", b.collection_id.as_deref().unwrap_or(""))
+            }
+        };
+        let collection = match (b.kind, &b.collection_id, &b.collection_title) {
+            (Kind::AddedToCollection, Some(cid), Some(title)) => Some(NotificationCollection {
+                id: cid.clone(),
+                title: title.clone(),
+                path: format!("/c/{cid}"),
+            }),
+            _ => None,
         };
         let event_count = match b.kind {
             Kind::Comment | Kind::Reply => events,
@@ -1456,6 +1504,7 @@ pub async fn list_page(
             created_at: b.created_at.clone(),
             updated_at: b.updated_at.clone(),
             path,
+            collection,
         });
     }
     Ok((items, next_cursor))
@@ -1505,6 +1554,10 @@ mod tests {
         assert_eq!(Kind::Pinned.as_str(), "pinned");
         assert_eq!(Kind::Pinned.setting_column(), "pins");
         assert_eq!(pin_group("c1"), "pin:c1");
+        assert_eq!(Kind::ALL.len(), 7);
+        assert_eq!(Kind::AddedToCollection.as_str(), "addedToCollection");
+        assert_eq!(Kind::AddedToCollection.setting_column(), "collections");
+        assert_eq!(collection_group("c1", "g1"), "coll:c1:g1");
         assert_eq!(Kind::parse("x"), None);
     }
 

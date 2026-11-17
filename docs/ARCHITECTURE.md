@@ -1074,7 +1074,7 @@ Collection activity (spec: `docs/features/F021-collection-activity.md`). One mig
   - The event stores **which** games were announced, so games added while the collection was private are never shown, even after it turns public. Everything else (still in the collection, added on that day, published, the collection public, its title, the notes) is evaluated at read time.
   - `addedToCollection` is a normal F007 kind with F018 group dedupe and withdrawal (the `pinned` pattern). The notification row carries `collection_id`, so it cascades with the collection and the read path can hide it while the collection is private.
   - `activity_events.kind` loses its CHECK. `activity::KINDS` is the only list of feed kinds, as `notifications::Kind` and `TARGET_TYPES` are for their tables. F015 and later feed kinds need no rebuild.
-- **Data**: migration `backend/migrations/0019_f021.sql` runs after `0017_f018.sql`. Normative, in this order:
+- **Data**: migration `backend/migrations/0019_f021.sql` runs after `0018_review6.sql`. Normative, in this order:
   ```sql
   -- F021: collection activity (docs/ARCHITECTURE.md § F021 additions).
 
