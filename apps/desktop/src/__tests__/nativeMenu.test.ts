@@ -159,4 +159,37 @@ describe("native menu events", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "F11" }));
     expect(m.invoke).toHaveBeenCalledTimes(1);
   });
+
+  // F019: a game's ui.textField reads typing, AltGr characters and Ctrl+V paste. The desktop's only key listener
+  // must leave all of them alone (it sees parent-page keys; iframe keys never reach it, which is fine too).
+  it("leaves text-field typing, AltGr, editing keys and paste untouched (F019)", () => {
+    cleanup = installNativeIntegrations();
+    const keys: KeyboardEventInit[] = [
+      { key: "a", code: "KeyA" },
+      { key: "A", code: "KeyA", shiftKey: true },
+      { key: " ", code: "Space" },
+      { key: "é", code: "Digit2" },
+      { key: "€", code: "KeyE", ctrlKey: true, altKey: true }, // AltGr on Windows
+      { key: "@", code: "KeyQ", ctrlKey: true, altKey: true },
+      { key: "v", code: "KeyV", ctrlKey: true }, // paste
+      { key: "V", code: "KeyV", ctrlKey: true, shiftKey: true },
+      { key: "Backspace", code: "Backspace" },
+      { key: "Delete", code: "Delete" },
+      { key: "ArrowLeft", code: "ArrowLeft" },
+      { key: "Home", code: "Home" },
+      { key: "Enter", code: "Enter" },
+      { key: "Escape", code: "Escape" },
+      { key: "K", code: "KeyK", ctrlKey: true, shiftKey: true }, // View → Controls is native, not a JS listener
+    ];
+    for (const init of keys) {
+      const e = new KeyboardEvent("keydown", { ...init, cancelable: true, bubbles: true });
+      window.dispatchEvent(e);
+      expect(e.defaultPrevented, `${init.key} must not be prevented`).toBe(false);
+    }
+    const paste = new Event("paste", { cancelable: true, bubbles: true });
+    window.dispatchEvent(paste);
+    expect(paste.defaultPrevented).toBe(false);
+    expect(m.invoke).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe("#/");
+  });
 });

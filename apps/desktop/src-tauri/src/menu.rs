@@ -10,7 +10,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
@@ -28,6 +28,38 @@ const FORWARDED: &[&str] = &[
     "screenshot",
     "controls",
 ];
+
+/// Menu accelerators by item id (`quit` adds `CmdOrCtrl+Q` on macOS only). Native accelerators fire before the
+/// game iframe sees the key, so each must be impossible to type into an F019 `ui.textField`: it needs Ctrl/Cmd
+/// *without* Alt (AltGr is Ctrl+Alt on Windows and types characters), or is a function key, and it is never a
+/// paste shortcut. Enforced by `accelerators_never_collide_with_text_entry`.
+const ACCELERATORS: &[(&str, &str)] = &[
+    ("open-folder", "CmdOrCtrl+O"),
+    ("feed", "CmdOrCtrl+Shift+F"),
+    ("notifications", "CmdOrCtrl+Shift+N"),
+    ("collections", "CmdOrCtrl+Shift+L"),
+    ("screenshot", "CmdOrCtrl+Shift+S"),
+    ("controls", "CmdOrCtrl+Shift+K"),
+    ("reload", "CmdOrCtrl+R"),
+    ("fullscreen", "F11"),
+];
+
+fn accelerator(id: &str) -> Option<&'static str> {
+    ACCELERATORS
+        .iter()
+        .find(|(item, _)| *item == id)
+        .map(|(_, accel)| *accel)
+}
+
+/// A menu item with its accelerator from `ACCELERATORS`, if any.
+fn item<R: Runtime>(app: &AppHandle<R>, id: &str, label: &str) -> tauri::Result<MenuItem<R>> {
+    let builder = MenuItemBuilder::with_id(id, label);
+    match accelerator(id) {
+        Some(accel) => builder.accelerator(accel),
+        None => builder,
+    }
+    .build(app)
+}
 
 /// The F11 menu accelerator and the webview's F11 key listener can both fire for one key press;
 /// toggles closer together than this are treated as one.
@@ -66,55 +98,23 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     #[cfg(target_os = "macos")]
     let quit = quit.accelerator("CmdOrCtrl+Q");
     let file = SubmenuBuilder::new(app, "&File")
-        .item(&MenuItemBuilder::with_id("upload", "&Upload game").build(app)?)
-        .item(
-            &MenuItemBuilder::with_id("open-folder", "&Open local game folder…")
-                .accelerator("CmdOrCtrl+O")
-                .build(app)?,
-        )
+        .item(&item(app, "upload", "&Upload game")?)
+        .item(&item(app, "open-folder", "&Open local game folder…")?)
         .separator()
-        .item(&MenuItemBuilder::with_id("settings", "&Settings").build(app)?)
+        .item(&item(app, "settings", "&Settings")?)
         .separator()
         .item(&quit.build(app)?)
         .build()?;
 
     let view = SubmenuBuilder::new(app, "&View")
-        .item(
-            &MenuItemBuilder::with_id("feed", "F&eed")
-                .accelerator("CmdOrCtrl+Shift+F")
-                .build(app)?,
-        )
-        .item(
-            &MenuItemBuilder::with_id("notifications", "&Notifications")
-                .accelerator("CmdOrCtrl+Shift+N")
-                .build(app)?,
-        )
-        .item(
-            &MenuItemBuilder::with_id("collections", "Co&llections")
-                .accelerator("CmdOrCtrl+Shift+L")
-                .build(app)?,
-        )
-        .item(
-            &MenuItemBuilder::with_id("screenshot", "Take &Screenshot")
-                .accelerator("CmdOrCtrl+Shift+S")
-                .build(app)?,
-        )
-        .item(
-            &MenuItemBuilder::with_id("controls", "&Controls")
-                .accelerator("CmdOrCtrl+Shift+K")
-                .build(app)?,
-        )
+        .item(&item(app, "feed", "F&eed")?)
+        .item(&item(app, "notifications", "&Notifications")?)
+        .item(&item(app, "collections", "Co&llections")?)
+        .item(&item(app, "screenshot", "Take &Screenshot")?)
+        .item(&item(app, "controls", "&Controls")?)
         .separator()
-        .item(
-            &MenuItemBuilder::with_id("reload", "&Reload")
-                .accelerator("CmdOrCtrl+R")
-                .build(app)?,
-        )
-        .item(
-            &MenuItemBuilder::with_id("fullscreen", "Toggle &Fullscreen")
-                .accelerator("F11")
-                .build(app)?,
-        );
+        .item(&item(app, "reload", "&Reload")?)
+        .item(&item(app, "fullscreen", "Toggle &Fullscreen")?);
     #[cfg(debug_assertions)]
     let view = view
         .separator()
@@ -208,5 +208,53 @@ mod tests {
         assert!(FORWARDED.contains(&"controls"));
         assert!(FORWARDED.contains(&"notifications"));
         assert!(FORWARDED.contains(&"collections"));
+    }
+
+    #[test]
+    fn accelerators_belong_to_menu_items() {
+        for (id, _) in ACCELERATORS {
+            assert!(
+                FORWARDED.contains(id) || ["reload", "fullscreen"].contains(id),
+                "unknown menu item {id}"
+            );
+        }
+        assert_eq!(accelerator("controls"), Some("CmdOrCtrl+Shift+K"));
+        assert_eq!(accelerator("fullscreen"), Some("F11"));
+        assert_eq!(accelerator("upload"), None);
+    }
+
+    /// F019: native accelerators win over the game iframe, so none may be a key a text field types or pastes.
+    #[test]
+    fn accelerators_never_collide_with_text_entry() {
+        for (id, accel) in ACCELERATORS {
+            let parts: Vec<String> = accel.split('+').map(str::to_ascii_lowercase).collect();
+            let (key, mods) = parts.split_last().expect("non-empty accelerator");
+            let has = |names: &[&str]| mods.iter().any(|m| names.contains(&m.as_str()));
+            let function_key = key
+                .strip_prefix('f')
+                .and_then(|n| n.parse::<u8>().ok())
+                .is_some_and(|n| (1..=24).contains(&n));
+            assert!(
+                !has(&["alt", "option", "altgr"]),
+                "{id}: {accel} uses Alt; Ctrl+Alt is AltGr on Windows and types characters"
+            );
+            assert!(
+                function_key
+                    || has(&[
+                        "cmdorctrl",
+                        "commandorcontrol",
+                        "ctrl",
+                        "control",
+                        "cmd",
+                        "command",
+                        "super"
+                    ]),
+                "{id}: {accel} has no Ctrl/Cmd and is not a function key, so it is typeable"
+            );
+            assert!(
+                !(key == "v" || key == "insert"),
+                "{id}: {accel} would swallow paste"
+            );
+        }
     }
 }
