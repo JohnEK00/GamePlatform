@@ -230,13 +230,13 @@ Non-goals (later items): notifying creators about screenshots of their games (pr
 **Acceptance:** `npm test -w @webgame/ui`, `npm run typecheck -w @webgame/ui`, `npm run build:ui`, `npm run build:web`.
 
 ### desktop-dev (`apps/desktop/**`)
-No code changes. Verify on the desktop build:
+Verify on the desktop build (as shipped, verification found that `target="_blank"` links did nothing in WebView2, so `apps/desktop/src-tauri/src/external.rs` was added; see ARCHITECTURE § "F015 desktop note: external links"):
 - the feed's Screenshots tab works under the hash router;
 - feed and profile thumbnails load from the configured server (CSP `img-src` already allows `http:`/`https:`);
 - "View on game page" and "+N more on the game page" open `#/games/{id}?section=screenshots` and scroll to the gallery;
 - "Open image" opens the system browser, as on the game page.
 
-**Acceptance:** `npm run build -w @webgame/desktop`, `npm test -w @webgame/desktop`, `cd apps/desktop/src-tauri && cargo check`. Record the result in the round notes; no file changes are expected.
+**Acceptance:** `npm run build -w @webgame/desktop`, `npm test -w @webgame/desktop`, `cd apps/desktop/src-tauri && cargo check`. Record the result in the round notes; (shipped with the external-links fix).
 
 ### engine-dev
 None.

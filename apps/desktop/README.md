@@ -137,3 +137,6 @@ apps/desktop/
 - The capability (`capabilities/default.json`) only applies to the local `main` window content, so remote pages
   and game iframes cannot invoke `pick_file`/`read_picked`. It grants no dialog permissions (least privilege): the
   dialog is opened from Rust, so the frontend has no `dialog:allow-open` and there is no arbitrary-path read command.
+
+## External links
+Links that open a new window (`target="_blank"`, such as "Open image" in the screenshot lightbox or the admin report thumbnails) open in the default system browser, never in a second app window. Only plain `http(s)` URLs are opened, at most one every 500 ms; see `src-tauri/src/external.rs` and ARCHITECTURE § "F015 desktop note: external links".
