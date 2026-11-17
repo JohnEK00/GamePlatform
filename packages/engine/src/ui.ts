@@ -133,6 +133,8 @@ export interface UiInput {
   readonly textEvents?: readonly TextEvent[];
   /** F019: keyboard capture while a text field edits (engine-internal). */
   setKeyboardCapture?(on: boolean): void;
+  /** F019: editing starts in this step: capture keyboard actions from this step on (engine-internal). */
+  captureKeyboardNow?(): void;
 }
 
 /** What Ui draws with (a subset of Renderer). */
@@ -362,6 +364,11 @@ export class Ui {
   private typeStart: string | null = null;
   /** A text field pressed with the pointer in this step. */
   private pointerEdit: string | null = null;
+  /**
+   * The text field that starts editing in this step at its call (type-start, pointer press or
+   * activate, decided in beginStep); `ui.editing` reports it from beginStep on.
+   */
+  private pendingStart: string | null = null;
   /** How focus arrived on its current id (list cursor initialisation). */
   private arrival: 'next' | 'prev' | 'set' = 'set';
   /** Slider adjustment / list cursor movement for the focused widget in this step (−1, 0, +1). */
@@ -391,6 +398,7 @@ export class Ui {
   set focus(id: string | null) {
     const next = typeof id === 'string' && id ? id : null;
     if (this._editing !== null && next !== this._editing) this.stopEditing(this._editing);
+    if (this.pendingStart !== null && next !== this.pendingStart) this.cancelPendingStart();
     if (next !== this._focus) this.focusChanged();
     this._focus = next;
   }
@@ -404,20 +412,23 @@ export class Ui {
   /**
    * The text field being edited (F019). Setting an id focuses it and starts editing in the next
    * step (caret at the end) if that step declares an enabled text field with that id; setting
-   * `null` stops editing with a commit.
+   * `null` stops editing with a commit. A field that starts editing in this step (typing on it,
+   * pressing it, activating it) is reported from the start of the step, before its call.
    */
   get editing(): string | null {
-    return this._editing ?? this.editRequestNow ?? this.editRequestNext;
+    return this._editing ?? this.editRequestNow ?? this.pendingStart ?? this.editRequestNext;
   }
   set editing(id: string | null) {
     const next = typeof id === 'string' && id ? id : null;
     if (next === null) {
       if (this._editing !== null) this.stopEditing(this._editing);
       this.editRequestNext = this.editRequestNow = null;
+      this.cancelPendingStart();
       return;
     }
     if (this._editing === next) return;
     if (this._editing !== null) this.stopEditing(this._editing);
+    if (this.pendingStart !== null && this.pendingStart !== next) this.cancelPendingStart();
     if (this._focus !== next) this.focusChanged();
     this._focus = next;
     this.editRequestNext = next;
@@ -448,6 +459,19 @@ export class Ui {
     const st = this.states.get(id);
     if (st && st.kind === 'textField') st.pendingCommit = true;
     if (this._editing === id) this._editing = null;
+  }
+
+  /**
+   * The game moved focus or `ui.editing` away before the pending field's call: it doesn't start
+   * editing in this step. Capture, already on, is recomputed at endStep as usual.
+   */
+  private cancelPendingStart(): void {
+    const id = this.pendingStart;
+    if (id === null) return;
+    this.pendingStart = null;
+    if (this.typeStart === id) this.typeStart = null;
+    if (this.pointerEdit === id) this.pointerEdit = null;
+    if (this.navFire === id) this.navFire = null;
   }
 
   // -------------------------------------------------------------------------
@@ -482,8 +506,16 @@ export class Ui {
     this.keyMove = 0;
     this.editRequestNow = this.editRequestNext;
     this.editRequestNext = null;
+    this.pendingStart = null;
     this.pointerStep();
     this.navigateStep();
+    // F019: editing that starts in this step captures the keyboard from this step on, so the key
+    // that started it (the typed letter, Enter / Space / the confirm key) never fires its action.
+    if (this._editing === null) {
+      const nav = this.navFire !== null && this.prevKinds.get(this.navFire) === 'textField' ? this.navFire : null;
+      this.pendingStart = this.typeStart ?? this.pointerEdit ?? nav;
+      if (this.pendingStart !== null || this.editRequestNow !== null) this.input.captureKeyboardNow?.();
+    }
   }
 
   private pointerStep(): void {
@@ -708,6 +740,7 @@ export class Ui {
     for (const id of this.states.keys()) if (!this.declared.has(id) || this.kinds.get(id) !== this.states.get(id)!.kind) this.states.delete(id);
     for (const [id, st] of this.states) if (st.kind === 'list') st.hadFocus = this._focus === id;
     this.editRequestNow = null;
+    this.pendingStart = null;
     this.input.setKeyboardCapture?.(this._editing !== null);
     this.committedList = this.building;
     this.building = [];
@@ -1021,6 +1054,7 @@ export class Ui {
       st.original = null;
       st.runStart = 0;
     }
+    if (this.pendingStart === vid) this.pendingStart = null; // started below, or disabled
     if (disabled) {
       st.pressX = null;
       if (this._editing === vid) this._editing = null; // dropped at endStep without a signal

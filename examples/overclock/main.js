@@ -351,7 +351,7 @@ function loadProfile(engine) {
   if (st && typeof st === 'object') for (const k of Object.keys(profile.settings)) profile.settings[k] = st[k] !== false;
   const p = s.get('lbPeriod', 'week');
   profile.lbPeriod = PERIODS.some((x) => x.id === p) ? p : 'week';
-  engine.audio.muted = !profile.settings.sound;
+  if (!profile.settings.sound) engine.audio.muted = true;
 }
 function saveSettings(engine) {
   engine.storage.set('settings', { ...profile.settings });

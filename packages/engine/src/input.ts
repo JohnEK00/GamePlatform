@@ -288,7 +288,7 @@ export class Input {
   /** F019: this step's typing (keydown text, editing keys, paste), in order; frozen, `[]` when none. */
   textEvents: readonly TextEvent[] = NO_TEXT_EVENTS;
   private textAcc: TextEvent[] = [];
-  /** F019 keyboard capture: requested by the UI at the end of a step, applied from the next one. */
+  /** F019 keyboard capture: on from the step editing starts in (`captureKeyboardNow`); recomputed by the UI at each step's end. */
   private capture = false;
   /** Capture state the last `updateActions` ran with (detects the first / last captured step). */
   private captureApplied = false;
@@ -472,6 +472,17 @@ export class Input {
    */
   setKeyboardCapture(on: boolean): void {
     this.capture = !!on;
+  }
+
+  /**
+   * Engine-internal (F019): editing starts in this step (`ui.beginStep`, before the game's update):
+   * turn capture on now and recompute this step's actions as a first captured step, so the key
+   * that started editing never fires its action. No-op while capture is already on.
+   */
+  captureKeyboardNow(): void {
+    if (this.capture) return;
+    this.capture = true;
+    this.map.update(this.actionKeys(), this.pads.find((p) => p.connected) ?? null, true);
   }
 
   /** True while a `ui.textField` is editing: actions and `axis()` ignore keyboard keys (F019). */

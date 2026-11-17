@@ -67,7 +67,8 @@ export interface TextureOptions {
   atlas?: boolean;
 }
 
-interface Page extends TexturePage {
+/** @internal A texture page with an optional pre-draw upload hook (font atlas). */
+export interface Page extends TexturePage {
   prepare?: () => void;
 }
 
@@ -108,10 +109,13 @@ interface Glyph {
   adv: number;
 }
 
-/** Canvas-rasterized font atlas; glyphs are added lazily, so any Unicode character works. */
 const WHITE_BLOCK = new Uint8Array(8 * 8 * 4).fill(255);
 
-class FontAtlas {
+/**
+ * Canvas-rasterized font atlas; glyphs are added lazily, so any Unicode character works.
+ * @internal Exported for tests only; not part of the public API (not re-exported by index.ts).
+ */
+export class FontAtlas {
   readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   readonly glyphs = new Map<string, Glyph>();

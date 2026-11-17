@@ -839,7 +839,7 @@ engine.input.keyboardCaptured: boolean          // read-only
   - Every `text` event is filtered: code points below U+0020, U+007F–U+009F and lone surrogates are removed, and an event that becomes empty is dropped.
   - Events that arrived while the engine was paused are discarded when it resumes (host `webgame:resume` or the end of an author pause), so keys typed under the ⌨ panel never reach a field.
   - `typed` is unchanged (F009 raw input).
-- **`keyboardCaptured`** is `true` while a `ui.textField` is editing. The UI sets it at the end of each step, and it applies from the next step. While it is `true`:
+- **`keyboardCaptured`** is `true` while a `ui.textField` is editing. It turns on in the step where editing starts (before the game's update), so the key that starts editing never fires its action; at the end of each step it is recomputed as `ui.editing !== null` (review 8, M1). Capture covers the keyboard only: starting an edit with gamepad A still reports `actionPressed("confirm")`. While it is `true`:
   - `actionDown/actionPressed/actionReleased` and `axis()` ignore keyboard codes. Mouse codes (`Mouse0`…) and gamepad buttons still count.
   - An action that was down only through keyboard keys reports `actionReleased` in the first captured step.
   - When capture ends, keyboard keys that are still held don't count for actions until they are released.
@@ -865,7 +865,7 @@ Unchanged from F012. The new widgets are part of the UI layer, before the F005 c
 - **IME composition:** while `isComposing` is true, editing keys are ignored as well as text keys. A paste is cut to 256 code points before `allow` filtering.
 - **Duplicate-id warnings:** these are deduplicated per widget kind and id. Buttons keep the F012 wording.
 - **Setting `ui.editing`:**
-  - After `ui.editing = id`, the getter returns that id until the next step. That step drops it if it doesn't declare an enabled field with that id.
+  - After `ui.editing = id`, the getter returns that id from then on. From the start of the next step, `ui.editing` also reports a field that is starting to edit in that step (typed text, a pointer press or activate on the focused field) before the field's call, so `!engine.ui.editing` guards work in that step. Moving `ui.focus` away, setting `ui.editing`, or calling the field `disabled` before its call cancels that start; capture then stays on until the end of the step, and held keys are latched until released (review 8, M1).
   - `ui.editing = null`, or moving `ui.focus` away, commits the edit. The field reports `committed` at its next call.
 - **Volume:** the volume API is `engine.audio.masterVolume`. There is no `audio.volume`.
 - **Mute at load:** the host's `webgame:mute` also sets `engine.audio.muted`. So a game's SOUND setting should only force `muted = true` at load when the saved setting is off, and never unmute at load.

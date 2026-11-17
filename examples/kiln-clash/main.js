@@ -2376,7 +2376,7 @@ function loadProfile(engine) {
   if (typeof vs.cpu === 'boolean') profile.versus.cpu = vs.cpu;
   if (typeof vs.swap === 'boolean') profile.versus.swap = vs.swap;
   if (LEVEL_IDS.includes(vs.level)) profile.versus.level = vs.level;
-  engine.audio.muted = !profile.settings.sound;
+  if (!profile.settings.sound) engine.audio.muted = true;
 }
 const saveSettings = (engine) => engine.storage.set('settings', { ...profile.settings });
 const saveTraining = (engine) => engine.storage.set('training', { ...profile.training });

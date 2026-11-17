@@ -218,6 +218,8 @@ interface ActionEdge {
   down: boolean;
   pressed: boolean;
   released: boolean;
+  /** `down` before this step's first `update` (lets `update(…, true)` recompute the same step). */
+  before: boolean;
 }
 
 /**
@@ -237,17 +239,23 @@ export class ActionMap {
     for (const a of actions) {
       for (const k of a.keys) if (isKeyboardCode(k)) bound.add(k);
       const prev = previous?.edges.get(a.id);
-      this.edges.set(a.id, { down: prev?.down ?? false, pressed: false, released: false });
+      const down = prev?.down ?? false;
+      this.edges.set(a.id, { down, pressed: false, released: false, before: down });
     }
     this.boundKeys = bound;
   }
 
-  /** Recompute every action from the current button states (call once per step, after polling). */
-  update(keys: ButtonSource, pad?: PadSource | null): void {
+  /**
+   * Recompute every action from the current button states (call once per step, after polling).
+   * `redo = true` recomputes the current step again from the same previous-step state (F019: the
+   * keyboard capture that starts within a step), so the first pass leaves no trace.
+   */
+  update(keys: ButtonSource, pad?: PadSource | null, redo = false): void {
     const p = pad && pad.connected ? pad : null;
     for (const a of this.actions) {
       const e = this.edges.get(a.id)!;
-      const prevDown = e.down;
+      if (!redo) e.before = e.down;
+      const prevDown = e.before;
       let down = false;
       let anyPressed = false;
       let anyReleased = false;
