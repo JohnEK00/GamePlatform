@@ -1,6 +1,6 @@
 # F019: Engine UI widgets 2: slider, toggle, text field and list
 
-Status: **specced**. Size: **M** (engine is the main area; frontend small: one template and one docs subsection; backend and desktop verification only; one round). Areas: engine (+ examples), frontend, backend (verification only), desktop (verification only).
+Status: **shipped**. Size: **M** (engine is the main area; frontend small: one template and one docs subsection; backend and desktop verification only; one round). Areas: engine (+ examples), frontend, backend (verification only), desktop (verification only).
 Contracts: `docs/GAME_FORMAT.md` § F019 additions (the four widgets, theme fields, the navigation table, text editing, change signals, `input.textEvents`, `input.keyboardCaptured`, exact warning texts), `docs/API.md` § F019 additions (no changes), `docs/ARCHITECTURE.md` § F019 additions (modules, widget state, step order, capture design, ownership).
 Depends on: F012 (`engine.ui`, theme, phases, navigation), F009 (actions), F016 (`lastDevice`, the resume latch, fixed gamepad fallbacks) and review 5 (cancelled releases), all shipped. **No migration** (the next free number stays `0021`), no endpoints, no messages, **no new Rust or JS dependencies.**
 

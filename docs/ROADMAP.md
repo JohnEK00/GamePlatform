@@ -201,7 +201,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration, five mute endpoints, write-path mute check and group dedupe, `pinned` kind, `threadId`, `Game.notificationsMuted`, `Comment.threadMuted`), frontend (tab coordinator, mute buttons, item mute action, Muted list, `pins` switch, `pinned` text), desktop (verification only). No engine changes.
 - **Depends on**: F007 and F017 (shipped). Unblocks F021.
 
-### F019: Engine UI widgets 2: slider, toggle, text field and list (M, specced → [spec](features/F019-ui-widgets-2.md))
+### F019: Engine UI widgets 2: slider, toggle, text field and list (M, shipped → [spec](features/F019-ui-widgets-2.md))
 - **Pitch**:
   - `ui.slider` (drag, or left/right with hold repeat), `ui.toggle` (a labelled switch), a single-line `ui.textField` (caret, paste, `maxLength`, an `allow` filter) and `ui.list` (rows with a cursor, wheel and drag scrolling, and keyboard/gamepad movement that leaves the list at its ends). All follow the F012 theme, phase and navigation rules; the focused widget decides what each navigation intent does.
   - Value in, value out (`v = ui.slider(id, v, …)`), plus `ui.changed(id)` / `ui.committed(id)` so games save once per drag or per name entry.
