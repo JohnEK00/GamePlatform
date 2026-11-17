@@ -2,8 +2,8 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/client";
 import type { ControlAction, ControlBindings, ControlBindingsResponse, PutControlsResponse } from "../api/types";
-import { readBindings, readUnsynced, resetControlsStoreForTests, subscribeBindings, writeBindings } from "../controls";
-import { CONTROLS_SYNC_DEBOUNCE_MS, useControlsSync, type ControlsSyncApi } from "../controlsSync";
+import { controlsParkedKey, readBindings, readUnsynced, resetControlsStoreForTests, subscribeBindings, writeBindings } from "../controls";
+import { CONTROLS_SYNC_DEBOUNCE_MS, resetControlsSyncForTests, useControlsSync, type ControlsSyncApi } from "../controlsSync";
 
 const ACTIONS: ControlAction[] = [
   { id: "jump", name: "Jump", keys: ["Space"], gamepad: ["A"] },
@@ -60,6 +60,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetControlsStoreForTests();
+  resetControlsSyncForTests();
 });
 
 describe("useControlsSync (F016)", () => {
@@ -118,22 +119,58 @@ describe("useControlsSync (F016)", () => {
     expect(readUnsynced("g1")).toBeNull();
   });
 
-  it("another user's unsynced change is neither overwritten nor uploaded to this account", async () => {
+  it("L2b: another user's unsynced change is parked for them; this user reads and edits their own copy", async () => {
+    writeBindings("g1", { keys: {}, gamepad: { jump: ["X"] } }, ACTIONS, { unsynced: "u9" });
+    const api = mockApi({ bindings: { keys: { fire: ["KeyQ"] }, gamepad: {} }, updatedAt: AT });
+    const { result, rerender } = mount(api);
+    await tick();
+    expect(api.getControls).toHaveBeenCalledTimes(1);
+    expect(api.putControls).not.toHaveBeenCalled();
+    // The device now shows this user's account copy, not u9's change.
+    expect(readBindings("g1")).toEqual({ keys: { fire: ["KeyQ"] }, gamepad: {} });
+    expect(readUnsynced("g1")).toBeNull();
+    expect(JSON.parse(localStorage.getItem(controlsParkedKey("g1", "u9"))!)).toEqual({ v: 1, overrides: {}, gamepad: { jump: ["X"] } });
+    // The first change builds on this user's copy.
+    act(() => result.current.change({ keys: { fire: ["KeyQ"] }, gamepad: { fire: ["Y"] } }));
+    await tick(CONTROLS_SYNC_DEBOUNCE_MS);
+    expect(api.putControls.mock.calls[0][1]).toEqual({ keys: { fire: ["KeyQ"] }, gamepad: { fire: ["Y"] } });
+    expect(JSON.stringify(api.putControls.mock.calls)).not.toContain('"X"');
+
+    // u9 signs in later: their parked change is restored and uploaded without reading their account copy.
+    api.token = "tok9";
+    rerender({ u: { id: "u9" } });
+    await tick();
+    expect(api.getControls).toHaveBeenCalledTimes(1);
+    expect(api.putControls).toHaveBeenCalledTimes(2);
+    expect(api.putControls.mock.calls[1][1]).toEqual({ keys: {}, gamepad: { jump: ["X"] } });
+    expect(api.putTokens.at(-1)).toBe("tok9");
+    expect(localStorage.getItem(controlsParkedKey("g1", "u9"))).toBeNull();
+    expect(readUnsynced("g1")).toBeNull();
+  });
+
+  it("L2b: with no account copy, the parked change is not uploaded to this account", async () => {
+    writeBindings("g1", { keys: {}, gamepad: { jump: ["X"] } }, ACTIONS, { unsynced: "u9" });
+    const api = mockApi();
+    const { result } = mount(api);
+    await tick();
+    expect(api.putControls).not.toHaveBeenCalled();
+    expect(readBindings("g1")).toEqual({ keys: {}, gamepad: {} });
+    expect(result.current.syncState).toBe("account");
+  });
+
+  it("L2a: a change made while signed out clears another user's marker, so it is never uploaded as theirs", async () => {
     writeBindings("g1", { keys: {}, gamepad: { jump: ["X"] } }, ACTIONS, { unsynced: "u9" });
     const api = mockApi({ bindings: { keys: {}, gamepad: { jump: ["B"] } }, updatedAt: AT });
-    const { result } = mount(api);
-    await tick(5000);
-    expect(api.getControls).not.toHaveBeenCalled();
-    expect(api.putControls).not.toHaveBeenCalled();
-    expect(readBindings("g1").gamepad).toEqual({ jump: ["X"] });
-    expect(readUnsynced("g1")).toBe("u9");
-    expect(result.current.syncState).toBe("device");
-    // This user's own change takes the entry over and is uploaded for them.
-    act(() => result.current.change({ keys: {}, gamepad: { jump: ["Y"] } }));
-    expect(readUnsynced("g1")).toBe("u1");
-    await tick(CONTROLS_SYNC_DEBOUNCE_MS);
-    expect(api.putControls).toHaveBeenCalledTimes(1);
+    const { result, rerender } = mount(api, null);
+    await tick();
+    act(() => result.current.change({ keys: { fire: ["KeyM"] }, gamepad: { jump: ["X"] } }));
     expect(readUnsynced("g1")).toBeNull();
+    // u9 signs in: their account copy is read (and wins); nothing is uploaded.
+    rerender({ u: { id: "u9" } });
+    await tick();
+    expect(api.getControls).toHaveBeenCalledTimes(1);
+    expect(api.putControls).not.toHaveBeenCalled();
+    expect(readBindings("g1")).toEqual({ keys: {}, gamepad: { jump: ["B"] } });
   });
 
   it("a change writes the device at once with unsynced, and 3 changes within 1 s make one PUT", async () => {
@@ -305,36 +342,119 @@ describe("useControlsSync (F016)", () => {
     act(() => result.current.change({ keys: {}, gamepad: { jump: ["B"] } }));
     // The app switches straight to B: the client gets B's token, then the user changes.
     api.token = "tokB";
+    api.getControls.mockResolvedValueOnce({ bindings: null, updatedAt: null });
     rerender({ u: U2 });
     await tick(CONTROLS_SYNC_DEBOUNCE_MS * 5);
     expect(api.putControls).not.toHaveBeenCalled();
     expect(api.putTokens).toEqual([]);
-    expect(api.getControls).toHaveBeenCalledTimes(1); // B doesn't read over A's pending change
-    expect(readUnsynced("g1")).toBe("u1");
-    expect(readBindings("g1").gamepad).toEqual({ jump: ["B"] });
+    // A's change is parked for A; B reads their own (empty) copy and gets the defaults.
+    expect(api.getControls).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(localStorage.getItem(controlsParkedKey("g1", "u1"))!).gamepad).toEqual({ jump: ["B"] });
+    expect(readBindings("g1")).toEqual({ keys: {}, gamepad: {} });
     window.dispatchEvent(new Event("pagehide"));
     expect(api.putControls).not.toHaveBeenCalled();
 
-    // A signs back in: the pending change is uploaded with A's token, without reading the account copy.
+    // A signs back in: the parked change is restored and uploaded with A's token, without reading the account copy.
     api.token = "tokA";
     rerender({ u: U1 });
     await tick();
-    expect(api.getControls).toHaveBeenCalledTimes(1);
+    expect(api.getControls).toHaveBeenCalledTimes(2);
     expect(api.putControls).toHaveBeenCalledTimes(1);
     expect(api.putControls.mock.calls[0][1]).toEqual({ keys: {}, gamepad: { jump: ["B"] } });
     expect(api.putTokens).toEqual(["tokA"]);
     expect(readUnsynced("g1")).toBeNull();
   });
 
-  it("a token change while the user is unchanged (sign-in in another tab) cancels the debounced PUT", async () => {
+  it("L1: a token change before the debounce cancels the PUT and the footer stops claiming the account", async () => {
     const api = mockApi();
     const { result } = mount(api, U1);
     await tick();
     act(() => result.current.change({ keys: { fire: ["KeyX"] }, gamepad: {} }));
-    api.token = "tokB"; // AuthProvider sets the client token before /users/me resolves
+    api.token = "tokA2"; // same user, new token (re-login in another tab)
     await tick(CONTROLS_SYNC_DEBOUNCE_MS);
     expect(api.putControls).not.toHaveBeenCalled();
     expect(readUnsynced("g1")).toBe("u1");
+    expect(result.current.syncState).toBe("failed");
+  });
+
+  it("M1: a change made after the token switched (user not yet updated) is never sent with the new token", async () => {
+    const api = mockApi();
+    const { result } = mount(api, U1);
+    await tick();
+    api.token = "tokB"; // another tab signed in as B; /users/me hasn't answered
+    act(() => result.current.change({ keys: { fire: ["KeyX"] }, gamepad: {} }));
+    await tick(CONTROLS_SYNC_DEBOUNCE_MS);
+    window.dispatchEvent(new Event("pagehide"));
+    await tick();
+    expect(api.putTokens).toEqual([]);
+    expect(readUnsynced("g1")).toBe("u1");
+    expect(result.current.syncState).toBe("failed");
+  });
+
+  it("M1/L1: a token change passed in restarts the session; the same user's pending change uploads with the new token", async () => {
+    const api = mockApi();
+    const { result, rerender } = renderHook(({ t }: { t: string }) => useControlsSync("g1", ACTIONS, U1, api, t), { initialProps: { t: "tokA" } });
+    await tick();
+    act(() => result.current.change({ keys: { fire: ["KeyX"] }, gamepad: {} }));
+    api.token = "tokA2";
+    rerender({ t: "tokA2" });
+    await tick();
+    expect(api.putTokens).toEqual(["tokA2"]);
+    expect(readUnsynced("g1")).toBeNull();
+    expect(result.current.syncState).toBe("account");
+  });
+
+  it("L3: one PUT in flight; changes meanwhile are sent afterwards with the latest bindings", async () => {
+    const api = mockApi();
+    const first = deferred<PutControlsResponse>();
+    api.putControls.mockImplementationOnce(async (_id, bindings) => {
+      api.putTokens.push(api.token);
+      await first.promise;
+      return { bindings, updatedAt: AT };
+    });
+    const { result } = mount(api, U1);
+    await tick();
+    act(() => result.current.change({ keys: { fire: ["KeyX"] }, gamepad: {} }));
+    await tick(CONTROLS_SYNC_DEBOUNCE_MS);
+    expect(api.putControls).toHaveBeenCalledTimes(1);
+    act(() => result.current.change({ keys: { fire: ["KeyY"] }, gamepad: {} }));
+    await tick(CONTROLS_SYNC_DEBOUNCE_MS);
+    act(() => result.current.change({ keys: { fire: ["KeyW"] }, gamepad: {} }));
+    await tick(CONTROLS_SYNC_DEBOUNCE_MS);
+    // Still only the first request: the later ones wait for it.
+    expect(api.putControls).toHaveBeenCalledTimes(1);
+    expect(readUnsynced("g1")).toBe("u1");
+    await act(async () => {
+      first.resolve({ bindings: { keys: {}, gamepad: {} }, updatedAt: AT });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // Exactly one follow-up, with the latest bindings.
+    expect(api.putControls).toHaveBeenCalledTimes(2);
+    expect(api.putControls.mock.calls[1][1]).toEqual({ keys: { fire: ["KeyW"] }, gamepad: {} });
+    expect(readUnsynced("g1")).toBeNull();
+  });
+
+  it("L3: the keepalive flush on close waits for the PUT in flight, then sends the latest bindings", async () => {
+    const api = mockApi();
+    const first = deferred<PutControlsResponse>();
+    api.putControls.mockImplementationOnce(async (_id, bindings) => {
+      await first.promise;
+      return { bindings, updatedAt: AT };
+    });
+    const { result, unmount } = mount(api, U1);
+    await tick();
+    act(() => result.current.change({ keys: { fire: ["KeyX"] }, gamepad: {} }));
+    await tick(CONTROLS_SYNC_DEBOUNCE_MS);
+    act(() => result.current.change({ keys: { fire: ["KeyY"] }, gamepad: {} }));
+    unmount();
+    expect(api.putControls).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      first.resolve({ bindings: { keys: {}, gamepad: {} }, updatedAt: AT });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(api.putControls).toHaveBeenCalledTimes(2);
+    expect(api.putControls.mock.calls[1]).toEqual(["g1", { keys: { fire: ["KeyY"] }, gamepad: {} }, { keepalive: true }]);
+    expect(readUnsynced("g1")).toBeNull();
   });
 
   it("sign-out before the debounce sends nothing and keeps the change unsynced", async () => {

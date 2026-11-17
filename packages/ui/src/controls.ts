@@ -551,6 +551,40 @@ export function subscribeBindings(gameId: string, fn: (bindings: ControlBindings
   };
 }
 
+/**
+ * F016 shared devices: where another signed-in user's unconfirmed change is set aside while someone else plays.
+ * Same format as the main entry, without `unsynced` (the key names the owner).
+ */
+export function controlsParkedKey(gameId: string, userId: string): string {
+  return `webgame.controls.${gameId}.pending.${userId}`;
+}
+
+/**
+ * F016: if the device entry holds an unconfirmed change of a user other than `userId`, moves those bindings aside
+ * under {@link controlsParkedKey} for their owner and clears the device entry (subscribers are told, so the game falls
+ * back to the defaults). Returns the owner's id, or null when nothing was moved.
+ */
+export function parkOtherUsersChange(gameId: string, userId: string): string | null {
+  const entry = readEntry(gameId);
+  if (entry.unsynced === null || entry.unsynced === userId) return null;
+  const owner = entry.unsynced;
+  const b = entry.bindings;
+  const value: Record<string, unknown> = { v: 1, overrides: b.keys };
+  if (Object.keys(b.gamepad).length > 0) value.gamepad = b.gamepad;
+  storageSet(controlsParkedKey(gameId, owner), JSON.stringify(value));
+  writeBindings(gameId, emptyBindings(), undefined, { unsynced: null });
+  return owner;
+}
+
+/** F016: removes and returns `userId`'s parked bindings for a game, or null when there are none (or they are malformed). */
+export function takeParkedChange(gameId: string, userId: string): ControlBindings | null {
+  const key = controlsParkedKey(gameId, userId);
+  const raw = storageGet(key);
+  if (raw === null) return null;
+  storageSet(key, null);
+  return parseStored(raw)?.bindings ?? null;
+}
+
 /** Like {@link subscribeBindings}, with the key overrides only (F009 API). */
 export function subscribeOverrides(gameId: string, fn: (overrides: ControlOverrides) => void): () => void {
   return subscribeBindings(gameId, (b) => fn(b.keys));

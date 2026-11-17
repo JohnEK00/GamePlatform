@@ -5,7 +5,7 @@ import { ApiClient, ApiError } from "../api/client";
 import type { ControlAction, ControlBindingsResponse, User } from "../api/types";
 import { GamePlayer, type GamePlayerGame } from "../components/GamePlayer";
 import { controlsStorageKey, resetControlsStoreForTests, writeBindings } from "../controls";
-import { CONTROLS_SYNC_DEBOUNCE_MS } from "../controlsSync";
+import { CONTROLS_SYNC_DEBOUNCE_MS, resetControlsSyncForTests } from "../controlsSync";
 import { WebGameProviders } from "../WebGameApp";
 import { installFakeGamepads, type FakeGamepads } from "./fakeGamepads";
 
@@ -39,6 +39,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   resetControlsStoreForTests();
+  resetControlsSyncForTests();
 });
 
 async function setup({ loggedIn = false, account = { bindings: null, updatedAt: null } as ControlBindingsResponse | Promise<ControlBindingsResponse> } = {}) {

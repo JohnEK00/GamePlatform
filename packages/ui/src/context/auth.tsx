@@ -57,20 +57,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const refresh = useCallback(async () => {
-    if (!api.token) {
+    const asked = api.token;
+    if (!asked) {
       setUser(null);
       setLoading(false);
       return;
     }
+    // An answer for a token that has been replaced meanwhile (another tab signed in as someone else) is dropped.
+    const current = () => api.token === asked;
     try {
-      setUser(await api.me());
+      const u = await api.me();
+      if (current()) setUser(u);
     } catch (e) {
-      if (isApiError(e) && e.status === 401) {
+      if (current() && isApiError(e) && e.status === 401) {
         setToken(null);
         setUser(null);
       }
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }, [api, setToken]);
 
@@ -85,10 +89,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== TOKEN_STORAGE_KEY) return;
+      if (e.newValue === api.token) return;
       api.setToken(e.newValue);
       setTokenState(e.newValue);
-      if (!e.newValue) setUser(null);
-      else void refresh();
+      // Whoever the new token belongs to, it isn't known to be the current user: until /users/me answers, nobody is
+      // signed in here (review 7, M1), so nothing in this tab acts as the old user with the new token.
+      setUser(null);
+      if (!e.newValue) setLoading(false);
+      else {
+        setLoading(true);
+        void refresh();
+      }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);

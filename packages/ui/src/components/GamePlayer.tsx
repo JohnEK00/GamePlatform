@@ -227,7 +227,7 @@ export function GamePlayer({ game, onPlayRecorded, onScoreSubmitted, onAchieveme
   const controlsHint = (game.controlsHint ?? "").trim();
   const showControls = hasControls(defaults, controlsHint);
   const bindings = useStoredBindings(game.id);
-  const controlsSync = useControlsSync(game.id, defaults, user, api);
+  const controlsSync = useControlsSync(game.id, defaults, user, api, token);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [controlsHinting, setControlsHinting] = useState(false);
 

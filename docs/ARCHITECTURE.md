@@ -1250,3 +1250,33 @@ Gamepad remapping and synced control bindings (spec: `docs/features/F016-gamepad
 - **Games with no declared actions** never call the controls endpoints.
 - **Capture:** only one capture slot, key or gamepad, can be listening at a time.
 - **The row's Reset button** comes after the gamepad slots, because it resets both keys and gamepad buttons.
+
+
+## Review-fix additions (REVIEW-2026-11-17-7)
+These rules replace the F016 frontend implementation notes above where the two differ.
+
+### Who an upload belongs to (M1, L1)
+- A sync session starts on mount and whenever the signed-in user or the auth token changes. It records the user id and the client token once, when it starts.
+- Every upload is sent only if both still match when it is about to go out. This covers the debounced upload, the keepalive flush, the upload when the session starts, and the upload after the `GET`.
+- If either has changed, nothing is sent. The device entry stays marked unsynced for that user, and the panel shows the failed-sync note.
+- When the token changes in another tab, `AuthProvider` sets the user to unknown at once and shows loading until `/users/me` confirms who the new token belongs to.
+  - If `/users/me` fails, nobody is signed in; it never falls back to the old user.
+  - An answer for a token that has since been replaced is dropped.
+
+### Shared devices (L2)
+- The device entry `webgame.controls.{gameId}` holds the bindings in play. `unsynced` names the signed-in user whose latest change there is not yet confirmed.
+- A change made while signed out clears `unsynced`, so it is never uploaded as anyone's change.
+- When user U's session starts:
+  1. If the entry is unsynced for another user X, X's bindings are moved to `webgame.controls.{gameId}.pending.{X}` (same format, without `unsynced`). The device entry is then cleared, and the game gets the defaults.
+  2. If a moved-aside entry exists for U, it becomes the device entry again with `unsynced = U`, and its separate key is removed.
+  3. If the entry is unsynced for U, it is uploaded without a `GET`. Otherwise U's copy is fetched with `GET`:
+     - if U has a copy, the device adopts it;
+     - if not, and the device bindings aren't empty, they are marked `unsynced = U` and uploaded.
+- So U never edits on top of X's bindings, and X's change is uploaded only to X's account, at X's next sign-in on this device.
+- Edge case: if the device held another user's unsynced change and U's account has no copy, U starts from the defaults.
+
+### One upload at a time (L3)
+- Each game has at most one `PUT` in flight.
+- Uploads requested in the meantime collapse into one waiting upload. When it runs, it reads the latest device bindings. It is skipped if the entry is no longer unsynced for that user.
+- The keepalive flush on unmount or `pagehide` goes out at once when nothing is in flight. Otherwise it waits for the current request, then sends the latest bindings with `keepalive`. If the page is gone by then, the marker stays and the next session uploads the change.
+- The marker is cleared only when the device bindings equal what the successful `PUT` sent.
