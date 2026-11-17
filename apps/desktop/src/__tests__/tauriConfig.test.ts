@@ -51,6 +51,13 @@ describe("tauri.conf.json CSP (F016 controls sync)", () => {
     expect(allows("connect-src", `${server}/api/games/g_123/controls`)).toBe(true);
   });
 
+  // F020: PUT {server}/api/games/{id}/comment-settings (CSP has no per-method rules; connect-src covers PUT).
+  it.each(servers)("connect-src allows PUT {server}/api/games/{id}/comment-settings for %s (F020)", (input) => {
+    const server = normalizeServerUrl(input);
+    expect(allows("connect-src", `${server}/api/games/g_123/comment-settings`)).toBe(true);
+    expect(allows("connect-src", `${server}/api/games/g_123/comments?sort=top`)).toBe(true);
+  });
+
   it.each(servers)("frame-src allows game iframes served by %s", (input) => {
     expect(allows("frame-src", `${normalizeServerUrl(input)}/play/g_123/`)).toBe(true);
   });
