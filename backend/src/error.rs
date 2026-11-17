@@ -27,6 +27,10 @@ pub enum AppError {
     /// 429 with `Retry-After: retry_after` seconds.
     #[error("Too many requests; try again in {retry_after} seconds")]
     RateLimited { retry_after: u64 },
+    /// F020: 429 `slow_mode` with `Retry-After: retry_after` seconds (a per-game setting, not a
+    /// rate-limit bucket).
+    #[error("Slow mode is on: you can post again in {retry_after} seconds")]
+    SlowMode { retry_after: u64 },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -44,7 +48,9 @@ impl AppError {
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-            AppError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
+            AppError::RateLimited { .. } | AppError::SlowMode { .. } => {
+                StatusCode::TOO_MANY_REQUESTS
+            }
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -60,6 +66,7 @@ impl AppError {
             AppError::PayloadTooLarge(_) => "payload_too_large",
             AppError::ServiceUnavailable(_) => "unavailable",
             AppError::RateLimited { .. } => "rate_limited",
+            AppError::SlowMode { .. } => "slow_mode",
             AppError::Internal(_) => "internal",
         }
     }
@@ -92,7 +99,7 @@ impl IntoResponse for AppError {
         };
         let body = json!({ "error": { "code": self.code(), "message": message } });
         let mut res = (self.status(), axum::Json(body)).into_response();
-        if let AppError::RateLimited { retry_after } = self {
+        if let AppError::RateLimited { retry_after } | AppError::SlowMode { retry_after } = self {
             res.headers_mut().insert(
                 axum::http::header::RETRY_AFTER,
                 axum::http::HeaderValue::from(retry_after.max(1)),

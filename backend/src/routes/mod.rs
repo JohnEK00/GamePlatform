@@ -154,6 +154,10 @@ pub fn api_router() -> Router<AppState> {
             "/comments/{id}",
             get(comments::get_comment).delete(comments::delete_comment),
         )
+        .route(
+            "/games/{id}/comment-settings",
+            put(comments::put_comment_settings),
+        )
         .route("/comments/{id}/replies", get(comments::list_replies))
         .route(
             "/comments/{id}/heart",

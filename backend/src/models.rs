@@ -134,6 +134,60 @@ pub struct Game {
     pub actions: Vec<ControlAction>,
     /// F009: normalised game.json `controls` (0-300 chars, `""` when none).
     pub controls_hint: String,
+    /// F020: the game's comment settings (the same for every viewer).
+    pub comment_settings: CommentSettings,
+}
+
+/// F020 `CommentMode`. The DB strings are the JSON strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommentMode {
+    On,
+    RepliesOnly,
+    Off,
+}
+
+impl CommentMode {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::RepliesOnly => "repliesOnly",
+            Self::Off => "off",
+        }
+    }
+
+    /// An exact match of one of the three strings, else `None`.
+    pub fn from_db(s: &str) -> Option<Self> {
+        match s {
+            "on" => Some(Self::On),
+            "repliesOnly" => Some(Self::RepliesOnly),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
+/// F020: the allowed slow-mode intervals in seconds (`0` = off).
+pub const SLOW_MODE_SECS: [i64; 6] = [0, 30, 60, 300, 900, 3600];
+
+/// F020 `CommentSettings` (`Game.commentSettings`, the `PUT …/comment-settings` response).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentSettings {
+    pub mode: CommentMode,
+    pub slow_mode_secs: i64,
+}
+
+/// F020 `CommentSettingsView` (`CommentListPage.settings`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentSettingsView {
+    #[serde(flatten)]
+    pub settings: CommentSettings,
+    /// The viewer is the game's current owner or an admin (false when anonymous).
+    pub can_manage: bool,
+    /// Whole seconds until the viewer may post again under slow mode, `0..=slowModeSecs`.
+    pub wait_secs: i64,
 }
 
 /// `ControlAction` (API.md § F009).
@@ -238,6 +292,8 @@ pub struct CommentListPage {
     /// F017: the game's pinned thread on every page (`null` when none; excluded from `items`
     /// and `total`).
     pub pinned: Option<CommentThread>,
+    /// F020: the game's comment settings for this viewer (the same on every page).
+    pub settings: CommentSettingsView,
 }
 
 /// F017: `PUT`/`DELETE /api/comments/{id}/pin|lock`.
@@ -352,6 +408,10 @@ pub struct GameRow {
     pub actions_json: Option<String>,
     /// F009: `games.controls_hint` (`None` → `""`).
     pub controls_hint: String,
+    /// F020: `games.comment_mode` (unknown → `On`).
+    pub comment_mode: CommentMode,
+    /// F020: `games.comment_slow_mode_secs` (not in `SLOW_MODE_SECS` → `0`).
+    pub comment_slow_mode_secs: i64,
 }
 
 /// SELECT prefix for [`GameRow`]; append `WHERE ...`.
@@ -359,7 +419,7 @@ pub const GAME_SELECT: &str = "SELECT g.id, g.owner_id, g.title, g.description, 
      g.version, g.entry, g.width, g.height, g.thumbnail_ext, g.thumbnail_version, g.plays, \
      g.rating_sum, g.rating_count, g.created_at, g.updated_at, \
      g.score_order, g.score_format, g.score_label, g.last_updated_at, \
-     g.actions_json, g.controls_hint, \
+     g.actions_json, g.controls_hint, g.comment_mode, g.comment_slow_mode_secs, \
      u.id AS o_id, u.username AS o_username, u.display_name AS o_display_name, \
      u.avatar_ext AS o_avatar_ext, u.avatar_version AS o_avatar_version, \
      (SELECT group_concat(tag, ',') FROM (SELECT tag FROM game_tags t WHERE t.game_id = g.id \
@@ -409,7 +469,34 @@ pub fn game_row_from_row(row: &SqliteRow) -> Result<GameRow, sqlx::Error> {
         controls_hint: row
             .try_get::<Option<String>, _>("controls_hint")?
             .unwrap_or_default(),
+        comment_mode: parse_comment_mode(row)?,
+        comment_slow_mode_secs: parse_slow_mode_secs(row)?,
     })
+}
+
+/// F020: lenient read of `games.comment_mode` (unknown → `On`, with a warning).
+fn parse_comment_mode(row: &SqliteRow) -> Result<CommentMode, sqlx::Error> {
+    let raw: String = row.try_get("comment_mode")?;
+    Ok(CommentMode::from_db(&raw).unwrap_or_else(|| {
+        let game_id: String = row.try_get("id").unwrap_or_default();
+        tracing::warn!(game_id, mode = %raw, "unknown games.comment_mode; using on");
+        CommentMode::On
+    }))
+}
+
+/// F020: lenient read of `games.comment_slow_mode_secs` (not allowed → `0`, with a warning).
+fn parse_slow_mode_secs(row: &SqliteRow) -> Result<i64, sqlx::Error> {
+    let raw: i64 = row.try_get("comment_slow_mode_secs")?;
+    if SLOW_MODE_SECS.contains(&raw) {
+        return Ok(raw);
+    }
+    let game_id: String = row.try_get("id").unwrap_or_default();
+    tracing::warn!(
+        game_id,
+        secs = raw,
+        "unknown games.comment_slow_mode_secs; using 0"
+    );
+    Ok(0)
 }
 
 pub fn rating_avg(sum: i64, count: i64) -> f64 {
@@ -469,6 +556,15 @@ impl GameRow {
             latest_version,
             actions: self.actions(),
             controls_hint: self.controls_hint.clone(),
+            comment_settings: self.comment_settings(),
+        }
+    }
+
+    /// F020: the stored comment settings.
+    pub fn comment_settings(&self) -> CommentSettings {
+        CommentSettings {
+            mode: self.comment_mode,
+            slow_mode_secs: self.comment_slow_mode_secs,
         }
     }
 

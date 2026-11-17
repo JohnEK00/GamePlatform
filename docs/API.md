@@ -1489,3 +1489,12 @@ type CommentListPage = { ...F017, settings: CommentSettingsView }  // returned o
 ### Rate limits
 - `PUT /api/games/{id}/comment-settings` shares **`Limit::ThreadTools`** (60 per 10 min, per user) with the F017 pin/lock endpoints.
 - Slow mode is a per-game setting enforced by the server, not a rate-limit bucket: it is unaffected by `RATE_LIMIT=off` and reported as `slow_mode`, not `rate_limited`. `Limit::Comment` still applies on top of it.
+
+
+### F020 implementation notes (backend)
+- **Body that isn't an object:** any valid JSON that isn't an object (`[]`, `"x"`, `5`, `null`) gets 422 `Body must be a JSON object`. That check comes after auth, the 404 and 403 checks and the rate limit.
+- **Admins and unpublished games:** an admin gets 404 from `PUT …/comment-settings` on another user's unpublished game, the same as any non-owner.
+- **Reply cap and slow mode:** the 200-reply cap is checked inside the slow-mode transaction. A capped reply rolls back and never uses up the slow-mode slot. A user still waiting out slow mode who replies to a full thread gets `slow_mode`.
+- **Lock race:** if a thread is locked between the lock check and the transaction, the post fails with `slow_mode` instead of the lock error.
+- **Wait times:** the wait is computed in milliseconds and rounded up, so `Retry-After` and `waitSecs` always agree on when the wait ends.
+- **Unknown stored values:** an unknown `comment_mode` reads as `on` and an unknown `slow_mode_secs` reads as `0`. Both log a warning.

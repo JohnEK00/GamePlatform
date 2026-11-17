@@ -55,8 +55,8 @@ pub enum Limit {
     /// F007 notification endpoints (list, unread count, mark read, settings GET/PUT, shared):
     /// 120/min, per user
     Notifications,
-    /// F017 creator thread tools (`PUT`/`DELETE …/pin` + `…/lock`, shared): 60 per 10 min,
-    /// per user
+    /// F017 creator thread tools (`PUT`/`DELETE …/pin` + `…/lock`), shared with the F020
+    /// `PUT /api/games/{id}/comment-settings`: 60 per 10 min, per user
     ThreadTools,
     /// F008 collection writes, shared by the seven write endpoints: `POST /api/collections`,
     /// `PATCH`/`DELETE /api/collections/{id}`, `PUT`/`DELETE /api/collections/{id}/games/{gameId}`

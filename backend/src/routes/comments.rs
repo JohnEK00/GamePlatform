@@ -14,8 +14,9 @@ use crate::auth::{AuthUser, MaybeAuthUser};
 use crate::error::{AppError, AppResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::models::{
-    Comment, CommentContext, CommentListPage, CommentThread, HeartResponse, Page, ThreadState,
-    now_rfc3339, user_ref_from_row,
+    Comment, CommentContext, CommentListPage, CommentMode, CommentSettings, CommentSettingsView,
+    CommentThread, GameRow, HeartResponse, Page, SLOW_MODE_SECS, ThreadState, now_rfc3339,
+    user_ref_from_row,
 };
 use crate::notifications::{self as notif, Dedupe, Kind, NewNotification};
 use crate::ratelimit::{ClientIp, Limit, key_for};
@@ -29,6 +30,54 @@ pub const REPLY_CAP: i64 = 200;
 pub const REPLY_PREVIEW: i64 = 3;
 /// F017: a reply to a locked thread by someone who isn't the game owner or an admin.
 const THREAD_LOCKED: &str = "This thread is locked";
+/// F020 step 5b: mode `off`, any post by someone who isn't exempt.
+const COMMENTS_OFF: &str = "Comments are turned off for this game";
+/// F020 step 5b: mode `repliesOnly`, a top-level post by someone who isn't exempt.
+const NEW_COMMENTS_OFF: &str = "New comments are turned off for this game";
+
+/// RFC3339 with millis and `Z`, the format of `now_rfc3339()` (string order is chronological).
+fn fmt_time(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// F020: whole seconds left of a slow-mode interval that started at `last`,
+/// `ceil(last + secs − now)` clamped to `[0, secs]` (a future `last` from a clock step back
+/// never yields more than `secs`). An unparsable `last` counts as no wait.
+fn slow_mode_wait(last: &str, secs: i64, now: chrono::DateTime<chrono::Utc>) -> i64 {
+    let Ok(last) = chrono::DateTime::parse_from_rfc3339(last) else {
+        tracing::warn!(
+            last,
+            "unparsable comment_post_times.last_posted_at; no wait"
+        );
+        return 0;
+    };
+    let left_ms = last.timestamp_millis() + secs * 1000 - now.timestamp_millis();
+    let left = if left_ms <= 0 {
+        0
+    } else {
+        (left_ms + 999) / 1000
+    };
+    left.clamp(0, secs)
+}
+
+/// F020/F017: the poster is the game's current owner or an admin. `admin` caches the
+/// `is_admin` lookup so a request loads it at most once.
+async fn exempt(
+    state: &AppState,
+    user_id: &str,
+    game: &GameRow,
+    admin: &mut Option<bool>,
+) -> AppResult<bool> {
+    if user_id == game.owner_id {
+        return Ok(true);
+    }
+    if let Some(a) = *admin {
+        return Ok(a);
+    }
+    let a = is_admin(state, Some(user_id)).await?;
+    *admin = Some(a);
+    Ok(a)
+}
 
 /// F006 read shape (docs/ARCHITECTURE.md § F006, plus the F017 `pinned`, `locked` and
 /// `can_moderate` columns and the F018 `thread_muted` column). Binds: `?1` = viewer id or NULL, `?2` = 1
@@ -258,10 +307,11 @@ pub async fn list_comments(
     state
         .limiter
         .check(Limit::CommentList, &key_for(viewer.id(), &ip))?;
-    fetch_visible_game(&state, &game_id, viewer.id()).await?;
+    let game = fetch_visible_game(&state, &game_id, viewer.id()).await?;
     let sort = CommentSort::parse(query.sort.as_deref())?;
     let (page, per_page) = parse_paging(query.page.as_deref(), query.per_page.as_deref(), 20)?;
     let viewer = Viewer::load(&state, viewer.id()).await?;
+    let settings = settings_view(&state, &game, &viewer).await?;
     let (total, total_all): (i64, i64) = sqlx::query_as(
         "SELECT COALESCE(SUM(parent_id IS NULL AND pinned_at IS NULL), 0), COUNT(*) \
          FROM comments WHERE game_id = ?",
@@ -312,7 +362,43 @@ pub async fn list_comments(
         per_page,
         total_all,
         pinned,
+        settings,
     }))
+}
+
+/// F020 `CommentListPage.settings`: `canManage` = owner or admin; `waitSecs` only for a
+/// signed-in, non-managing viewer while slow mode is on (one primary-key lookup).
+async fn settings_view(
+    state: &AppState,
+    game: &GameRow,
+    viewer: &Viewer,
+) -> AppResult<CommentSettingsView> {
+    let settings = game.comment_settings();
+    let can_manage = viewer
+        .id
+        .as_deref()
+        .is_some_and(|id| viewer.admin || id == game.owner_id);
+    let mut wait_secs = 0;
+    if let Some(uid) = viewer.id.as_deref()
+        && !can_manage
+        && settings.slow_mode_secs > 0
+    {
+        let last: Option<String> = sqlx::query_scalar(
+            "SELECT last_posted_at FROM comment_post_times WHERE game_id = ? AND user_id = ?",
+        )
+        .bind(&game.id)
+        .bind(uid)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some(last) = last {
+            wait_secs = slow_mode_wait(&last, settings.slow_mode_secs, chrono::Utc::now());
+        }
+    }
+    Ok(CommentSettingsView {
+        settings,
+        can_manage,
+        wait_secs,
+    })
 }
 
 #[derive(Deserialize)]
@@ -346,6 +432,21 @@ pub async fn create_comment(
         )));
     }
 
+    // F020 5b: the game's comment mode (owner and admins exempt). Not repeated in the
+    // transaction: a post racing a settings change may land (accepted, API § F020).
+    let mut admin: Option<bool> = None;
+    let mode_blocks = match game.comment_mode {
+        CommentMode::On => None,
+        CommentMode::Off => Some(COMMENTS_OFF),
+        CommentMode::RepliesOnly if parent_ref.is_none() => Some(NEW_COMMENTS_OFF),
+        CommentMode::RepliesOnly => None,
+    };
+    if let Some(msg) = mode_blocks
+        && !exempt(&state, &user.id, &game, &mut admin).await?
+    {
+        return Err(AppError::validation(msg));
+    }
+
     // Reply target: normalise to its root; `replyTo` only when answering someone else's reply.
     // F017: `root_locked` is the root's lock state at lookup time.
     let (root, reply_to, root_locked) = match parent_ref {
@@ -373,15 +474,53 @@ pub async fn create_comment(
         }
     };
     // F017: the game owner and admins bypass thread locks. `is_admin` is loaded only for a
-    // reply by someone other than the owner.
-    let moderator =
-        root.is_some() && (user.id == game.owner_id || is_admin(&state, Some(&user.id)).await?);
+    // reply by someone other than the owner (and at most once per request).
+    let moderator = root.is_some() && exempt(&state, &user.id, &game, &mut admin).await?;
     if root_locked && !moderator {
         return Err(AppError::validation(THREAD_LOCKED));
     }
 
+    // F020 6c: slow mode applies unless it is off or the poster is exempt.
+    let slow_secs = game.comment_slow_mode_secs;
+    let check_slow = slow_secs > 0 && !exempt(&state, &user.id, &game, &mut admin).await?;
+
     let id = uuid::Uuid::new_v4().to_string();
-    let now = now_rfc3339();
+    let now_dt = chrono::Utc::now();
+    // One value for `comments.created_at` and `comment_post_times.last_posted_at`.
+    let now = fmt_time(now_dt);
+    let cutoff = fmt_time(now_dt - chrono::Duration::seconds(slow_secs));
+    // One transaction: the claim, then the insert, so a rejected post never consumes the slot.
+    // `BEGIN IMMEDIATE` takes the write lock up front, so two posts by one user serialise and
+    // the second one sees the first one's claim.
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    let claimed = sqlx::query(
+        "INSERT INTO comment_post_times (game_id, user_id, last_posted_at) VALUES (?1, ?2, ?3) \
+         ON CONFLICT (game_id, user_id) DO UPDATE SET last_posted_at = excluded.last_posted_at \
+         WHERE ?4 = 1 OR comment_post_times.last_posted_at <= ?5",
+    )
+    .bind(&game_id)
+    .bind(&user.id)
+    .bind(&now)
+    .bind(i64::from(!check_slow))
+    .bind(&cutoff)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if claimed == 0 {
+        let last: Option<String> = sqlx::query_scalar(
+            "SELECT last_posted_at FROM comment_post_times WHERE game_id = ? AND user_id = ?",
+        )
+        .bind(&game_id)
+        .bind(&user.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.rollback().await?;
+        let left = last.map_or(0, |l| slow_mode_wait(&l, slow_secs, now_dt));
+        let retry_after = left.clamp(1, slow_secs);
+        return Err(AppError::SlowMode {
+            retry_after: u64::try_from(retry_after).unwrap_or(1),
+        });
+    }
     match &root {
         None => {
             sqlx::query(
@@ -393,7 +532,7 @@ pub async fn create_comment(
             .bind(&user.id)
             .bind(text)
             .bind(&now)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await?;
         }
         Some(root) => {
@@ -416,10 +555,12 @@ pub async fn create_comment(
             .bind(&reply_to)
             .bind(REPLY_CAP)
             .bind(i64::from(moderator))
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
             if done == 0 {
+                // Roll the claim back before the re-read (it uses the pool).
+                tx.rollback().await?;
                 let locked: Option<bool> =
                     sqlx::query_scalar("SELECT locked_at IS NOT NULL FROM comments WHERE id = ?")
                         .bind(root)
@@ -435,6 +576,7 @@ pub async fn create_comment(
             }
         }
     }
+    tx.commit().await?;
     notify_new_comment(
         &state,
         &game_id,
@@ -445,7 +587,13 @@ pub async fn create_comment(
         reply_to.as_deref(),
     )
     .await;
-    let viewer = Viewer::load(&state, Some(&user.id)).await?;
+    let viewer = Viewer {
+        id: Some(user.id.clone()),
+        admin: match admin {
+            Some(a) => a,
+            None => is_admin(&state, Some(&user.id)).await?,
+        },
+    };
     let comment = load_comment(&state, &viewer, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Comment"))?;
@@ -909,4 +1057,59 @@ pub async fn unlock(
     )
     .await?;
     Ok(Json(st))
+}
+
+/// F020 `PUT /api/games/{id}/comment-settings`, checked in the API § F020 order: auth (401,
+/// extractor) → malformed JSON (400, extractor) → game visible (404) → owner or admin (403) →
+/// `Limit::ThreadTools` (429) → body object → `mode` → `slowModeSecs` (422). Leaves
+/// `updated_at`/`last_updated_at` alone and writes no activity or notifications.
+pub async fn put_comment_settings(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(game_id): ApiPath<String>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> AppResult<Json<CommentSettings>> {
+    let game = fetch_visible_game(&state, &game_id, Some(&user.id)).await?;
+    if user.id != game.owner_id && !is_admin(&state, Some(&user.id)).await? {
+        return Err(AppError::forbidden());
+    }
+    limit_user(&state, Limit::ThreadTools, &user.id)?;
+    let settings = parse_comment_settings(&body)?;
+    let done =
+        sqlx::query("UPDATE games SET comment_mode = ?, comment_slow_mode_secs = ? WHERE id = ?")
+            .bind(settings.mode.as_db())
+            .bind(settings.slow_mode_secs)
+            .bind(&game_id)
+            .execute(&state.db)
+            .await?
+            .rows_affected();
+    if done == 0 {
+        return Err(AppError::not_found("Game"));
+    }
+    Ok(Json(settings))
+}
+
+/// F020 body validation (texts verbatim from API § F020). A missing field, a wrong JSON type and
+/// an unknown value give the same message; extra fields are ignored.
+fn parse_comment_settings(body: &serde_json::Value) -> AppResult<CommentSettings> {
+    let obj = body
+        .as_object()
+        .ok_or_else(|| AppError::validation("Body must be a JSON object"))?;
+    let mode = obj
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .and_then(CommentMode::from_db)
+        .ok_or_else(|| AppError::validation("mode must be one of: on, repliesOnly, off"))?;
+    // `as_i64` is `None` for floats (`60.0`, `60.5`), strings, bools and null.
+    let slow_mode_secs = obj
+        .get("slowModeSecs")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|s| SLOW_MODE_SECS.contains(s))
+        .ok_or_else(|| {
+            AppError::validation("slowModeSecs must be one of: 0, 30, 60, 300, 900, 3600")
+        })?;
+    Ok(CommentSettings {
+        mode,
+        slow_mode_secs,
+    })
 }
