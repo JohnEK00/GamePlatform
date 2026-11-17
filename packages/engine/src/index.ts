@@ -11,7 +11,11 @@ export type { BitmapFontData, BitmapGlyph, Kerning, GridFontOptions, FontMetrics
 export { NineSlice, nineSliceQuads } from './nineslice';
 export type { Insets, NineSliceOptions, NineQuad } from './nineslice';
 export { Ui, defaultTheme } from './ui';
-export type { UiTheme, ButtonOptions, PanelOptions, UiInput, UiRenderer, UiDeps } from './ui';
+export type {
+  UiTheme, ButtonOptions, PanelOptions, UiInput, UiRenderer, UiDeps, SliderOptions, ToggleOptions, TextFieldOptions, ListOptions,
+} from './ui';
+export { filterText, applyTextEvents, visibleRun, caretFromX, truncateToWidth, TEXT_EDIT_KEYS } from './uitext';
+export type { TextEvent, MeasureFn, TextEditOptions } from './uitext';
 export { PIXEL_GLYPHS, pixelFontData } from './pixelfont';
 export { AudioManager, Sound } from './audio';
 export type { PlayOptions, SoundHandle, ToneOptions, NoiseOptions } from './audio';

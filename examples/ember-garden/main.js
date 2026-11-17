@@ -255,7 +255,7 @@ const profile = {
   best: 0,
   bestWave: 0,
   runs: 0,
-  settings: { sound: true, shake: true, difficulty: 'normal', flame: 'amber' },
+  settings: { sound: true, shake: true, volume: 1, difficulty: 'normal', flame: 'amber' },
   unlocks: { swarm: false, azure: false, rose: false },
   lbPeriod: 'week',
 };
@@ -274,6 +274,9 @@ function loadProfile(engine) {
   if (st && typeof st === 'object') {
     profile.settings.sound = st.sound !== false;
     profile.settings.shake = st.shake !== false;
+    // Saves from before the VOLUME slider have no `volume`: full volume.
+    const vol = Number(st.volume);
+    profile.settings.volume = st.volume !== undefined && Number.isFinite(vol) ? Math.max(0, Math.min(1, vol)) : 1;
     profile.settings.difficulty = DIFFS[st.difficulty] ? st.difficulty : 'normal';
     profile.settings.flame = FLAMES[st.flame] ? st.flame : 'amber';
   }
@@ -282,7 +285,9 @@ function loadProfile(engine) {
   if (profile.settings.flame !== 'amber' && !profile.unlocks[profile.settings.flame]) profile.settings.flame = 'amber';
   const p = s.get('lbPeriod', 'week');
   profile.lbPeriod = PERIODS.some((x) => x.id === p) ? p : 'week';
-  engine.audio.muted = !profile.settings.sound;
+  engine.audio.masterVolume = profile.settings.volume;
+  // The host's webgame:mute also sets `muted`: loading only ever mutes (sound off), never un-mutes.
+  if (!profile.settings.sound) engine.audio.muted = true;
 }
 function saveSettings(engine) {
   engine.storage.set('settings', { ...profile.settings });
@@ -516,19 +521,32 @@ class SettingsScene {
     const s = profile.settings;
     focusOnce(this, engine, 'sound');
     const x = W / 2 - 100;
-    let y = 74;
+    let y = 68;
     const row = (id, label, opts) => {
       const hit = ui.button(id, label, x, y, 200, 18, opts);
       y += 22;
       return hit;
     };
-    if (row('sound', `SOUND: ${s.sound ? 'ON' : 'OFF'}`)) toggleSound(engine);
-    if (row('shake', `SCREEN SHAKE: ${s.shake ? 'ON' : 'OFF'}`)) {
+    // F019 widgets are "value in, value out": pass the setting, store what comes back.
+    if (ui.toggle('sound', s.sound, 'SOUND', x, y, 200, 18) !== s.sound) toggleSound(engine);
+    y += 22;
+    if (ui.toggle('shake', s.shake, 'SCREEN SHAKE', x, y, 200, 18) !== s.shake) {
       s.shake = !s.shake;
       saveSettings(engine);
       if (s.shake) engine.camera.shake(3, 0.2);
       menuSound(engine);
     }
+    y += 22;
+    // VOLUME: label on the left, slider on the right; applied live, saved once per drag / key step.
+    ui.label('VOLUME', x, y + 9, { baseline: 'middle' });
+    s.volume = ui.slider('volume', s.volume, x + 64, y + 2, 100, 14, { min: 0, max: 1, step: 0.1 });
+    ui.label(`${Math.round(s.volume * 100)}%`, x + 200, y + 9, { align: 'right', baseline: 'middle' });
+    if (ui.changed('volume')) engine.audio.masterVolume = s.volume;
+    if (ui.committed('volume')) {
+      saveSettings(engine);
+      if (s.sound) engine.audio.tone({ freq: 660, duration: 0.06, type: 'triangle', volume: 0.12 });
+    }
+    y += 22;
     // Disabled mid-run: drawn at half alpha, skipped by keyboard/gamepad navigation.
     if (row('mode', `MODE: ${diff().name}`, { disabled: this.inRun })) {
       s.difficulty = this.cycle(Object.keys(DIFFS), s.difficulty, (k) => k !== 'swarm' || profile.unlocks.swarm);
@@ -540,7 +558,7 @@ class SettingsScene {
       saveSettings(engine);
       menuSound(engine);
     }
-    y += 6;
+    y += 4;
     if (row('back', 'BACK') || engine.input.actionPressed('pause')) {
       menuSound(engine);
       engine.scenes.pop();
@@ -553,7 +571,7 @@ class SettingsScene {
       r.drawRect(0, 0, W, H, '#0b0816', { alpha: 0.55 * a });
       engine.ui.panel(W / 2 - 130, 26, 260, 222, { alpha: a });
       r.drawText('SETTINGS', W / 2, 48, { font: 'ember', size: 20, align: 'center', baseline: 'middle', color: '#ffd166', alpha: a });
-      let y = 200;
+      let y = 212; // below BACK (which ends at 202)
       for (const [k, text] of Object.entries(UNLOCK_RULES)) {
         const open = profile.unlocks[k];
         r.drawText(`${open ? 'UNLOCKED' : 'LOCKED'}  ${text}`, W / 2, y, { ...TEXT_SMALL, align: 'center', color: open ? '#9fe0a8' : '#8b7fa8', alpha: a });
@@ -1313,6 +1331,10 @@ export default {
       textColor: '#f6e7c8',
       disabledTextColor: '#8b7fa8',
       focusColor: '#ffd166',
+      // F019 slider / toggle colours in the garden's palette.
+      trackColor: '#2a1f3d',
+      fillColor: '#c9773a',
+      knobColor: '#ffd166',
     });
     engine.renderer.background = '#0b0816';
     loadProfile(engine);

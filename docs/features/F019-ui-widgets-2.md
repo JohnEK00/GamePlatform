@@ -50,7 +50,7 @@ Non-goals (later items): an on-screen keyboard (F023 proposed), IME composition,
 ### 2.2 Studio (frontend)
 - The **"Menu & HUD"** template (`menu-hud`) replaces its title "SOUND: ON/OFF" button with **SETTINGS**, which opens a settings panel:
   - `NAME` text field (`maxLength` 12, `allow` letters, digits, space, `-` and `_`), saved with `engine.storage` and shown on the HUD ("MIA 120") and game over.
-  - `VOLUME` slider (0–1, `step` 0.1) with a percentage `ui.label`, applied to `engine.audio.volume`, saved on `committed`.
+  - `VOLUME` slider (0–1, `step` 0.1) with a percentage `ui.label`, applied to `engine.audio.masterVolume`, saved on `committed`.
   - `SOUND` toggle (the old button's behaviour, `engine.audio.muted`).
   - `STAR COLOUR` list of 6 named colours, 3 visible rows (so it scrolls), `selected` = the current colour; activating a row sets the star tint.
   - `BACK` button; the `pause` action also goes back.
@@ -91,7 +91,7 @@ Non-goals (later items): an on-screen keyboard (F023 proposed), IME composition,
 5. **`src/index.ts`**: export the types `SliderOptions`, `ToggleOptions`, `TextFieldOptions`, `ListOptions`, `TextEvent`, and the `uitext.ts` functions (for tools/tests).
 6. **README.md**: extend "UI widgets (F012)" with a "Settings and text entry (F019)" part: the four widgets, signals, the navigation table, keyboard capture, `textEvents`, the touch/controller note and the new theme fields. Add `textEvents`/`keyboardCaptured` to the input list next to `typed`.
 7. **Example, `examples/ember-garden`** (SettingsScene only; keep the rest unchanged):
-   - `SOUND` and `SCREEN SHAKE` become `ui.toggle`s; add a `VOLUME` slider (0–1, `step` 0.1) with a percentage label, applied to `engine.audio.volume` on load and on change, saved via the existing `saveSettings` only on `ui.committed`. `profile.settings.volume` defaults to `1` when missing (old saves keep working).
+   - `SOUND` and `SCREEN SHAKE` become `ui.toggle`s; add a `VOLUME` slider (0–1, `step` 0.1) with a percentage label, applied to `engine.audio.masterVolume` on load and on change, saved via the existing `saveSettings` only on `ui.committed`. `profile.settings.volume` defaults to `1` when missing (old saves keep working).
    - `MODE`, `FLAME` (cycle buttons, `MODE` disabled mid-run) and `BACK` stay buttons. Keep `focusOnce(this, engine, 'sound')`. Make sure the panel height still fits the unlock list (move rows if needed).
    - Repack with `npm run examples`.
 8. **Tests** (node environment; new `test/ui-widgets2.test.ts`, `test/uitext.test.ts`, `test/input-text.test.ts`; existing `ui.test.ts`, `input*.test.ts`, `actions.test.ts` stay green):

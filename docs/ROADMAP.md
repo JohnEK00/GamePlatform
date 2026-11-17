@@ -38,7 +38,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F018 | Notification controls: mutes, shared polling, "pinned" notifications | M | shipped |
 | F021 | Collection activity: feed items and "added to a collection" notifications | M | shipped |
 | F016 | Gamepad remapping, synced control bindings and device-aware prompts | M | shipped |
-| F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | M | specced |
+| F019 | Engine UI widgets 2: slider, toggle, text field and vertical list | M | shipped |
 | F020 | Game comment settings: turn comments off, slow mode | S | proposed |
 | F015 | Screenshots in the feed and on profiles | S | proposed |
 | F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | proposed |

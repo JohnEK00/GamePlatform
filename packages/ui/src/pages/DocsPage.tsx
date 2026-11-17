@@ -102,6 +102,26 @@ render(engine) {
   engine.renderer.drawText("Press " + engine.input.actionLabel("jump") + " to start", 20, 20);
 }`;
 
+const SETTINGS_JS = `update(engine) {
+  const { ui, audio, storage } = engine;
+  const s = this.settings;                       // your own state: widgets take a value and return the new one
+  ui.label("VOLUME", 40, 82);
+  s.volume = ui.slider("vol", s.volume, 120, 80, 160, 12, { step: 0.1 });
+  ui.label(Math.round(s.volume * 100) + "%", 320, 82, { align: "right" });
+  if (ui.changed("vol")) audio.masterVolume = s.volume;   // live while dragging
+  if (ui.committed("vol")) storage.set("settings", s);    // saved once, when the drag ends
+
+  s.shake = ui.toggle("shake", s.shake, "SCREEN SHAKE", 40, 100, 240, 14);
+
+  s.name = ui.textField("name", s.name, 120, 120, 160, 16, {
+    maxLength: 12, placeholder: "PLAYER", allow: (ch) => /^[A-Za-z0-9 _-]$/.test(ch),
+  });
+  if (ui.committed("name")) storage.set("settings", s);   // Enter, or leaving the field
+
+  const i = ui.list("level", this.levelNames, 40, 144, 240, 64, { selected: s.level });
+  if (i >= 0) s.level = i;                       // the row the player picked, else -1
+}`;
+
 const ACTIONS_AUTO_JS = `render(engine) {
   const { input } = engine;
   // "Press Space" for keyboard players, "Press A" (or their remapped button) after they touch a controller.
@@ -636,6 +656,101 @@ const png = await engine.captureFrame({ maxSize: 1280 });`}</Code>
           <li>
             Restyle everything through <code>engine.ui.theme</code>: <code>font</code>, <code>textSize</code>, colours, and{" "}
             <code>panel</code>/<code>button</code>/<code>buttonHover</code>/<code>buttonDown</code> 9-slices.
+          </li>
+        </ul>
+        <h3>Settings and text entry (F019)</h3>
+        <p>
+          Four more widgets complete a settings screen: <code>ui.slider</code>, <code>ui.toggle</code>,{" "}
+          <code>ui.textField</code> and <code>ui.list</code>. They are <strong>value in, value out</strong>: keep the value in
+          your own state, pass it in every step and store what comes back.
+        </p>
+        <Code label="main.js">{SETTINGS_JS}</Code>
+        <ul>
+          <li>
+            <code>ui.changed(id)</code> is true in the step the player changed the value; <code>ui.committed(id)</code> when
+            they finished (drag released, key step, toggle flip, <code>Enter</code> in a field, row picked). Both are{" "}
+            <code>false</code> before the widget&apos;s call in the step. Save on <code>committed</code>, not on every drag
+            step.
+          </li>
+          <li>
+            Slider: <code>min</code> (0), <code>max</code> (1), <code>step</code> (0 = continuous),{" "}
+            <code>keyStep</code>. Toggle: a label and a switch in one rect. Text field: <code>maxLength</code> (24, up to
+            256 code points), <code>placeholder</code>, <code>allow(ch)</code> per character. List: <code>rowHeight</code>{" "}
+            (16), <code>selected</code> (the highlighted current row); it scrolls by whole rows with the wheel or a drag
+            and returns the activated index, else <code>-1</code>.
+          </li>
+          <li>
+            The theme gains <code>trackColor</code>, <code>fillColor</code>, <code>knobColor</code>,{" "}
+            <code>fieldColor</code>, <code>fieldBorder</code>, <code>caretColor</code>, <code>placeholderColor</code>,{" "}
+            <code>rowHoverColor</code>, <code>rowSelectedColor</code> and optional <code>track</code>/<code>knob</code>/
+            <code>field</code> 9-slices.
+          </li>
+        </ul>
+        <div className="pf-docs__table-wrap" role="region" aria-label="Widget navigation" tabIndex={0}>
+          <table className="pf-docs__table">
+            <caption>Keys and gamepad, by focused widget</caption>
+            <thead>
+              <tr>
+                <th scope="col">Focused</th>
+                <th scope="col">left / right</th>
+                <th scope="col">up / down</th>
+                <th scope="col">confirm</th>
+                <th scope="col">Escape / B</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>button, toggle</td>
+                <td>move focus</td>
+                <td>move focus</td>
+                <td>activate / flip</td>
+                <td>clear focus</td>
+              </tr>
+              <tr>
+                <td>slider</td>
+                <td>change the value (hold repeats)</td>
+                <td>move focus</td>
+                <td>nothing</td>
+                <td>clear focus</td>
+              </tr>
+              <tr>
+                <td>list</td>
+                <td>move focus</td>
+                <td>move the cursor (hold repeats); a fresh press past either end leaves the list</td>
+                <td>pick the cursor row</td>
+                <td>clear focus</td>
+              </tr>
+              <tr>
+                <td>text field</td>
+                <td>move focus</td>
+                <td>move focus</td>
+                <td>start typing</td>
+                <td>clear focus</td>
+              </tr>
+              <tr>
+                <td>text field, typing</td>
+                <td>the arrow keys move the caret</td>
+                <td>save, then move focus</td>
+                <td>
+                  <code>Enter</code> or gamepad <strong>A</strong>: save
+                </td>
+                <td>put the old text back</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <ul>
+          <li>
+            <strong>Keyboard capture:</strong> while <code>engine.ui.editing</code> is set, keyboard keys don&apos;t reach
+            your actions or <code>axis()</code> (<code>input.keyboardCaptured</code>), so typing a name never moves the
+            player. Gamepad and mouse still count. <code>Escape</code> or gamepad <strong>B</strong> puts the old text back.
+            If you read raw keys or <code>typed</code> for gameplay, check <code>engine.ui.editing</code> yourself.
+          </li>
+          <li>
+            <strong>Touch and controller players:</strong> text fields need a physical keyboard (there is no on-screen
+            keyboard yet). Offer a fallback, such as preset names in a <code>ui.list</code>, or a hint when{" "}
+            <code>input.lastDevice</code> is <code>"touch"</code> or <code>"gamepad"</code>, as the <em>Menu &amp; HUD</em>{" "}
+            template does.
           </li>
         </ul>
         <p>

@@ -54,7 +54,8 @@ describe("Menu & HUD template (F012)", () => {
     const js = t.files["main.js"];
     expect(js).toContain("engine.ui.button(");
     expect(js).toMatch(/ui\.button\("play", "PLAY"/);
-    expect(js).toMatch(/ui\.button\("sound", "SOUND: "/);
+    // F019: the old "SOUND: ON/OFF" button became a SETTINGS screen with a SOUND toggle.
+    expect(js).toMatch(/ui\.button\("settings", "SETTINGS"/);
     expect(js).toMatch(/ui\.button\("help", "HOW TO PLAY"/);
     expect(js).toMatch(/ui\.button\("resume", "RESUME"/);
     expect(js).toMatch(/ui\.button\("quit", "QUIT"/);

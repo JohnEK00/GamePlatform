@@ -854,3 +854,18 @@ Unchanged from F012. The new widgets are part of the UI layer, before the F005 c
 - While `engine.ui.editing` is set, your keyboard actions pause (`input.keyboardCaptured`), so typing a name never moves the player. Gamepad and mouse still work. If you read raw keys or `typed` for gameplay, check `engine.ui.editing` yourself.
 - Text fields need a physical keyboard. On touch devices, and for controller-only players, offer a fallback (for example preset names in a `ui.list`). An on-screen keyboard is a later roadmap item (F023).
 - Labels and value read-outs are plain `ui.label` calls, so you choose the wording and the format.
+
+
+### F019 implementation notes (engine)
+- **`allow` callback:** any falsy return rejects the character. If `allow` throws, the character is rejected and this warning is logged once per id: `textField "{id}" allow threw; the character was rejected`.
+- **`ui.navigation = false`:** Enter (submit) and Escape or B (revert) still work while editing, and typing on a focused field still starts editing. Up and down only commit and move focus when navigation is on.
+- **Slider drag ended by a cancelled release or a pause:** `committed` still fires if the value changed during the drag. A normal release applies the pointer position at the moment of release.
+- **List focus and empty lists:** when focus arrives on a list, the cursor is set without counting as `changed`; only keys and clicks change it. An empty list can't take focus.
+- **Long text:** when the visible part of the text reaches its end, it extends left as far as fits, so backspacing at the end of long text never leaves a gap.
+- **IME composition:** while `isComposing` is true, editing keys are ignored as well as text keys. A paste is cut to 256 code points before `allow` filtering.
+- **Duplicate-id warnings:** these are deduplicated per widget kind and id. Buttons keep the F012 wording.
+- **Setting `ui.editing`:**
+  - After `ui.editing = id`, the getter returns that id until the next step. That step drops it if it doesn't declare an enabled field with that id.
+  - `ui.editing = null`, or moving `ui.focus` away, commits the edit. The field reports `committed` at its next call.
+- **Volume:** the volume API is `engine.audio.masterVolume`. There is no `audio.volume`.
+- **Mute at load:** the host's `webgame:mute` also sets `engine.audio.muted`. So a game's SOUND setting should only force `muted = true` at load when the saved setting is off, and never unmute at load.

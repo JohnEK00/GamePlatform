@@ -389,6 +389,8 @@ export class Engine {
       // Synthetic, cancelling releases: a press held across a pause never activates a ui.button.
       this.input.state.releaseAll();
       (this.ui as Ui | undefined)?.cancelPointer();
+      // F019: text typed while paused (e.g. under the controls panel) never reaches a field.
+      if (!this.paused) this.input.clearTextEvents();
       this.stepper.reset();
       this.last = -1;
     }
@@ -465,7 +467,7 @@ export class Engine {
   private readonly step = (dt: number): void => {
     if (this.state !== 'running' || this.paused) return;
     this.input.beginStep();
-    this.ui.beginStep();
+    this.ui.beginStep(dt); // F019: the fixed-step dt drives hold repeat
     this.game?.update?.(this, dt);
     this.scenes.update(dt);
     this.tweens.update(dt);

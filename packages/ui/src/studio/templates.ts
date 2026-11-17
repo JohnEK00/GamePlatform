@@ -402,11 +402,25 @@ export default {
 };
 `;
 
-const MENU_HUD_MAIN = `// Menu & HUD: a title menu, a pause menu and a crisp pixel-font HUD around a tiny star-catching game.
+const MENU_HUD_MAIN = `// Menu & HUD: a title menu, a settings screen, a pause menu and a crisp pixel-font HUD around a tiny star-catching game.
 // Widgets come from engine.ui and are called from update, never render (/docs, section 16 "Text, fonts and menus").
+// The settings screen shows a text field, a slider, a toggle and a scrolling list ("Settings and text entry").
 // No asset files: the panel and button frames are 9-slices drawn procedurally with assets.createTexture.
 const BTN_W = 120;
 const BTN_H = 20;
+
+// The star tints offered on the settings screen. The list shows 3 rows at a time, so it scrolls.
+const STAR_COLOURS = [
+  { name: "GOLD", color: "#ffd166" },
+  { name: "ROSE", color: "#ff6b9a" },
+  { name: "MINT", color: "#6be4a8" },
+  { name: "SKY", color: "#6bc8ff" },
+  { name: "LILAC", color: "#b48cff" },
+  { name: "SNOW", color: "#ffffff" },
+];
+const NAME_MAX = 12;
+// Called once per typed or pasted character: letters, digits, space, "-" and "_".
+const NAME_CHAR = (ch) => /^[A-Za-z0-9 _-]$/.test(ch);
 
 // A small framed box with rounded corners, a light top edge and a darker bottom edge.
 // It is drawn once, then stretched by a NineSlice: the corners stay crisp, the middle stretches.
@@ -441,9 +455,19 @@ export default {
     ui.theme.buttonDown = new NineSlice(down, 4);
     ui.theme.nineSliceScale = 1;
 
-    this.sound = engine.storage.get("sound", true) !== false;
-    this.best = engine.storage.get("best", 0);
-    this.state = "title"; // title | help | play | paused | over
+    // Saved settings. Check what comes back from storage: old saves may lack a key or hold something else.
+    const { storage, audio } = engine;
+    this.sound = storage.get("sound", true) !== false;
+    const volume = Number(storage.get("volume", 1));
+    this.volume = Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 1;
+    const name = storage.get("name", "");
+    this.name = typeof name === "string" ? name.slice(0, NAME_MAX) : "";
+    const colour = storage.get("colour", 0);
+    this.colour = Number.isInteger(colour) && colour >= 0 && colour < STAR_COLOURS.length ? colour : 0;
+    audio.masterVolume = this.volume;
+    if (!this.sound) audio.muted = true; // never unmute here: the site's own mute button also sets audio.muted
+    this.best = storage.get("best", 0);
+    this.state = "title"; // title | settings | help | play | paused | over
     this.keyboard = false; // was the last menu choice made with keys or a gamepad?
     this.focusNext = null;
     this.sky = Array.from({ length: 40 }, () => ({
@@ -487,6 +511,9 @@ export default {
       }
     } else if (this.state === "paused" && input.actionPressed("pause")) {
       this.state = "play";
+    } else if (this.state === "settings" && input.actionPressed("pause") && !engine.ui.editing) {
+      // "pause" also leaves the settings. Not while a name is being typed: a gamepad Start would drop the edit.
+      this.go(engine, "title", "settings");
     }
     this.menus(engine);
   },
@@ -548,13 +575,11 @@ export default {
         this.reset(engine);
         this.go(engine, "play");
       }
-      if (ui.button("sound", "SOUND: " + (this.sound ? "ON" : "OFF"), bx, 138, BTN_W, BTN_H)) {
-        this.sound = !this.sound;
-        engine.storage.set("sound", this.sound);
-        this.beep(engine, 660);
-      }
+      if (ui.button("settings", "SETTINGS", bx, 138, BTN_W, BTN_H)) this.go(engine, "settings", "name");
       if (ui.button("help", "HOW TO PLAY", bx, 164, BTN_W, BTN_H)) this.go(engine, "help", "back");
       ui.label("BEST " + this.best, cx, 214, { color: "#8b91b0", align: "center" });
+    } else if (this.state === "settings") {
+      this.settings(engine);
     } else if (this.state === "help") {
       // "auto": the player's key, or their gamepad button after they last touched a controller (F016).
       const key = (id) => input.actionLabel(id, "auto").toUpperCase();
@@ -577,7 +602,7 @@ export default {
     } else if (this.state === "over") {
       ui.panel(cx - 80, 64, 160, 136);
       ui.label("GAME OVER", cx, 76, { size: 16, color: "#ff7a3d", align: "center" });
-      ui.label("SCORE " + this.score, cx, 100, { align: "center" });
+      ui.label(this.scoreText(), cx, 100, { align: "center" });
       ui.label("BEST " + this.best, cx, 112, { color: "#8b91b0", align: "center" });
       if (ui.button("again", "PLAY AGAIN", bx, 134, BTN_W, BTN_H)) {
         this.reset(engine);
@@ -587,20 +612,81 @@ export default {
     }
   },
 
+  // Settings: value in, value out. Each widget takes the current value and returns the new one; save on ui.committed.
+  // Keys and gamepad: up/down move between the rows, left/right change the volume, up/down move inside the list.
+  settings(engine) {
+    const { ui, input, audio, storage } = engine;
+    const cx = engine.width / 2;
+    const px = cx - 150; // panel
+    const lx = px + 14; // labels
+    const wx = px + 110; // widgets
+    const ww = 176;
+    ui.panel(px, 24, 300, 200);
+    ui.label("SETTINGS", cx, 32, { size: 16, align: "center" });
+
+    // While the name is being typed, keyboard actions pause (input.keyboardCaptured), so A/D and P only type letters.
+    // Enter saves, Escape (or gamepad B) puts the old name back.
+    ui.label("NAME", lx, 60);
+    this.name = ui.textField("name", this.name, wx, 56, ww, 16, { maxLength: NAME_MAX, placeholder: "PLAYER", allow: NAME_CHAR });
+    if (ui.committed("name")) {
+      this.name = this.name.trim();
+      storage.set("name", this.name);
+    }
+
+    ui.label("VOLUME", lx, 82);
+    this.volume = ui.slider("volume", this.volume, wx, 80, ww - 36, 12, { min: 0, max: 1, step: 0.1 });
+    ui.label(Math.round(this.volume * 100) + "%", wx + ww, 82, { align: "right" });
+    if (ui.changed("volume")) audio.masterVolume = this.volume; // hear it while dragging...
+    if (ui.committed("volume")) {
+      storage.set("volume", this.volume); // ...but save once, when the drag ends or a key step lands
+      this.beep(engine, 660);
+    }
+
+    // A toggle carries its own label; the switch sits at the right end of the rect.
+    this.sound = ui.toggle("sound", this.sound, "SOUND", lx, 100, wx + ww - lx, 14);
+    if (ui.committed("sound")) {
+      audio.muted = !this.sound;
+      storage.set("sound", this.sound);
+      this.beep(engine, 660);
+    }
+
+    ui.label("STAR COLOUR", lx, 124, { color: STAR_COLOURS[this.colour].color });
+    const names = STAR_COLOURS.map((c) => c.name);
+    const picked = ui.list("colour", names, wx, 120, ww, 48, { rowHeight: 16, selected: this.colour });
+    if (picked >= 0) {
+      this.colour = picked;
+      storage.set("colour", picked);
+      this.beep(engine, 880);
+    }
+
+    if (ui.button("back", "BACK", cx - BTN_W / 2, 192, BTN_W, BTN_H)) this.go(engine, "title", "settings");
+
+    // Text fields need a physical keyboard: tell touch and controller players (there is no on-screen keyboard yet).
+    if (input.lastDevice === "touch" || input.lastDevice === "gamepad") {
+      ui.label("Type your name with a keyboard", cx, 234, { color: "#8b91b0", align: "center" });
+    }
+  },
+
+  // "MIA 120" on the HUD and the game-over screen once a name is saved, "SCORE 120" before that.
+  scoreText() {
+    return (this.name || "SCORE") + " " + this.score;
+  },
+
   render(engine) {
     const r = engine.renderer;
     const W = engine.width;
     const H = engine.height;
     r.clear("#0b0e1c");
     for (const s of this.sky) r.drawRect(s.x, s.y, s.s, s.s, "#2a3358");
-    if (this.state === "title" || this.state === "help") return; // the menus are drawn by the UI layer
+    if (this.state === "title" || this.state === "help" || this.state === "settings") return; // the menus are drawn by the UI layer
 
     r.drawRect(0, H - 8, W, 8, "#141a2e");
+    const tint = STAR_COLOURS[this.colour].color;
     for (const s of this.stars) {
       const x = Math.round(s.x);
       const y = Math.round(s.y);
-      r.drawRect(x - 1, y - 3, 3, 7, "#ffd166");
-      r.drawRect(x - 3, y - 1, 7, 3, "#ffd166");
+      r.drawRect(x - 1, y - 3, 3, 7, tint);
+      r.drawRect(x - 3, y - 1, 7, 3, tint);
     }
     const bx = Math.round(this.x) - 20;
     r.drawRect(bx, H - 22, 40, 6, "#ff7a3d");
@@ -609,7 +695,7 @@ export default {
     // HUD in screen space, so camera shake leaves it still. "pixel" at size 8 (its native size) is crisp.
     r.ui(() => {
       const hud = { font: "pixel", size: 8, color: "#ffffff" };
-      r.drawText("SCORE " + this.score, 6, 6, hud);
+      r.drawText(this.scoreText(), 6, 6, hud);
       r.drawText("LIVES " + this.lives, 6, 16, { ...hud, color: this.lives === 1 ? "#ff7a3d" : "#c3c7dc" });
       r.drawText("BEST " + this.best, W / 2, 6, { ...hud, color: "#8b91b0", align: "center" });
     });

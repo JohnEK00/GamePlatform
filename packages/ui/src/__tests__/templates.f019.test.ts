@@ -1,0 +1,61 @@
+import { describe, expect, it } from "vitest";
+import { normalizeActions, validateActions } from "../controls";
+import { validateProject } from "../studio/project";
+import { STUDIO_TEMPLATES } from "../studio/templates";
+
+describe("Menu & HUD template settings screen (F019)", () => {
+  const t = STUDIO_TEMPLATES.find((x) => x.id === "menu-hud")!;
+  const js = t.files["main.js"] as string;
+
+  it("uses all four F019 widgets and the change signals", () => {
+    expect(js).toMatch(/ui\.slider\(/);
+    expect(js).toMatch(/ui\.toggle\(/);
+    expect(js).toMatch(/ui\.textField\(/);
+    expect(js).toMatch(/ui\.list\(/);
+    expect(js).toMatch(/ui\.committed\(/);
+    expect(js).toMatch(/ui\.changed\(/);
+  });
+
+  it("wires each widget per the spec (value in, value out)", () => {
+    // NAME: 12 code points, letters/digits/space/-/_ only, saved on commit.
+    expect(js).toMatch(/this\.name = ui\.textField\("name", this\.name, /);
+    expect(js).toMatch(/const NAME_MAX = 12;/);
+    expect(js).toContain("/^[A-Za-z0-9 _-]$/");
+    expect(js).toMatch(/if \(ui\.committed\("name"\)\)/);
+    expect(js).toMatch(/storage\.set\("name", /);
+    // VOLUME: 0..1 in steps of 0.1, a percentage label, saved on commit only.
+    expect(js).toMatch(/this\.volume = ui\.slider\("volume", this\.volume, [^)]*\{ min: 0, max: 1, step: 0\.1 \}\)/);
+    expect(js).toMatch(/Math\.round\(this\.volume \* 100\) \+ "%"/);
+    expect(js).toMatch(/audio\.masterVolume = /);
+    expect(js).toMatch(/if \(ui\.committed\("volume"\)\) \{\s*storage\.set\("volume", /);
+    // SOUND: a toggle driving engine.audio.muted.
+    expect(js).toMatch(/this\.sound = ui\.toggle\("sound", this\.sound, "SOUND", /);
+    expect(js).toMatch(/audio\.muted = !this\.sound/);
+    // STAR COLOUR: 6 colours, 3 visible rows of 16, selected = current.
+    expect(js).toMatch(/ui\.list\("colour", names, [^)]*48, \{ rowHeight: 16, selected: this\.colour \}\)/);
+    expect(js.match(/\{ name: "[A-Z]+", color: "#[0-9a-f]{6}" \}/g)).toHaveLength(6);
+    // BACK, plus the pause action (not while typing), with focus restored on the title menu.
+    expect(js).toMatch(/ui\.button\("back", "BACK", [^)]*\)\) this\.go\(engine, "title", "settings"\)/);
+    expect(js).toMatch(/this\.state === "settings" && input\.actionPressed\("pause"\) && !engine\.ui\.editing/);
+    expect(js).toMatch(/ui\.button\("settings", "SETTINGS", [^)]*\)\) this\.go\(engine, "settings", "name"\)/);
+    // The hint only for touch and controller players.
+    expect(js).toMatch(/input\.lastDevice === "touch" \|\| input\.lastDevice === "gamepad"/);
+    expect(js).toContain('"Type your name with a keyboard"');
+    // The name shows on the HUD and the game-over screen.
+    expect(js.match(/this\.scoreText\(\)/g)?.length).toBe(2);
+  });
+
+  it("no longer has the SOUND: ON/OFF button", () => {
+    expect(js).not.toMatch(/"SOUND: "/);
+  });
+
+  it("still declares the menu actions and validates", () => {
+    expect(validateActions(t.manifest)).toEqual([]);
+    expect(normalizeActions(t.manifest.actions).map((a) => a.id)).toEqual(["left", "right", "up", "down", "confirm", "pause"]);
+    expect(validateProject({ manifest: t.manifest, files: t.files })).toEqual([]);
+  });
+
+  it("parses as a module body", () => {
+    expect(() => new Function(js.replace("export default", "return"))).not.toThrow();
+  });
+});

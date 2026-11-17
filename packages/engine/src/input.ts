@@ -1,5 +1,18 @@
 /** Keyboard / mouse / touch / gamepad input with per-step pressed/released edges. */
-import { ActionMap, applyOverrides, gamepadLabel, keyLabel as defaultKeyLabel, type ControlAction } from './actions';
+import { ActionMap, applyOverrides, gamepadLabel, isKeyboardCode, keyLabel as defaultKeyLabel, type ButtonSource, type ControlAction } from './actions';
+import { filterText, TEXT_EDIT_KEYS, type TextEvent } from './uitext';
+
+/** At most this many `textEvents` per step (GAME_FORMAT § F019); extras are dropped. */
+export const MAX_TEXT_EVENTS = 64;
+/** A paste is cut to this many code points. */
+export const MAX_PASTE = 256;
+const NO_TEXT_EVENTS: readonly TextEvent[] = Object.freeze([]);
+
+/** True when `s` is exactly one code point. */
+function oneCodePoint(s: unknown): s is string {
+  if (typeof s !== 'string' || s.length === 0 || s.length > 2) return false;
+  return Array.from(s).length === 1;
+}
 
 interface BtnState {
   down: boolean;
@@ -62,6 +75,12 @@ export class InputState {
   wasCancelled(code: string): boolean {
     const b = this.buttons.get(code);
     return !!b && b.released && b.cancelled;
+  }
+  /** Codes currently held (F019 end-of-capture latch). */
+  heldCodes(): string[] {
+    const out: string[] = [];
+    for (const [k, b] of this.buttons) if (b.down) out.push(k);
+    return out;
   }
   /** Any button pressed this step (optionally filtered by prefix). */
   anyPressed(filter?: (code: string) => boolean): boolean {
@@ -266,6 +285,15 @@ export class Input {
   /** Last KeyboardEvent.key typed this step (for text entry). */
   typed = '';
   private typedAcc = '';
+  /** F019: this step's typing (keydown text, editing keys, paste), in order; frozen, `[]` when none. */
+  textEvents: readonly TextEvent[] = NO_TEXT_EVENTS;
+  private textAcc: TextEvent[] = [];
+  /** F019 keyboard capture: requested by the UI at the end of a step, applied from the next one. */
+  private capture = false;
+  /** Capture state the last `updateActions` ran with (detects the first / last captured step). */
+  private captureApplied = false;
+  /** Keyboard codes held when capture ended: they count as up for actions until released. */
+  private readonly captureLatch = new Set<string>();
   private defaults: readonly ControlAction[] = Object.freeze([]);
   private effective: readonly ControlAction[] = Object.freeze([]);
   private overrides: unknown = {};
@@ -295,14 +323,33 @@ export class Input {
     if (c.tabIndex < 0) c.tabIndex = 0;
 
     on(window, 'keydown', (e) => {
+      const produced = this.collectKeyText(e);
+      if (this.capture) {
+        // F019: while a text field edits, typing must not trigger browser shortcuts (quick find,
+        // page scroll); Ctrl/Meta+V must still reach the browser so it fires `paste`.
+        const paste = (e.ctrlKey || e.metaKey) && e.code === 'KeyV';
+        if ((produced || e.code === 'Space') && !paste) e.preventDefault();
+      }
       if ((PREVENT.has(e.code) || (this.next ?? this.map).boundKeys.has(e.code)) && !e.ctrlKey && !e.metaKey) e.preventDefault();
       if (!e.repeat) {
         this.state.press(e.code);
         this.device = 'keyboard';
       }
-      if (e.key.length === 1) this.typedAcc += e.key;
+      if (typeof e.key === 'string' && e.key.length === 1) this.typedAcc += e.key;
     });
     on(window, 'keyup', (e) => this.state.release(e.code));
+    on(window, 'paste', (e: ClipboardEvent) => {
+      e.preventDefault();
+      let raw = '';
+      try {
+        raw = e.clipboardData?.getData('text/plain') ?? '';
+      } catch {
+        raw = '';
+      }
+      const flat = String(raw).replace(/\r\n|\r|\n|\t/g, ' ');
+      const text = filterText(Array.from(flat).slice(0, MAX_PASTE).join(''));
+      if (text) this.pushText({ kind: 'text', text });
+    });
     on(window, 'blur', () => {
       this.state.releaseAll();
       this.mouse.down = false;
@@ -387,6 +434,51 @@ export class Input {
     for (const f of this.cleanup.splice(0)) f();
   }
 
+  /**
+   * F019: turn a keydown into a text event (GAME_FORMAT § F019 "Input additions"). Returns true when
+   * the key produces an entry (even if the per-step cap then drops it).
+   */
+  private collectKeyText(e: KeyboardEvent): boolean {
+    if (e.isComposing) return false;
+    const key = e.key;
+    // AltGr on Windows reports ctrlKey + altKey: its characters still type.
+    const altGr = e.ctrlKey && e.altKey;
+    if (oneCodePoint(key) && ((!e.ctrlKey && !e.metaKey) || altGr)) {
+      const text = filterText(key);
+      if (!text) return false;
+      this.pushText({ kind: 'text', text });
+      return true;
+    }
+    if (typeof key === 'string' && TEXT_EDIT_KEYS.has(key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      this.pushText({ kind: 'key', key: key as Extract<TextEvent, { kind: 'key' }>['key'] });
+      return true;
+    }
+    return false;
+  }
+
+  private pushText(ev: TextEvent): void {
+    if (this.textAcc.length < MAX_TEXT_EVENTS) this.textAcc.push(Object.freeze(ev));
+  }
+
+  /** Engine-internal (F019): drop text typed so far (called when a pause ends). */
+  clearTextEvents(): void {
+    this.textAcc = [];
+    this.textEvents = NO_TEXT_EVENTS;
+  }
+
+  /**
+   * Engine-internal (F019): keyboard capture on/off, set by `engine.ui` at the end of each step;
+   * it applies to actions and `axis()` from the next step.
+   */
+  setKeyboardCapture(on: boolean): void {
+    this.capture = !!on;
+  }
+
+  /** True while a `ui.textField` is editing: actions and `axis()` ignore keyboard keys (F019). */
+  get keyboardCaptured(): boolean {
+    return this.capture;
+  }
+
   /** Engine-internal: called before each fixed update step. */
   beginStep(): void {
     const s = this.state;
@@ -401,6 +493,8 @@ export class Input {
     this.wheelAcc = 0;
     this.typed = this.typedAcc;
     this.typedAcc = '';
+    this.textEvents = this.textAcc.length ? Object.freeze(this.textAcc.slice(0, MAX_TEXT_EVENTS)) : NO_TEXT_EVENTS;
+    this.textAcc = [];
     this.touches = Array.from(this.touchMap.values());
     const list = this.readGamepads();
     for (let i = 0; i < this.pads.length; i++) this.pads[i]!.poll(list[i] ?? null);
@@ -415,7 +509,44 @@ export class Input {
       this.map = this.next;
       this.next = null;
     }
-    this.map.update(this.state, this.pads.find((p) => p.connected) ?? null);
+    this.map.update(this.actionKeys(), this.pads.find((p) => p.connected) ?? null);
+  }
+
+  /**
+   * F019 keyboard capture: the button source the actions read this step.
+   * - Captured: keyboard codes are up with no press edges; in the first captured step a held (or
+   *   just released) keyboard code reports `wasReleased`, so key-only actions get `actionReleased`.
+   * - When capture ends, the keyboard codes still held are latched: they count as up until released.
+   * Mouse codes pass through; gamepads are read separately.
+   */
+  private actionKeys(): ButtonSource {
+    const s = this.state;
+    const cap = this.capture;
+    const first = cap && !this.captureApplied;
+    if (!cap && this.captureApplied) for (const k of s.heldCodes()) if (isKeyboardCode(k)) this.captureLatch.add(k);
+    this.captureApplied = cap;
+    // A latched key counts again once released (a release + new press between steps passes through).
+    for (const k of this.captureLatch) if (!s.isDown(k) || s.wasReleased(k)) this.captureLatch.delete(k);
+    if (cap) {
+      return {
+        isDown: (c) => (isKeyboardCode(c) ? false : s.isDown(c)),
+        wasPressed: (c) => (isKeyboardCode(c) ? false : s.wasPressed(c)),
+        wasReleased: (c) => (isKeyboardCode(c) ? first && (s.isDown(c) || s.wasReleased(c)) : s.wasReleased(c)),
+      };
+    }
+    if (this.captureLatch.size === 0) return s;
+    const latch = this.captureLatch;
+    return {
+      isDown: (c) => !latch.has(c) && s.isDown(c),
+      wasPressed: (c) => !latch.has(c) && s.wasPressed(c),
+      wasReleased: (c) => !latch.has(c) && s.wasReleased(c),
+    };
+  }
+
+  /** Raw key held, as seen by the undeclared-action `axis()` fallback (honours capture and its latch). */
+  private axisKey(code: string): boolean {
+    if (this.capture || this.captureLatch.has(code)) return false;
+    return this.state.isDown(code);
   }
 
   // --- F009 actions ----------------------------------------------------------
@@ -567,7 +698,7 @@ export class Input {
    * (or `up`/`down`) actions are declared, those actions plus the left stick are used instead.
    */
   axis(name: 'horizontal' | 'vertical'): number {
-    const s = this.state;
+    const s = { isDown: (code: string) => this.axisKey(code) };
     const pad = this.pads.find((p) => p.connected);
     // F009: with both movement actions declared, follow the (remappable) actions + left stick.
     const [negId, posId] = name === 'horizontal' ? ['left', 'right'] : ['up', 'down'];

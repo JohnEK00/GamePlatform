@@ -207,6 +207,10 @@ Keys use `KeyboardEvent.code` (`"ArrowLeft"`, `"KeyA"`, `"Space"`). Mouse button
 * `axis('horizontal' | 'vertical')` returns -1..1 from the arrow keys, WASD, or the first gamepad (left stick with a deadzone, plus the d-pad). With movement actions it follows them instead (see below)
 * `actions`, `defaultActions`, `actionDown/actionPressed/actionReleased(id)`, `actionLabel(id, device?)`, `keyLabel(code)`, `gamepadLabel(name)`, `lastDevice`: see [Actions and remapping](#actions-and-remapping-f009)
 * `typed`: printable characters typed this step
+* `textEvents`: this step's typing for text entry (F019), in order and frozen: `{ kind: "text", text }` (typed or pasted,
+  filtered) and `{ kind: "key", key }` for `Backspace`/`Delete`/`ArrowLeft`/`ArrowRight`/`Home`/`End`. At most 64 per step.
+  `[]` when there are none. See [Settings and text entry](#settings-and-text-entry-f019)
+* `keyboardCaptured` (read-only): `true` while a `ui.textField` is editing. Actions and `axis()` then ignore keyboard keys
 
 ## Actions and remapping (F009)
 
@@ -589,6 +593,69 @@ update(engine) {
   `buttonDownColor` `#1e2540`, `buttonBorder` `#5a6bc0`, `focusColor` `#ffd166`, `nineSliceScale` 1.
 * `Ui` takes its input and renderer in the constructor (`new Ui({ input, renderer, warn })`), so its rules are unit-tested
   without a DOM.
+
+### Settings and text entry (F019)
+
+Four more widgets follow the same theme, phase, id and navigation rules. They are **value in, value out**: keep the value
+in your own state, pass it every step and store what comes back. The engine keeps only interaction state (drag, list
+cursor and scroll, caret), and it drops that state at the end of any step that doesn't declare the id.
+
+```js
+update(engine) {
+  const ui = engine.ui, s = this.settings;
+  ui.label('VOLUME', 80, 84);
+  s.volume = ui.slider('vol', s.volume, 150, 80, 160, 12, { step: 0.05 });
+  if (ui.changed('vol')) engine.audio.masterVolume = s.volume;
+  if (ui.committed('vol')) this.save();                       // once per drag, or per key step
+  s.shake = ui.toggle('shake', s.shake, 'SCREEN SHAKE', 80, 104, 230, 14);
+  s.name = ui.textField('name', s.name, 150, 124, 160, 16, { maxLength: 12, allow: (c) => /[A-Za-z0-9 _-]/.test(c) });
+  if (ui.committed('name')) this.save();
+  const i = ui.list('levels', this.names, 80, 150, 230, 80, { selected: this.level });
+  if (i >= 0) this.level = i;
+}
+```
+
+* `ui.slider(id, value, x, y, w, h, { min = 0, max = 1, step = 0, keyStep, disabled, nav }) → number`: the result is
+  clamped and, with `step > 0`, snapped (`toFixed(10)`, so `0.1 + 0.2` gives `0.3`). A non-finite value counts as `min`.
+  Dragging follows the pointer even outside the rect until release. When focused, left/right add or subtract `keyStep`
+  (default `step`, or `(max - min) / 20`). A bad range draws the slider disabled and warns once.
+* `ui.toggle(id, on, label, x, y, w, h, opts) → boolean`: the label is on the left and the switch is right-aligned. It
+  flips on a click (button rules) or on activate.
+* `ui.textField(id, text, x, y, w, h, { maxLength = 24, placeholder, allow, … }) → string`: to start editing, click it,
+  activate it, type while it is focused (`Space` then types a space) or set `ui.editing = id`. `Enter`, `confirm` or pad A
+  submit, and so do up/down, which also move focus, and a click elsewhere. `Escape` or pad B revert to the text you had
+  when editing started. The caret is solid. Paste works. There is no selection, undo, IME or on-screen keyboard.
+* `ui.list(id, items, x, y, w, h, { rowHeight = 16, selected = -1, … }) → number`: returns the index activated this step,
+  else `-1`. A click on a row activates it. A drag over 4 units scrolls instead and never activates. The wheel scrolls
+  whole rows. Long rows end in `...`, and a 3-unit scrollbar shows when the items overflow. At most 1000 items are used.
+* `ui.changed(id)`: the player changed the value this step. `ui.committed(id)`: the player finished a change, which is
+  the end of a drag, a key step, a flip, a submit or a picked row. Both are `false` before the widget's call in the step,
+  and clamping the game's own value is never a change. `ui.listCursor(id)` returns a list's cursor, or `-1`.
+  `ui.editing` (read/write) is the field being edited.
+* **Navigation by focused widget**:
+
+  | Focused | left / right | up / down | activate | Escape / B |
+  |---|---|---|---|---|
+  | none, button, toggle | focus | focus | activate / flip | clear focus |
+  | slider | −/+ `keyStep` (hold repeats) | focus | nothing | clear focus |
+  | list | focus | cursor (hold repeats); a fresh press past an end leaves | pick the cursor row | clear focus |
+  | text field | focus | focus | start editing | clear focus |
+  | text field, editing | caret (raw arrows) | commit + focus | commit | revert |
+
+  Hold repeat waits 0.4 s, then repeats every 0.08 s of step time. Moving focus never repeats.
+* **Keyboard capture**: while a field edits, `input.keyboardCaptured` is `true` from the next step on. Actions and
+  `axis()` then ignore keyboard keys, so typing "wasd" never moves the player. Gamepad and mouse bindings still count. An
+  action held only by keys reports `actionReleased` once, and keys still held when editing ends count only after they are
+  released. Raw `isDown`/`wasPressed`/`typed` are unchanged, so if you read them for gameplay, check `ui.editing`. Text typed
+  while the game is paused is discarded on resume.
+* **Touch and controller players** can focus a field but can't type into it. Offer a fallback, for example preset names in
+  a `ui.list`. Typed text is game data, not the player's platform name: it stays in the sandboxed game unless you store it
+  with `engine.storage`, and the platform never shows it to other players.
+* **New theme fields**: `trackColor` `#0e1224`, `fillColor` `#5a6bc0`, `knobColor` `#ffffff`, `fieldColor` `#0e1224`,
+  `fieldBorder` `#5a6bc0`, `caretColor` `#ffd166`, `placeholderColor` `#5d6488`, `rowHoverColor` `#2a3358`,
+  `rowSelectedColor` `#3a4780`, and `track` / `knob` / `field` (`NineSlice | null`).
+* The pure helpers `filterText`, `applyTextEvents`, `visibleRun`, `caretFromX` and `truncateToWidth` are exported for
+  tools and tests.
 
 ## Examples
 

@@ -2116,6 +2116,54 @@ textarea.pf-input {
   outline-offset: 4px;
   border-radius: 4px;
 }
+.pf-docs__table-wrap {
+  max-width: 820px;
+  overflow-x: auto;
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius);
+}
+.pf-docs__table-wrap:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 2px;
+}
+.pf-docs__table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  color: var(--pf-text-2);
+}
+.pf-docs__table caption {
+  caption-side: top;
+  text-align: left;
+  padding: 8px 10px;
+  font-weight: 600;
+  color: var(--pf-text);
+  border-bottom: 1px solid var(--pf-border);
+}
+.pf-docs__table th {
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pf-muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--pf-border);
+}
+.pf-docs__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--pf-border);
+  vertical-align: top;
+}
+.pf-docs__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.pf-docs__table td:first-child {
+  font-family: var(--pf-mono);
+  color: var(--pf-accent);
+  white-space: nowrap;
+}
 .pf-docs__grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
