@@ -41,7 +41,8 @@ async fn n1_feed_plan_is_index_driven() {
     webgame_server::db::optimize(&t.state.db, true).await;
     sqlx::query("ANALYZE").execute(&t.state.db).await.unwrap();
     // F021: every kind, so branch (c) is planned too. F015: and the `screenshotPosted` probe.
-    let kinds = r#"["gamePublished","gameUpdated","personalBest","achievementUnlocked","collectionUpdated","screenshotPosted"]"#;
+    // F030: and branch (d) (`postCreated`).
+    let kinds = r#"["gamePublished","gameUpdated","personalBest","achievementUnlocked","collectionUpdated","screenshotPosted","postCreated"]"#;
     for cursor in [None, Some("100")] {
         let p = plan(
             &t,
@@ -70,6 +71,8 @@ async fn n1_feed_plan_is_index_driven() {
                 !(l.starts_with("scan s ") || l.contains("scan screenshots")),
                 "scan of screenshots:\n{text}"
             );
+            // F030: branch (d) joins nothing; the plan never touches posts.
+            assert!(!l.contains("posts"), "plan reads posts:\n{text}");
         }
         assert!(
             text.contains("idx_screenshots_author_game (author_id=? AND game_id=?)"),

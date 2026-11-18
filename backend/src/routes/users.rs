@@ -34,6 +34,8 @@ pub struct ProfileStats {
     pub screenshots: i64,
     /// `total` of `GET /api/users/{u}/collections` for the same viewer.
     pub collections: i64,
+    /// F030: the user's posts (all public).
+    pub posts: i64,
 }
 
 #[derive(Serialize)]
@@ -154,11 +156,16 @@ async fn profile_stats(
     .bind(is_self)
     .fetch_one(&state.db)
     .await?;
+    let posts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM posts WHERE author_id = ?1")
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await?;
     Ok(ProfileStats {
         plays,
         achievements,
         screenshots,
         collections,
+        posts,
     })
 }
 
@@ -225,7 +232,7 @@ fn normalize_link_url(url: &str) -> Option<String> {
 
 /// F028: characters a link label may not contain: C0 controls, DEL, C1 controls, and the bidi
 /// and invisible formatting characters that can make a label display as different text.
-fn is_forbidden_label_char(c: char) -> bool {
+pub(crate) fn is_forbidden_label_char(c: char) -> bool {
     matches!(
         c,
         '\u{0}'..='\u{1F}'

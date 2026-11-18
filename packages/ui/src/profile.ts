@@ -15,7 +15,8 @@ export const PROFILE_SCREENSHOTS_PREVIEW = 4;
 
 export const PROFILE_LINK_URL_MESSAGE = "Enter a full link starting with https:// or http://";
 
-export type ProfileSection = "games" | "screenshots" | "collections";
+/** F030 adds "posts". */
+export type ProfileSection = "posts" | "games" | "screenshots" | "collections";
 
 const PRINTABLE_ASCII = /^[\x21-\x7e]+$/;
 const SCHEME = /^https?:\/\//i;

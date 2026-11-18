@@ -67,6 +67,8 @@ pub enum Limit {
     CommentList,
     /// F016 control bindings `PUT …/controls`: 60/min, per user
     Controls,
+    /// F030 post creation (`POST /api/posts`): 10 per 10 min, per user
+    Post,
 }
 
 impl Limit {
@@ -94,6 +96,7 @@ impl Limit {
             Limit::Collections => (120, Duration::from_secs(600)),
             Limit::CommentList => (120, Duration::from_secs(60)),
             Limit::Controls => (60, Duration::from_secs(60)),
+            Limit::Post => (10, Duration::from_secs(600)),
         }
     }
 }

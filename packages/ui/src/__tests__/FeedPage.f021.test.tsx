@@ -64,10 +64,10 @@ afterEach(() => {
 });
 
 describe("FeedPage: Collections tab (F021)", () => {
-  it("has the tabs in order (F015 adds Screenshots last)", async () => {
+  it("has the tabs in order (F015 adds Screenshots last, F030 adds Posts second)", async () => {
     await setup(async () => ({ items: [], nextCursor: null }));
     await screen.findByText("Your feed is empty");
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Everything", "New games", "Collections", "Screenshots"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Everything", "Posts", "New games", "Collections", "Screenshots"]);
   });
 
   it("requests kinds=collectionUpdated, remembers the tab and shows its empty state with suggestions", async () => {

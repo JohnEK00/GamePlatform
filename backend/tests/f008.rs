@@ -1400,7 +1400,7 @@ async fn collection_reports() {
         &r,
         StatusCode::UNPROCESSABLE_ENTITY,
         "validation",
-        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\" or \"user\"",
+        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\" or \"post\"",
     );
 
     // Admin list shows the collection rows with a null game id.

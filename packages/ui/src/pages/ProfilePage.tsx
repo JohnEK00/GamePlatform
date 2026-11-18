@@ -67,6 +67,12 @@ function ProfileTabs({ profile }: { profile: UserProfileResponse }) {
       <NavLink to={base} end className={tabClass}>
         Overview
       </NavLink>
+      {typeof stats?.posts === "number" && (
+        <NavLink to={`${base}/posts`} className={tabClass}>
+          Posts
+          <Count n={stats.posts} />
+        </NavLink>
+      )}
       <NavLink to={`${base}/games`} className={tabClass}>
         Games
         <Count n={profile.gamesTotal} />

@@ -1,11 +1,13 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import type { FeedCollection, FeedItem as FeedItemData, FeedItemKind, Screenshot } from "../api/types";
+import type { FeedCollection, FeedItem as FeedItemData, FeedItemKind, GameFeedItem, Post, Screenshot } from "../api/types";
 import { useApi } from "../context/config";
 import { normalizeLeaderboardConfig } from "../leaderboard";
+import { isValidPost } from "../posts";
 import { formatScore, gameScreenshotsPath, gameVersionsPath, timeAgo } from "../util";
 import { AchievementIcon } from "./Achievements";
 import { Avatar, Skeleton, Thumbnail } from "./common";
+import { PostCard } from "./PostCard";
 import { ScreenshotLightbox } from "./ScreenshotLightbox";
 
 /** The feed item kinds this client understands; anything else is ignored (forward compatibility). */
@@ -16,10 +18,18 @@ export const FEED_ITEM_KINDS: readonly FeedItemKind[] = [
   "achievementUnlocked",
   "collectionUpdated",
   "screenshotPosted",
+  "postCreated",
 ];
 
+/**
+ * A feed item this client can show: a known kind, and (F030) a valid `post` for `postCreated`, or a `game` object
+ * for every other kind.
+ */
 export function isKnownFeedItem(item: { kind?: unknown } | null | undefined): item is FeedItemData {
-  return !!item && FEED_ITEM_KINDS.includes(item.kind as FeedItemKind);
+  if (!item || typeof item !== "object" || !FEED_ITEM_KINDS.includes(item.kind as FeedItemKind)) return false;
+  const it = item as { kind: FeedItemKind; game?: unknown; post?: unknown };
+  if (it.kind === "postCreated") return isValidPost(it.post);
+  return !!it.game && typeof it.game === "object";
 }
 
 /** "Best time 1:02.345": the score formatted per the game's current leaderboard config, prefixed by its label. */
@@ -31,7 +41,7 @@ export function feedScoreDisplay(score: NonNullable<FeedItemData["score"]>): str
 }
 
 /** The sentence for one item, with links on the actor and game names. Null when the item can't be shown. */
-function sentence(item: FeedItemData): ReactNode {
+function sentence(item: GameFeedItem): ReactNode {
   const actor = (
     <Link to={`/u/${encodeURIComponent(item.actor.username)}`} className="pf-feeditem__actor">
       <strong>{item.actor.displayName || item.actor.username}</strong>
@@ -154,7 +164,7 @@ function FeedCollectionGames({ collection }: { collection: FeedCollection }) {
 }
 
 /** F021 § 2.1: "{actor} added {game} / {n} games to {collection}", the games list and the time. */
-function CollectionFeedItem({ item, collection }: { item: FeedItemData; collection: FeedCollection }) {
+function CollectionFeedItem({ item, collection }: { item: GameFeedItem; collection: FeedCollection }) {
   const actorPath = `/u/${encodeURIComponent(item.actor.username)}`;
   const newest = collection.games[0].game;
   const coll = (
@@ -209,7 +219,7 @@ const captionOf = (s: Screenshot) => (typeof s.caption === "string" ? s.caption.
  * F015 § 2.1: "{actor} posted {n} screenshots of {game}", up to four thumbnails, "+N more", and the lightbox.
  * Deletes are local: the shot leaves this item, and the item renders nothing once its last shot is gone.
  */
-function ScreenshotFeedItem({ item, onEmptied, onRemoved }: { item: FeedItemData; onEmptied?: () => HTMLElement | null; onRemoved?: () => void }) {
+function ScreenshotFeedItem({ item, onEmptied, onRemoved }: { item: GameFeedItem; onEmptied?: () => HTMLElement | null; onRemoved?: () => void }) {
   const api = useApi();
   const initial = feedScreenshots(item);
   // Local copy for deletes; re-derived when the item object changes (a reload).
@@ -346,9 +356,31 @@ export type FeedItemProps = {
   onRemoved?: () => void;
 };
 
+/**
+ * F030: a `postCreated` item is a PostCard. After a delete (author or admin) the item renders nothing, focus moves
+ * by the F015 rule (`onEmptied`, read on the updated DOM), and the page stops counting it (`onRemoved`).
+ */
+function PostFeedItem({ item, post, onEmptied, onRemoved }: { item: FeedItemData; post: Post; onEmptied?: () => HTMLElement | null; onRemoved?: () => void }) {
+  const [gone, setGone] = useState(false);
+  const latest = useRef({ onEmptied, onRemoved });
+  latest.current = { onEmptied, onRemoved };
+  useEffect(() => {
+    if (!gone) return;
+    latest.current.onEmptied?.()?.focus();
+    latest.current.onRemoved?.();
+  }, [gone]);
+  if (gone) return null;
+  return <PostCard post={post} feedId={item.id} onDeleted={() => setGone(true)} />;
+}
+
 /** One activity-feed row: actor avatar, sentence, time, and a compact link to the game. Unknown kinds render nothing. */
-export function FeedItem({ item, onEmptied, onRemoved }: FeedItemProps) {
-  if (!isKnownFeedItem(item)) return null;
+export function FeedItem({ item: raw, onEmptied, onRemoved }: FeedItemProps) {
+  if (!isKnownFeedItem(raw)) return null;
+  // postCreated first: it is the only kind whose `game` is null.
+  if (raw.kind === "postCreated") {
+    return raw.post ? <PostFeedItem item={raw} post={raw.post} onEmptied={onEmptied} onRemoved={onRemoved} /> : null;
+  }
+  const item = raw as GameFeedItem;
   if (item.kind === "collectionUpdated") {
     const collection = feedCollection(item);
     return collection ? <CollectionFeedItem item={item} collection={collection} /> : null;

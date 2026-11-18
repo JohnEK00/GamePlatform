@@ -1,5 +1,6 @@
 // F028: absolute share links that work in any browser (pure; no React, no I/O beyond window.location).
 import type { WebGameConfig } from "./context/config";
+import { postPath } from "./posts";
 
 /** How long a Copy link button shows "Link copied" (F008, moved here in F028). */
 export const LINK_COPIED_MS = 2000;
@@ -23,6 +24,11 @@ export function appShareUrl(config: ShareConfig, path: string): string {
   const basename = (config.basename ?? "").replace(/\/+$/, "");
   const prefix = basename && basename.startsWith("/") ? basename : "";
   return `${currentOrigin()}${prefix}${path}`;
+}
+
+/** F030: share link of a post, `{origin}/p/{id}` (desktop: `{serverBase}/p/{id}`). */
+export function postShareUrl(config: ShareConfig, id: string): string {
+  return appShareUrl(config, postPath(id));
 }
 
 /** F028: share link of a profile, `{origin}/u/{username}` (desktop: `{serverBase}/u/{username}`). */

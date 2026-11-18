@@ -42,6 +42,8 @@ export type ProfileStats = {
   screenshots: number;
   /** == total of GET /api/users/{u}/collections for the same viewer. */
   collections: number;
+  /** F030. Older servers omit it: hide the Posts section. */
+  posts?: number;
 };
 
 export type AuthResponse = { token: string; user: User };
@@ -472,7 +474,9 @@ export type ReportTargetType =
   | "screenshot"
   | "collection"
   /** F028: targetId = the user's id; targetPreview = "@{username}"; targetGameId = null. */
-  | "user";
+  | "user"
+  /** F030: targetId = the post id; targetPreview = the body's first 140 code points; targetGameId = null. */
+  | "post";
 export type ReportStatus = "open" | "resolved";
 export type ReportAction =
   | "dismiss"
@@ -563,8 +567,15 @@ export type FollowResponse = {
   followers: number;
 };
 
-/** F021 adds "collectionUpdated"; F015 adds "screenshotPosted". */
-export type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked" | "collectionUpdated" | "screenshotPosted";
+/** F021 adds "collectionUpdated"; F015 adds "screenshotPosted"; F030 adds "postCreated". */
+export type FeedItemKind =
+  | "gamePublished"
+  | "gameUpdated"
+  | "personalBest"
+  | "achievementUnlocked"
+  | "collectionUpdated"
+  | "screenshotPosted"
+  | "postCreated";
 
 /** F021: one game of a `collectionUpdated` item. */
 export type FeedCollectionGame = {
@@ -594,7 +605,8 @@ export type FeedItem = {
   kind: FeedItemKind;
   /** The game owner for gamePublished/gameUpdated; the player otherwise. */
   actor: UserRef;
-  game: GameSummary;
+  /** F030: null only for postCreated (its attachment is in `post`); a GameSummary for every other kind. */
+  game: GameSummary | null;
   /** "favorite": shown only because the viewer favorited the game (gamePublished/gameUpdated only). */
   reason: "following" | "favorite";
   /** RFC3339 UTC; for coalesced items, the latest occurrence. */
@@ -618,7 +630,12 @@ export type FeedItem = {
   collection?: FeedCollection | null;
   /** F015: screenshotPosted only; null for every other kind. Older servers omit it (treat as null). */
   screenshots?: FeedScreenshots | null;
+  /** F030: postCreated only; null for every other kind. Older servers omit it (treat as null). */
+  post?: Post | null;
 };
+
+/** F030: a feed item of any kind other than postCreated (its game is always set). */
+export type GameFeedItem = FeedItem & { game: GameSummary };
 
 /** F015: the screenshots of a `screenshotPosted` item (computed at read time). */
 export type FeedScreenshots = {
@@ -921,3 +938,46 @@ export type UpdateCollectionRequest = { title?: string; description?: string; vi
 export type PutCollectionGameRequest = { note?: string };
 
 export type ReorderCollectionRequest = { gameIds: string[] };
+
+// ---- F030: user posts ----
+
+/** F030: what a post is attached to. Clients render nothing for an unknown type. */
+export type PostAttachmentType = "game" | "collection";
+
+/**
+ * F030: a post's attachment, resolved for the viewer. For type "game", `collection` is always null, and vice versa.
+ * A target that was deleted, unpublished or made private after posting reads as null; the post is still returned.
+ */
+export type PostAttachment = {
+  /** Fixed when the post is created. */
+  type: PostAttachmentType;
+  /** type "game": the game when visible to the viewer (published, or owned by the viewer); else null. */
+  game: GameSummary | null;
+  /** type "collection": the collection when visible to the viewer (public, or owner/admin); else null. */
+  collection: CollectionSummary | null;
+};
+
+/** F030: a short plain-text post. */
+export type Post = {
+  /** UUID v4 */
+  id: string;
+  author: UserRef;
+  /** Plain text, 1–500 code points, 1–12 lines ("\n" separated). Never render as HTML. */
+  body: string;
+  /** null = the post has no attachment. */
+  attachment: PostAttachment | null;
+  /** RFC3339 millis Z */
+  createdAt: string;
+  /** The viewer is the author or an admin; false when anonymous. */
+  canDelete: boolean;
+  /** "/p/{id}" (in-app route) */
+  path: string;
+};
+
+/** F030: `POST /api/posts`. At most one of `gameId` / `collectionId` may be a string. */
+export type CreatePostRequest = {
+  /** Required. */
+  body: string;
+  gameId?: string | null;
+  collectionId?: string | null;
+};

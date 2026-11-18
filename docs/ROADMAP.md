@@ -68,7 +68,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F024 | "Screenshot of your game" notifications for creators | S | shipped |
 | F028 | Public profiles 2: banner, links, profile sections and sharing | M | shipped |
 | F029 | Featured games on profiles | S | proposed |
-| F030 | User posts: short text posts on profiles and in followers' feeds | M | specced |
+| F030 | User posts: short text posts on profiles and in followers' feeds | M | shipped |
 | F031 | Post replies and hearts, with notifications | M | proposed |
 | F032 | Home and discover 2: sectioned home page and creator spotlight | M | proposed |
 | F033 | Search page: games, creators and collections | M | proposed |
@@ -341,7 +341,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: creators lead with their best work instead of their newest. Players who don't make games can show their favourites. It composes with the F028 shell.
 - **Areas**: backend (one table `profile_featured`, one endpoint, read-time filter), frontend (Overview row, picker dialog). No engine changes.
 
-### F030: User posts (M, specced → [spec](features/F030-user-posts.md))
+### F030: User posts (M, shipped → [spec](features/F030-user-posts.md))
 - **Pitch**:
   - **Posts:** short text posts, optionally attached to one published game or one public collection, which is shown as a card. Bodies are 1–500 code points and up to 12 lines of plain text, using the F028 forbidden-character set. URLs that pass the F028 link rule are linked.
   - **Where they appear:**

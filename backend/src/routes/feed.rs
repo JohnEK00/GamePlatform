@@ -10,7 +10,7 @@ use sqlx::Row;
 use crate::AppState;
 use crate::activity::{
     KIND_ACHIEVEMENT, KIND_COLLECTION_UPDATED, KIND_GAME_UPDATED, KIND_PERSONAL_BEST,
-    KIND_SCREENSHOT_POSTED, KINDS,
+    KIND_POST_CREATED, KIND_SCREENSHOT_POSTED, KINDS,
 };
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
@@ -21,6 +21,7 @@ use crate::models::{
 };
 use crate::ratelimit::Limit;
 use crate::routes::games::limit_user;
+use crate::routes::posts::{POST_SELECT, Post, posts_for};
 use crate::routes::screenshots::{
     FEED_SCREENSHOTS_SQL, Screenshot, Viewer, is_admin, screenshot_from_row,
 };
@@ -73,7 +74,8 @@ pub struct FeedItem {
     pub id: String,
     pub kind: String,
     pub actor: UserRef,
-    pub game: GameSummary,
+    /// F030: `None` for `postCreated` only (its attachment is in `post`).
+    pub game: Option<GameSummary>,
     pub reason: &'static str,
     pub created_at: String,
     pub version: Option<i64>,
@@ -85,6 +87,8 @@ pub struct FeedItem {
     pub collection: Option<FeedCollection>,
     /// F015: non-null for `screenshotPosted` only.
     pub screenshots: Option<FeedScreenshots>,
+    /// F030: non-null for `postCreated` only.
+    pub post: Option<Post>,
 }
 
 /// F015 `FeedScreenshots`: the actor's screenshots of the game on the item's UTC day.
@@ -175,9 +179,12 @@ fn json_list<T: Serialize>(v: &[T]) -> AppResult<String> {
 ///       `idx_activity_actor_id`, then primary-key probes of `collections` (public, still the
 ///       actor's) and an `EXISTS` over the row's `game_ids` (still in the collection, added
 ///       that day, published). Branch (a) drops these rows through its `games` join.
+///   (d) F030 followed users' `postCreated` events: `follows` PK → `idx_activity_actor_id`,
+///       joining nothing else (the post's FK cascade guarantees it exists). Branches (a) and
+///       (c) never pick these rows (`game_id` and `collection_id` are NULL).
 /// `CROSS JOIN` fixes the join order and `INDEXED BY` the indices, so the plan never depends
 /// on planner statistics. The union is de-duplicated by id and the outer query only joins the
-/// at most `2 · (limit + 1)` picked rows. The work grows with the activity of the creators the
+/// at most `4 · (limit + 1)` picked rows. The work grows with the activity of the creators the
 /// viewer follows and the games they favorited (before the cursor), never with total platform
 /// activity. `tests/review2.rs` asserts the plan.
 /// Binds: ?1 viewer id, ?2 cursor (exclusive, nullable), ?3 limit + 1, ?4 kinds JSON list.
@@ -229,10 +236,21 @@ pub const FEED_SQL: &str = "\
                       JOIN games g2 ON g2.id = cg.game_id \
                       WHERE substr(cg.added_at, 1, 10) = e.day AND g2.published = 1) \
         ORDER BY e.id DESC LIMIT ?3) \
+      UNION \
+      SELECT id FROM ( \
+        SELECT e.id FROM follows f \
+        CROSS JOIN activity_events e INDEXED BY idx_activity_actor_id \
+        WHERE f.follower_id = ?1 AND e.actor_id = f.followee_id \
+          AND e.id < COALESCE(?2, 9223372036854775807) \
+          AND e.actor_id <> ?1 \
+          AND e.kind = 'postCreated' \
+          AND e.kind IN (SELECT value FROM json_each(?4)) \
+          AND e.post_id IS NOT NULL \
+        ORDER BY e.id DESC LIMIT ?3) \
     ) \
     SELECT e.id, e.kind, e.game_id, e.version, e.score, e.first_score, e.ach_id, \
       e.ach_count, e.created_at, COALESCE(e.from_version, e.version) AS from_version, \
-      e.collection_id, e.game_ids, e.day, \
+      e.collection_id, e.game_ids, e.day, e.post_id, \
       EXISTS (SELECT 1 FROM follows f \
               WHERE f.follower_id = ?1 AND f.followee_id = e.actor_id) AS followed, \
       a.name AS a_name, a.description AS a_description, a.icon AS a_icon, \
@@ -408,10 +426,60 @@ pub async fn get_feed(
         }
     }
 
+    // F030: the page's posts in one query, assembled for the viewer.
+    let mut post_ids: Vec<String> = Vec::new();
+    for r in rows {
+        let kind: String = r.try_get("kind")?;
+        if kind != KIND_POST_CREATED {
+            continue;
+        }
+        if let Some(pid) = r.try_get::<Option<String>, _>("post_id")?
+            && !post_ids.contains(&pid)
+        {
+            post_ids.push(pid);
+        }
+    }
+    let mut posts: HashMap<String, Post> = HashMap::new();
+    if !post_ids.is_empty() {
+        let post_rows = sqlx::query(&format!(
+            "{POST_SELECT} WHERE p.id IN (SELECT value FROM json_each(?))"
+        ))
+        .bind(json_list(&post_ids)?)
+        .fetch_all(&state.db)
+        .await?;
+        for p in posts_for(&state, &post_rows, Some(&user.id)).await? {
+            posts.insert(p.id.clone(), p);
+        }
+    }
+
     let mut items = Vec::with_capacity(rows.len());
     for r in rows {
         let kind: String = r.try_get("kind")?;
         let id: i64 = r.try_get("id")?;
+        if kind == KIND_POST_CREATED {
+            let Some(post) = r
+                .try_get::<Option<String>, _>("post_id")?
+                .and_then(|pid| posts.remove(&pid))
+            else {
+                continue; // deleted since the page query
+            };
+            items.push(FeedItem {
+                id: id.to_string(),
+                actor: user_ref_from_row(r, "u_")?,
+                game: None,
+                reason: "following",
+                created_at: post.created_at.clone(),
+                version: None,
+                score: None,
+                achievement: None,
+                update: None,
+                collection: None,
+                screenshots: None,
+                post: Some(post),
+                kind,
+            });
+            continue;
+        }
         let mut screenshots = None;
         if kind == KIND_SCREENSHOT_POSTED {
             let key: [String; 3] = [
@@ -535,7 +603,7 @@ pub async fn get_feed(
         items.push(FeedItem {
             id: id.to_string(),
             actor: user_ref_from_row(r, "u_")?,
-            game: game.summary(),
+            game: Some(game.summary()),
             reason: if followed != 0 {
                 "following"
             } else {
@@ -551,6 +619,7 @@ pub async fn get_feed(
             update,
             collection,
             screenshots,
+            post: None,
             kind,
         });
     }

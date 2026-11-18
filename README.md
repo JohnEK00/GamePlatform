@@ -30,6 +30,7 @@ To seed a demo account and the example games, see [backend/README.md](backend/RE
 - **Play & share**: upload games as `.zip` bundles, browse/search/sort by tags (including Trending), ratings, favorites, "More like this", and release notes with an "Updated" badge.
 - **Leaderboards**: daily, weekly and all-time boards, lower-is-better and time scores, and boards games can show in-game.
 - **Profiles**: public profiles at `/u/{name}` (and `/me`) with a banner, bio, up to 3 links, stats, Overview/Games/Screenshots/Collections sections, Copy link and profile reports.
+- **Posts**: short text posts (with clickable links and an optional game or collection attachment) on your profile, at `/p/{id}` and in followers' feeds; reportable.
 - **Social**: follow creators, an activity feed, threaded comment replies with hearts, creator pin/lock tools, per-game comment modes (on, replies only, off) with optional slow mode, and in-app notifications (including when someone posts a screenshot of your game; with optional desktop OS notifications, mutes per game or thread, and one polling tab per browser).
 - **Collections**: curated, ordered game lists with notes, public (shareable `/c/{id}` links, shown on profiles and game pages) or private.
 - **Screenshots**: capture with 📷 or a game's own key, share to a per-game gallery or set as the thumbnail, and see them in the feed (Screenshots tab) and on profiles; every image is re-encoded before use.

@@ -12,6 +12,7 @@ pub mod follows;
 pub mod games;
 pub mod notifications;
 pub mod play;
+pub mod posts;
 pub mod related;
 pub mod reports;
 pub mod saves;
@@ -92,6 +93,13 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/users/{username}/achievements",
             get(achievements::list_user_achievements),
+        )
+        // F030 posts (public reads; no `/users/me/posts` alias)
+        .route("/users/{username}/posts", get(posts::list_user_posts))
+        .route("/posts", post(posts::create_post))
+        .route(
+            "/posts/{id}",
+            get(posts::get_post).delete(posts::delete_post),
         )
         // F002 follows + feed
         .route(

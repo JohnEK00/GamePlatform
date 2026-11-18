@@ -15,7 +15,8 @@ import { UploadPage } from "./pages/UploadPage";
 import { EditGamePage } from "./pages/EditGamePage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { MyProfileRedirect, ProfilePage } from "./pages/ProfilePage";
-import { ProfileGamesTab, ProfileOverview, ProfileScreenshotsTab } from "./pages/ProfileSections";
+import { ProfileGamesTab, ProfileOverview, ProfilePostsTab, ProfileScreenshotsTab } from "./pages/ProfileSections";
+import { PostPage } from "./pages/PostPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { LoginPage, RegisterPage } from "./pages/AuthPages";
 import { DocsPage } from "./pages/DocsPage";
@@ -141,8 +142,10 @@ export function WebGameRoutes({ extraRoutes }: { extraRoutes?: ReactNode }) {
           }
         />
         <Route path="c/:id" element={<CollectionPage />} />
+        <Route path="p/:id" element={<PostPage />} />
         <Route path="u/:username" element={<ProfilePage />}>
           <Route index element={<ProfileOverview />} />
+          <Route path="posts" element={<ProfilePostsTab />} />
           <Route path="games" element={<ProfileGamesTab />} />
           <Route path="screenshots" element={<ProfileScreenshotsTab />} />
           <Route path="collections" element={<UserCollectionsPage />} />

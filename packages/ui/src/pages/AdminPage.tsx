@@ -8,6 +8,7 @@ import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
 import { ConfirmDialog, EmptyState, ErrorState, Pagination, Skeleton, UserLink } from "../components/common";
 import { REPORT_REASONS } from "../components/Report";
+import { postPath } from "../posts";
 import { TabPanel, Tabs } from "../components/Tabs";
 import { errorMessage, formatDate, timeAgo, useAsync, useDocumentTitle } from "../util";
 
@@ -36,7 +37,9 @@ const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => s
           ? "Delete this screenshot?"
           : r.targetType === "collection"
             ? "Delete this collection?"
-            : "Delete this comment?",
+            : r.targetType === "post"
+              ? "Delete this post?"
+              : "Delete this comment?",
     body: (r) =>
       r.targetType === "game"
         ? "The game, its files, ratings, comments and scores are removed permanently."
@@ -44,7 +47,9 @@ const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => s
           ? "The screenshot and its files are removed permanently."
           : r.targetType === "collection"
             ? "The games stay on the site; only this list is removed."
-            : "The comment is removed permanently, together with any replies to it.",
+            : r.targetType === "post"
+              ? "The post is removed permanently."
+              : "The comment is removed permanently, together with any replies to it.",
     danger: true,
   },
   clearProfile: {
@@ -55,7 +60,7 @@ const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => s
   },
 };
 
-const KNOWN_TARGET_TYPES: ReadonlySet<string> = new Set(["game", "comment", "screenshot", "collection", "user"]);
+const KNOWN_TARGET_TYPES: ReadonlySet<string> = new Set(["game", "comment", "screenshot", "collection", "user", "post"]);
 
 /** "@mia" → "mia" (a user report's preview); null when it isn't a username preview. */
 function previewUsername(preview: string): string | null {
@@ -159,6 +164,13 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
               )}
             </div>
           </div>
+        ) : report.targetType === "post" ? (
+          <>
+            <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>
+            <Link to={postPath(report.targetId)} className="pf-small">
+              View post →
+            </Link>
+          </>
         ) : report.targetType === "comment" ? (
           <>
             <blockquote className="pf-report-row__quote">{report.targetPreview}</blockquote>

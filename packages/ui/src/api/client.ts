@@ -73,6 +73,8 @@ import type {
   UnreadCount,
   MuteState,
   NotificationMuteList,
+  CreatePostRequest,
+  Post,
 } from "./types";
 
 const STATUS_CODES: Record<number, ApiErrorCode> = {
@@ -754,6 +756,27 @@ export class ApiClient {
   /** Public collections containing the game (`limit` 1–24 server-side, default 6). */
   listGameCollections(gameId: string, limit?: number, signal?: AbortSignal): Promise<GameCollectionsPage> {
     return this.request(`/api/games/${encodeURIComponent(gameId)}/collections`, { query: { limit }, signal });
+  }
+
+  // ---------- F030: Posts ----------
+  /** 201 `Post` as the author sees it. 422 for body/attachment rules and the 24-hour cap; 429 `Limit::Post`. */
+  createPost(body: CreatePostRequest): Promise<Post> {
+    return this.request("/api/posts", { method: "POST", json: body });
+  }
+  /** Public; 404 `Post not found`. */
+  getPost(id: string, signal?: AbortSignal): Promise<Post> {
+    return this.request(`/api/posts/${encodeURIComponent(id)}`, { signal });
+  }
+  /** Author or admin. 204. */
+  deletePost(id: string): Promise<void> {
+    return this.request(`/api/posts/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  /** Public, newest first. perPage: default 20, 1–50. */
+  listUserPosts(username: string, query: PageQuery = {}, signal?: AbortSignal): Promise<Page<Post>> {
+    return this.request(`/api/users/${encodeURIComponent(username)}/posts`, {
+      query: { page: query.page, perPage: query.perPage },
+      signal,
+    });
   }
 }
 

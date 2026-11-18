@@ -400,6 +400,37 @@ export { ProfileLinksEditor, linkRowErrors, linkLabelErrors, linksForSave, isEmp
 export type { ProfileLinksEditorProps, ProfileLinksEditorHandle, ProfileLinkRow } from "./components/ProfileLinksEditor";
 export { BannerSettings, BANNER_MAX_BYTES } from "./components/BannerSettings";
 
+// F030: user posts (the types come from `export type * from "./api/types"`)
+export { postShareUrl } from "./share";
+export {
+  POST_BODY_MAX,
+  POST_LINES_MAX,
+  POSTS_PER_PAGE,
+  PROFILE_POSTS_PREVIEW,
+  POST_LINES_MESSAGE,
+  POST_CHARS_MESSAGE,
+  normalizePostBody,
+  postLength,
+  validatePostBody,
+  linkifyPost,
+  postPath,
+  parseAttachParam,
+  postComposePath,
+  isValidPost,
+} from "./posts";
+export type { PostSegment, PostAttachRef } from "./posts";
+export { PostCard, PostBody, PostCardSkeleton } from "./components/PostCard";
+export type { PostCardProps } from "./components/PostCard";
+export { PostAttachmentCard } from "./components/PostAttachmentCard";
+export { PostComposer, POST_COMPOSER_HINT } from "./components/PostComposer";
+export type { PostComposerProps } from "./components/PostComposer";
+export { ProfilePosts } from "./components/ProfilePosts";
+export type { ProfilePostsProps, ProfilePostsHandle } from "./components/ProfilePosts";
+export { PostAboutThisLink } from "./components/PostAboutThis";
+export { PostPage } from "./pages/PostPage";
+export { ProfilePostsTab } from "./pages/ProfileSections";
+export type { PostsLocationState } from "./pages/ProfileSections";
+
 // Pages
 export { HomePage } from "./pages/HomePage";
 export { GamePage } from "./pages/GamePage";

@@ -64,7 +64,8 @@ function show(feedItem: FeedItemData) {
 describe("FeedItem: collectionUpdated (F021)", () => {
   it("is a known kind", () => {
     expect(FEED_ITEM_KINDS).toContain("collectionUpdated");
-    expect(isKnownFeedItem({ kind: "collectionUpdated" })).toBe(true);
+    // F030: every kind but postCreated also needs a `game` object.
+    expect(isKnownFeedItem({ kind: "collectionUpdated", game: game("g1", "Space Dodge") } as { kind: string })).toBe(true);
   });
 
   it("one game: the game title is in the sentence, with links to the actor, the game and the collection", () => {

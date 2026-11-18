@@ -18,6 +18,7 @@ use crate::routes::comments::remove_comment;
 use crate::routes::games::{
     fetch_visible_game, limit_user, page_offset, parse_paging, remove_game,
 };
+use crate::routes::posts::remove_post;
 use crate::routes::screenshots::{is_admin, remove_screenshot};
 use crate::routes::users::clear_profile;
 use crate::screenshots::{image_url, thumb_url};
@@ -28,7 +29,14 @@ pub const REASONS: &[&str] = &["spam", "offensive", "broken", "copyright", "othe
 /// F008: the report target types. Since migration 0016 the database no longer has a CHECK on
 /// `reports.target_type`; this list (enforced in [`create_report`]) is the only check, so a
 /// later target type needs no table rebuild.
-pub const TARGET_TYPES: &[&str] = &["game", "comment", "screenshot", "collection", "user"];
+pub const TARGET_TYPES: &[&str] = &[
+    "game",
+    "comment",
+    "screenshot",
+    "collection",
+    "user",
+    "post",
+];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,8 +45,8 @@ pub struct Report {
     pub target_type: String,
     pub target_id: String,
     pub target_preview: String,
-    /// F008: `None` for `"collection"` and (F028) `"user"` reports; a game id for every other
-    /// type.
+    /// F008: `None` for `"collection"`, (F028) `"user"` and (F030) `"post"` reports; a game id
+    /// for every other type.
     pub target_game_id: Option<String>,
     pub reason: String,
     pub details: String,
@@ -96,7 +104,7 @@ async fn load_report(state: &AppState, id: &str) -> AppResult<Report> {
 
 fn unknown_target_type() -> AppError {
     AppError::validation(
-        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\" or \"user\"",
+        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\" or \"post\"",
     )
 }
 
@@ -193,6 +201,19 @@ pub async fn create_report(
                 return Err(AppError::validation("You can't report yourself"));
             }
             (None, format!("@{username}"))
+        }
+        // F030: posts are public; the preview is the body's first 140 code points.
+        "post" => {
+            let row: Option<(String, String)> =
+                sqlx::query_as("SELECT author_id, body FROM posts WHERE id = ?")
+                    .bind(&body.target_id)
+                    .fetch_optional(&state.db)
+                    .await?;
+            let (author_id, text) = row.ok_or_else(|| AppError::not_found("Post"))?;
+            if author_id == user.id {
+                return Err(AppError::validation("You can't report your own post"));
+            }
+            (None, text.chars().take(PREVIEW_MAX).collect())
         }
         _ => return Err(unknown_target_type()),
     };
@@ -349,6 +370,8 @@ pub async fn admin_resolve_report(
         ("delete", "collection") => remove_collection(&state, &report.target_id).await?,
         // F028: reset the profile (name, bio, links, avatar, banner); content stays.
         ("clearProfile", "user") => clear_profile(&state, &report.target_id).await?,
+        // F030: same effects as `DELETE /api/posts/{id}`; a post already gone is a no-op.
+        ("delete", "post") => remove_post(&state, &report.target_id).await?,
         _ => {}
     }
 

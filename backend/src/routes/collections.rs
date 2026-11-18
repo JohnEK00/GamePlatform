@@ -194,13 +194,13 @@ impl CollectionRow {
 }
 
 /// Collection columns + owner (`o_` prefix). Append `WHERE …`.
-const COLLECTION_SELECT: &str = "SELECT c.id, c.owner_id, c.title, c.description, \
+pub(crate) const COLLECTION_SELECT: &str = "SELECT c.id, c.owner_id, c.title, c.description, \
      c.visibility, c.created_at, c.updated_at, \
      u.id AS o_id, u.username AS o_username, u.display_name AS o_display_name, \
      u.avatar_ext AS o_avatar_ext, u.avatar_version AS o_avatar_version \
      FROM collections c JOIN users u ON u.id = c.owner_id";
 
-fn collection_from_row(row: &SqliteRow) -> Result<CollectionRow, sqlx::Error> {
+pub(crate) fn collection_from_row(row: &SqliteRow) -> Result<CollectionRow, sqlx::Error> {
     Ok(CollectionRow {
         id: row.try_get("id")?,
         owner_id: row.try_get("owner_id")?,
@@ -213,7 +213,7 @@ fn collection_from_row(row: &SqliteRow) -> Result<CollectionRow, sqlx::Error> {
     })
 }
 
-fn collections_from_rows(rows: &[SqliteRow]) -> AppResult<Vec<CollectionRow>> {
+pub(crate) fn collections_from_rows(rows: &[SqliteRow]) -> AppResult<Vec<CollectionRow>> {
     Ok(rows
         .iter()
         .map(collection_from_row)

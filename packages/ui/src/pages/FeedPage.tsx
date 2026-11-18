@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { FeedItem as FeedItemData, FeedItemKind, SuggestedCreator } from "../api/types";
 import { useApi } from "../context/config";
+import { useAuth } from "../context/auth";
+import { profilePath } from "../profile";
 import { Avatar, EmptyState, ErrorState, LoadError, Skeleton, Spinner } from "../components/common";
 import { FeedItem, FeedItemSkeleton, isKnownFeedItem } from "../components/FeedItem";
 import { FollowButton } from "../components/Follow";
@@ -11,10 +13,11 @@ import { errorMessage, formatCount, useAsync, useDocumentTitle } from "../util";
 /** localStorage key remembering the last selected feed tab. */
 export const FEED_TAB_KEY = "webgame.feed.tab";
 
-export type FeedTab = "all" | "games" | "collections" | "screenshots";
+export type FeedTab = "all" | "posts" | "games" | "collections" | "screenshots";
 
 const TABS: TabItem<FeedTab>[] = [
   { value: "all", label: "Everything" },
+  { value: "posts", label: "Posts" },
   { value: "games", label: "New games" },
   { value: "collections", label: "Collections" },
   { value: "screenshots", label: "Screenshots" },
@@ -23,6 +26,7 @@ const TABS_ID = "pf-feed-tabs";
 
 const TAB_KINDS: Record<FeedTab, FeedItemKind[] | undefined> = {
   all: undefined,
+  posts: ["postCreated"],
   games: ["gamePublished", "gameUpdated"],
   collections: ["collectionUpdated"],
   screenshots: ["screenshotPosted"],
@@ -31,7 +35,7 @@ const TAB_KINDS: Record<FeedTab, FeedItemKind[] | undefined> = {
 function readTab(): FeedTab {
   try {
     const v = localStorage.getItem(FEED_TAB_KEY);
-    if (v === "all" || v === "games" || v === "collections" || v === "screenshots") return v;
+    if (v === "all" || v === "posts" || v === "games" || v === "collections" || v === "screenshots") return v;
   } catch {
     /* storage unavailable */
   }
@@ -114,6 +118,7 @@ function SuggestedCreators({ onFollowed }: { onFollowed: () => void }) {
 /** The signed-in user's activity feed (F002): people they follow, plus updates to games they favorited. */
 export function FeedPage() {
   const api = useApi();
+  const { user: me } = useAuth();
   useDocumentTitle("Feed");
   const [tab, setTab] = useState<FeedTab>(readTab);
   const [state, setState] = useState<FeedState>(INITIAL);
@@ -197,6 +202,13 @@ export function FeedPage() {
     return document.getElementById(tabPanelId(TABS_ID));
   };
 
+  // F030 § 0.16: on the Posts tab, above the list and above the empty state.
+  const composeLink = me ? (
+    <p className="pf-feed__compose">
+      <Link to={profilePath(me.username, "posts")}>✎ Write a post</Link>
+    </p>
+  ) : null;
+
   return (
     <div className="pf-container pf-page pf-feed">
       <header className="pf-pagehead pf-pagehead--row">
@@ -220,7 +232,15 @@ export function FeedPage() {
       ) : state.error ? (
         <ErrorState error={state.error} onRetry={refresh} />
       ) : empty ? (
-        tab === "games" ? (
+        tab === "posts" ? (
+          <>
+            {composeLink}
+            <EmptyState icon="✎" title="No posts yet.">
+              Posts from people you follow appear here.
+            </EmptyState>
+            <SuggestedCreators onFollowed={() => setFollowedSome(true)} />
+          </>
+        ) : tab === "games" ? (
           <EmptyState icon="🎮" title="No new games from people you follow yet." />
         ) : tab === "collections" ? (
           <>
@@ -256,6 +276,7 @@ export function FeedPage() {
         )
       ) : (
         <>
+          {tab === "posts" && composeLink}
           <div className="pf-feed__list" ref={listRef}>
             {visible.map((item) => (
               <FeedItem key={item.id} item={item} onEmptied={() => focusAfter(item.id)} onRemoved={() => markEmptied(item.id)} />

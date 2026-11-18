@@ -1,6 +1,6 @@
 # F030: User posts: short text posts on profiles and in followers' feeds
 
-Status: **specced**. Size: **M**. One round. Areas: backend, frontend, desktop (verification only). Engine: none.
+Status: **shipped**. Size: **M**. One round. Areas: backend, frontend, desktop (verification only). Engine: none.
 
 Size breakdown:
 - **backend:** migration `0025_f030.sql` (a `posts` table and one `activity_events` rebuild that follows the F021 template), `routes/posts.rs` with four endpoints, `Limit::Post`, a fourth `FEED_SQL` branch with batched assembly, a `post` report target, and `ProfileStats.posts`.
@@ -54,7 +54,7 @@ API § F030 is normative. Tests assert the texts below verbatim. `{name}` means 
 6. **Caps.**
    - `Limit::Post`: **10 per 10 min** per user. Like `Limit::Comment`, it is checked before validation, so a 422 uses a token.
    - At most **25 posts in any rolling 24 hours** per user → 422 `You can post at most 25 times in 24 hours`. This is enforced by a guarded insert, so concurrent posts can't exceed it.
-   - Deleting a post doesn't free a slot in either.
+   - Deleting a post doesn't refund its `Limit::Post` token, but it does free a slot in the 25-per-24-hours cap, which counts live posts (as shipped; matches API § F030 step 6).
    - There is no lifetime cap.
 7. **Who sees what.**
    - Posts are public: anyone, including anonymous visitors, can read `GET /api/posts/{id}` and `GET /api/users/{u}/posts`. There is no private post.
@@ -392,7 +392,7 @@ backend-dev and frontend-dev work in parallel against API § F030 (the frontend 
 - **Caps.**
   - With a `ManualClock`: 10 posts → the 11th → 429; advancing 10 min allows more.
   - With `RATE_LIMIT=off`: 25 posts → the 26th → 422 `You can post at most 25 times in 24 hours`. Backdate 1 post to 24 h + 1 s ago → one more is allowed.
-  - Deleting a post doesn't free a slot.
+  - Deleting a post frees a slot in the 24-hour cap but doesn't refund its `Limit::Post` token.
 - **Read.**
   - `GET /api/posts/{id}` anonymous → 200 with `canDelete: false`; unknown → 404 `Post not found`.
   - `GET /api/users/{u}/posts`: newest first (`createdAt` desc, then `id` asc); `total`; `perPage` default 20, clamp 1–50; `page=x` → 400; unknown user → 404 `User not found`, even with a bad `page`.
@@ -475,3 +475,14 @@ As listed in § 4 desktop-dev.
 4. Mia makes the collection private. Leo now sees `This collection is no longer available.`, and Mia still sees the card.
 5. Leo reports a post. The admin opens `View post →`, deletes it from the queue, and it disappears from Mia's profile and Leo's feed.
 6. On a phone width, the composer button is full width, attachment thumbnails stack on top, and the permalink reads well at 360 px.
+
+## Implementation notes (as shipped)
+- **Backend:**
+  - `tests/f021.rs` now expects five `activity_events` indexes, because of the new `idx_activity_post`.
+  - The `tests/f028.rs` stats objects include `"posts": 0`.
+  - The create transaction uses `BEGIN IMMEDIATE`.
+  - A `postCreated` feed item's `createdAt` is the post's `createdAt`.
+- **Frontend:**
+  - The composer sends the normalised, trimmed body.
+  - While an `?attach=` target is loading, the composer shows "Loading attachment…" and blocks posting.
+  - `ProfilePosts` takes a `focusFallback` prop for focus after a delete.

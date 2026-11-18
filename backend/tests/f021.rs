@@ -425,7 +425,8 @@ async fn migration_upgrade_from_0018() {
     .await
     .unwrap();
 
-    // 4. Exactly the four indexes.
+    // 4. Exactly the four indexes (+ F030's `idx_activity_post`: the server runs every
+    // migration, 0025 included).
     let idx: Vec<String> = sqlx::query_scalar(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'activity_events' \
          AND sql IS NOT NULL ORDER BY name",
@@ -439,7 +440,8 @@ async fn migration_upgrade_from_0018() {
             "idx_activity_actor_id",
             "idx_activity_coalesce",
             "idx_activity_collection",
-            "idx_activity_game_kind"
+            "idx_activity_game_kind",
+            "idx_activity_post"
         ]
     );
 

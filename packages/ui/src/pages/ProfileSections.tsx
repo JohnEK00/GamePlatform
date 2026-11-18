@@ -1,10 +1,15 @@
-import { Link, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useRef } from "react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
+import type { Post } from "../api/types";
 import { useApi } from "../context/config";
 import { RecentAchievements } from "../components/Achievements";
 import { EmptyState, ErrorState, Pagination } from "../components/common";
 import { GameGrid } from "../components/GameCard";
+import { PostComposer } from "../components/PostComposer";
 import { ProfileCollections } from "../components/ProfileCollections";
+import { ProfilePosts, type ProfilePostsHandle } from "../components/ProfilePosts";
 import { ProfileScreenshots } from "../components/ProfileScreenshots";
+import { parseAttachParam, PROFILE_POSTS_PREVIEW } from "../posts";
 import { PROFILE_GAMES_PER_PAGE, PROFILE_OVERVIEW_GAMES, PROFILE_SCREENSHOTS_PREVIEW, profilePath } from "../profile";
 import { useAsync, useDocumentTitle } from "../util";
 import { useProfileOutlet } from "./ProfilePage";
@@ -39,7 +44,15 @@ export function ProfileOverview() {
   const stats = profile.stats;
   const username = user.username;
 
-  if (!isMe && stats && gamesTotal === 0 && stats.achievements === 0 && stats.screenshots === 0 && stats.collections === 0) {
+  if (
+    !isMe &&
+    stats &&
+    gamesTotal === 0 &&
+    stats.achievements === 0 &&
+    stats.screenshots === 0 &&
+    stats.collections === 0 &&
+    (stats.posts ?? 0) === 0
+  ) {
     return (
       <section className="pf-profile-section">
         <EmptyState icon="🕹" title="Nothing here yet">
@@ -52,6 +65,11 @@ export function ProfileOverview() {
   return (
     <div className="pf-profile-section">
       <RecentAchievements username={username} />
+
+      {/* F030: hidden on servers without posts (no stats.posts). */}
+      {typeof stats?.posts === "number" && (
+        <ProfilePosts key={`posts:${username}`} username={username} isMe={isMe} preview={PROFILE_POSTS_PREVIEW} />
+      )}
 
       {games.length > 0 ? (
         <section className="pf-shelf pf-profile-games">
@@ -127,6 +145,69 @@ export function ProfileGamesTab() {
             else next.set("page", String(p));
             setParams(next);
           }}
+        />
+      )}
+    </section>
+  );
+}
+
+/** Router state that asks the Posts section to focus its heading on mount (after a delete on the permalink page). */
+export type PostsLocationState = { focusPostsHeading?: boolean };
+
+/**
+ * F030 `/u/:username/posts`: the heading, the composer (own profile; `?attach=` prefills its attachment) and the
+ * user's posts, 20 per page with "Load more".
+ */
+export function ProfilePostsTab() {
+  const ctx = useProfileOutlet();
+  const location = useLocation();
+  const [params] = useSearchParams();
+  const user = ctx?.profile.user;
+  const name = user ? user.displayName || user.username : "";
+  useDocumentTitle(user ? `Posts · ${name}` : undefined);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const listRef = useRef<ProfilePostsHandle>(null);
+  const focusHeading = !!(location.state as PostsLocationState | null)?.focusPostsHeading;
+  const reload = ctx?.reload;
+
+  useEffect(() => {
+    if (focusHeading) headingRef.current?.focus();
+    // Mount only (the state stays on the history entry).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const focusFallback = useCallback(() => textareaRef.current ?? headingRef.current, []);
+  const onPosted = useCallback(
+    (post: Post) => {
+      listRef.current?.prepend(post);
+      reload?.();
+    },
+    [reload],
+  );
+
+  if (!ctx || !user) return null;
+  const { profile, isMe } = ctx;
+  const attach = isMe ? parseAttachParam(params.get("attach")) : null;
+
+  return (
+    <section className="pf-profile-section pf-profile-posts-section">
+      <h2 className="pf-section-title" tabIndex={-1} ref={headingRef}>
+        Posts
+      </h2>
+      {isMe && <PostComposer onPosted={onPosted} initialAttach={attach} textareaRef={textareaRef} />}
+      {!isMe && profile.stats?.posts === 0 ? (
+        <EmptyState icon="✎" title="No posts yet">
+          {name} hasn't posted anything yet.
+        </EmptyState>
+      ) : (
+        <ProfilePosts
+          key={`posts:${user.username}`}
+          ref={listRef}
+          username={user.username}
+          isMe={isMe}
+          onChanged={reload}
+          focusFallback={focusFallback}
         />
       )}
     </section>

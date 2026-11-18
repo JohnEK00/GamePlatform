@@ -118,7 +118,11 @@ describe("FeedPage", () => {
     expect(all.tabIndex).toBe(0);
     expect(screen.getByRole("tab", { name: "New games" }).tabIndex).toBe(-1);
     all.focus();
+    // F030: Posts is the second tab.
     fireEvent.keyDown(all, { key: "ArrowRight" });
+    await waitFor(() => expect(feed).toHaveBeenLastCalledWith({ kinds: ["postCreated"] }, expect.any(AbortSignal)));
+    expect(document.activeElement).toBe(screen.getByRole("tab", { name: "Posts" }));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Posts" }), { key: "ArrowRight" });
     await waitFor(() => expect(feed).toHaveBeenLastCalledWith({ kinds: ["gamePublished", "gameUpdated"] }, expect.any(AbortSignal)));
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "New games" }));
   });

@@ -781,17 +781,17 @@ async fn profile_stats_follow_list_visibility() {
     let cases: [(Option<&str>, Value, i64); 3] = [
         (
             None,
-            json!({ "plays": 12, "achievements": 2, "screenshots": 1, "collections": 1 }),
+            json!({ "plays": 12, "achievements": 2, "screenshots": 1, "collections": 1, "posts": 0 }),
             2,
         ),
         (
             Some(&p_tok),
-            json!({ "plays": 12, "achievements": 2, "screenshots": 1, "collections": 1 }),
+            json!({ "plays": 12, "achievements": 2, "screenshots": 1, "collections": 1, "posts": 0 }),
             2,
         ),
         (
             Some(&u_tok),
-            json!({ "plays": 112, "achievements": 3, "screenshots": 2, "collections": 2 }),
+            json!({ "plays": 112, "achievements": 3, "screenshots": 2, "collections": 2, "posts": 0 }),
             3,
         ),
     ];
@@ -821,7 +821,7 @@ async fn profile_stats_follow_list_visibility() {
     let v = t.get("/api/users/pat", None).await.json();
     assert_eq!(
         v["stats"],
-        json!({ "plays": 0, "achievements": 0, "screenshots": 0, "collections": 0 })
+        json!({ "plays": 0, "achievements": 0, "screenshots": 0, "collections": 0, "posts": 0 })
     );
 }
 
@@ -860,7 +860,7 @@ async fn user_reports_and_action_rules() {
     );
     assert_422(
         &report(&t, &p_tok, "bogus", &uid).await,
-        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\" or \"user\"",
+        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\" or \"post\"",
     );
 
     let user_msg = "action must be \"dismiss\" or \"clearProfile\" for user reports";

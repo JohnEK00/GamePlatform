@@ -11,6 +11,7 @@ import { CollectionFormDialog } from "../components/CollectionFormDialog";
 import { CollectionItemRow, collectionItemTitle, type MoveDirection } from "../components/CollectionItemRow";
 import { ConfirmDialog, EmptyState, ErrorState, Skeleton, Spinner, UserLink } from "../components/common";
 import { ReportButton } from "../components/Report";
+import { PostAboutThisLink } from "../components/PostAboutThis";
 import { LINK_COPIED_MS } from "../share";
 import { errorMessage, formatDate, useAsync, useDocumentTitle } from "../util";
 import { NotFoundPage } from "./NotFoundPage";
@@ -375,6 +376,7 @@ export function CollectionPage() {
             ) : (
               c.isOwner && <p className="pf-muted pf-small pf-collection-head__private">Private: only you can see this collection.</p>
             )}
+            {isPublic && <PostAboutThisLink attach={{ type: "collection", id: c.id }} />}
             {c.isOwner && (
               <button type="button" className="pf-btn pf-btn--ghost pf-btn--sm" aria-haspopup="dialog" onClick={() => setEditOpen(true)}>
                 ✎ Edit

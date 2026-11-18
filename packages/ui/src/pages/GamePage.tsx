@@ -20,6 +20,7 @@ import { useModal } from "../components/useModal";
 import { VersionHistory } from "../components/VersionHistory";
 import { ControlsSummary } from "../components/ControlsSummary";
 import { ReportButton } from "../components/Report";
+import { PostAboutThisLink } from "../components/PostAboutThis";
 import { useAuth } from "../context/auth";
 import { Leaderboard } from "../components/Leaderboard";
 import { StarRating } from "../components/StarRating";
@@ -436,6 +437,7 @@ export function GamePage() {
           <div className="pf-gamepage__actions">
             <FavoriteButton gameId={game.id} gameTitle={game.title} favorites={game.favorites ?? 0} isFavorite={!!game.isFavorite} variant="full" />
             <AddToCollectionButton gameId={game.id} gameTitle={game.title} />
+            {game.published && <PostAboutThisLink attach={{ type: "game", id: game.id }} />}
             <MuteGameButton gameId={game.id} gameTitle={game.title} muted={game.notificationsMuted} />
             {!game.isOwner && (
               <ReportButton targetType="game" targetId={game.id} targetLabel={game.title} className="pf-btn pf-btn--ghost pf-btn--sm">

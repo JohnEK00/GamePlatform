@@ -24,13 +24,17 @@ pub const KIND_COLLECTION_UPDATED: &str = "collectionUpdated";
 /// F015: someone posted screenshots of a published game (one row per actor, game and UTC day;
 /// the shots are found at read time, the row stores no screenshot ids).
 pub const KIND_SCREENSHOT_POSTED: &str = "screenshotPosted";
-pub const KINDS: [&str; 6] = [
+/// F030: a user created a post (one row per post, no coalescing; `game_id` and
+/// `collection_id` NULL, `post_id` set; the row cascades with the post).
+pub const KIND_POST_CREATED: &str = "postCreated";
+pub const KINDS: [&str; 7] = [
     KIND_GAME_PUBLISHED,
     KIND_GAME_UPDATED,
     KIND_PERSONAL_BEST,
     KIND_ACHIEVEMENT,
     KIND_COLLECTION_UPDATED,
     KIND_SCREENSHOT_POSTED,
+    KIND_POST_CREATED,
 ];
 
 /// F021: at most this many game ids in one `collectionUpdated` row's `game_ids`.
@@ -317,6 +321,34 @@ pub async fn record_screenshot_posted(
     log_failure(KIND_SCREENSHOT_POSTED, game_id, res);
 }
 
+/// F030 `postCreated`: one row per post, written inside `create_post`'s transaction right after
+/// the guarded insert. `now` is the exact `created_at` bound in the post insert; its first 10
+/// characters are the day.
+pub async fn record_post_created(
+    conn: &mut SqliteConnection,
+    actor_id: &str,
+    post_id: &str,
+    now: &str,
+) {
+    let res = async {
+        let day = now.get(..10).unwrap_or(now);
+        let mut tx = conn.begin().await?;
+        sqlx::query(
+            "INSERT INTO activity_events (actor_id, kind, post_id, day, created_at) \
+             VALUES (?1, 'postCreated', ?2, ?3, ?4)",
+        )
+        .bind(actor_id)
+        .bind(post_id)
+        .bind(day)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await
+    }
+    .await;
+    log_failure(KIND_POST_CREATED, post_id, res);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,8 +368,9 @@ mod tests {
         assert_eq!(merged.len(), COLLECTION_EVENT_GAMES_MAX);
         assert_eq!(merged[0], "new");
         assert_eq!(merged[1], "g0");
-        assert_eq!(KINDS.len(), 6);
+        assert_eq!(KINDS.len(), 7);
         assert!(KINDS.contains(&KIND_COLLECTION_UPDATED));
         assert!(KINDS.contains(&KIND_SCREENSHOT_POSTED));
+        assert!(KINDS.contains(&KIND_POST_CREATED));
     }
 }
