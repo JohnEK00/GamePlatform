@@ -1619,3 +1619,167 @@ Public profiles 2 (spec: `docs/features/F028-public-profiles-2.md`). This round 
   - backend-dev: the migration, `storage.rs`, `models.rs`, `screenshots.rs`, `routes/users.rs`, `routes/mod.rs`, `routes/reports.rs`, `routes/collections.rs` (the filter constant), `routes/screenshots.rs` (`busy` visibility), `tests/f028.rs`, and the one `tests/f008.rs` message update.
   - frontend-dev: `api/types.ts`, `api/client.ts`, `share.ts`, `profile.ts`, `util.ts`, `collections.ts`, the new components, `ProfileScreenshots`, `ProfilePage`, `ProfileSections`, `UserCollectionsPage`, `SettingsPage`, `Report.tsx`, `AdminPage`, `Layout.tsx` (the user menu's Profile → `/me`), `WebGameApp.tsx`, `index.ts`, `styles.css` and tests.
   - desktop-dev: `src-tauri/src/menu.rs`, `src/nativeMenu.ts` and `src/__tests__/f028.desktop.test.tsx`.
+
+
+## F030 additions
+User posts (spec: `docs/features/F030-user-posts.md`). This round adds:
+- one migration: a `posts` table and one `activity_events` rebuild following the F021 template;
+- `routes/posts.rs` with four endpoints;
+- `Limit::Post`;
+- a fourth `FEED_SQL` branch with batched assembly;
+- a `post` report target;
+- `ProfileStats.posts`;
+- a Posts section, permalink and feed tab in the UI.
+
+There are no new dependencies, no engine changes, no desktop source changes and no notifications.
+- **Why a rebuild.** Since F021, `activity_events` has `CHECK (game_id IS NOT NULL OR collection_id IS NOT NULL)`. A post without an attachment has neither column, and SQLite can't alter a CHECK. So the table is rebuilt once, with a `post_id` column and the CHECK extended to `post_id`.
+  - A `postCreated` row always has `game_id` and `collection_id` NULL. The attachment lives only in `posts`, so branches (a) and (c) never pick these rows, and the feed shows an attachment by its current state.
+  - No table references `activity_events`, and it has no triggers (checked against `0001`–`0024`).
+- **Data**: migration `backend/migrations/0025_f030.sql` runs after `0024_f028.sql`. Normative, in this order:
+  ```sql
+  -- F030: user posts (docs/ARCHITECTURE.md § F030 additions).
+
+  -- 1. Posts: public, plain text (validated in Rust: routes::posts::validate_post_body).
+  --    attachment_type is 'game' | 'collection' | NULL (validated in Rust; no CHECK, like the other
+  --    kind columns). The target column is SET NULL when its target is deleted, so the type survives
+  --    and clients show "no longer available".
+  CREATE TABLE posts (
+      id              TEXT PRIMARY KEY,                                      -- UUID v4
+      author_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body            TEXT NOT NULL,
+      attachment_type TEXT,                                                  -- NULL = no attachment
+      game_id         TEXT REFERENCES games(id) ON DELETE SET NULL,          -- attachment_type 'game'
+      collection_id   TEXT REFERENCES collections(id) ON DELETE SET NULL,    -- attachment_type 'collection'
+      created_at      TEXT NOT NULL,                                         -- RFC3339 millis Z
+      CHECK (game_id IS NULL OR collection_id IS NULL)
+  );
+  -- The profile list (an author's posts, newest first, no temp B-tree) and the 24-hour cap count.
+  CREATE INDEX idx_posts_author_created ON posts(author_id, created_at DESC, id);
+  -- ON DELETE SET NULL lookups when a game or collection is deleted.
+  CREATE INDEX idx_posts_game       ON posts(game_id)       WHERE game_id IS NOT NULL;
+  CREATE INDEX idx_posts_collection ON posts(collection_id) WHERE collection_id IS NOT NULL;
+
+  -- 2. Rebuild activity_events (the 0019 layout + post_id; the CHECK gains post_id).
+  --    Columns keep their 0019 order; post_id is appended.
+  CREATE TABLE activity_events_new (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,      -- feed cursor
+      actor_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind          TEXT NOT NULL,                          -- activity::KINDS (validated in Rust; no CHECK)
+      game_id       TEXT REFERENCES games(id) ON DELETE CASCADE,          -- NULL for collectionUpdated and postCreated
+      version       INTEGER,                                -- gamePublished / gameUpdated
+      score         INTEGER,                                -- personalBest
+      first_score   INTEGER NOT NULL DEFAULT 0,             -- personalBest: 1 = actor's first score on the game
+      ach_id        TEXT,                                   -- achievementUnlocked (latest)
+      ach_count     INTEGER NOT NULL DEFAULT 0,             -- achievementUnlocked: unlocks that day
+      day           TEXT NOT NULL,                          -- YYYY-MM-DD UTC of created_at (coalescing key)
+      created_at    TEXT NOT NULL,                          -- RFC3339 millis Z
+      from_version  INTEGER,                                -- gameUpdated (F004)
+      collection_id TEXT REFERENCES collections(id) ON DELETE CASCADE,    -- collectionUpdated
+      game_ids      TEXT,                                   -- collectionUpdated: JSON array of game ids, newest first, <= 100
+      post_id       TEXT REFERENCES posts(id) ON DELETE CASCADE,          -- postCreated (F030)
+      CHECK (game_id IS NOT NULL OR collection_id IS NOT NULL OR post_id IS NOT NULL)
+  );
+  INSERT INTO activity_events_new (id, actor_id, kind, game_id, version, score, first_score, ach_id,
+                                   ach_count, day, created_at, from_version, collection_id, game_ids)
+  SELECT id, actor_id, kind, game_id, version, score, first_score, ach_id,
+         ach_count, day, created_at, from_version, collection_id, game_ids
+  FROM activity_events ORDER BY id;
+
+  -- Carry the AUTOINCREMENT high-water mark over (feed cursors are ids; coalescing deletes rows,
+  -- so MAX(id) can be below the sequence).
+  DELETE FROM sqlite_sequence WHERE name = 'activity_events_new';
+  INSERT INTO sqlite_sequence (name, seq)
+  SELECT 'activity_events_new', seq FROM sqlite_sequence WHERE name = 'activity_events';
+
+  DROP TABLE activity_events;       -- also removes its sqlite_sequence row
+  ALTER TABLE activity_events_new RENAME TO activity_events;   -- renames the sqlite_sequence row too
+
+  CREATE INDEX idx_activity_actor_id   ON activity_events(actor_id, id DESC);
+  CREATE INDEX idx_activity_game_kind  ON activity_events(game_id, kind, id DESC);
+  CREATE INDEX idx_activity_coalesce   ON activity_events(actor_id, game_id, kind, day);
+  CREATE INDEX idx_activity_collection ON activity_events(collection_id, kind, day) WHERE collection_id IS NOT NULL;
+  -- F030: the post delete cascade.
+  CREATE INDEX idx_activity_post       ON activity_events(post_id) WHERE post_id IS NOT NULL;
+  ```
+  - The copy holds the write lock for the migration's duration. `activity_events` is bounded by the coalescing rules, so this is acceptable at startup (the F021 reasoning). The startup `PRAGMA optimize` re-analyses.
+  - `tests/f015.rs`'s replay test stops at `0022` and is unaffected.
+- **Writer** (`activity::record_post_created(conn, actor_id, post_id, now)`). It uses a nested transaction and `log_failure`, like the other writers. `?3` day = `now[..10]`, and `now` is the exact `created_at` bound in the post insert:
+  ```sql
+  INSERT INTO activity_events (actor_id, kind, post_id, day, created_at)
+  VALUES (?1, 'postCreated', ?2, ?3, ?4);
+  ```
+  It is called inside `create_post`'s transaction, right after the guarded insert affected one row. No coalescing.
+- **Guarded insert** (`create_post`; `?8` = now − 24 h in the same RFC3339 millis Z format; `?4` = `'game'`, `'collection'` or NULL):
+  ```sql
+  INSERT INTO posts (id, author_id, body, attachment_type, game_id, collection_id, created_at)
+  SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+  WHERE (SELECT COUNT(*) FROM posts WHERE author_id = ?2 AND created_at > ?8) < 25;   -- POSTS_PER_DAY_MAX
+  ```
+  0 rows affected → 422 `You can post at most 25 times in 24 hours`. The count uses `idx_posts_author_created`.
+- **Feed query** (`FEED_SQL`). Branches (a), (b) and (c) stay as they are. Branch (a)'s `CROSS JOIN games g … g.id = e.game_id` drops `postCreated` rows, and (b) and (c) restrict their kinds. A fourth branch is added to the `picked` union:
+  ```sql
+  UNION
+  SELECT id FROM (
+    SELECT e.id FROM follows f
+    CROSS JOIN activity_events e INDEXED BY idx_activity_actor_id
+    WHERE f.follower_id = ?1 AND e.actor_id = f.followee_id
+      AND e.id < COALESCE(?2, 9223372036854775807)
+      AND e.actor_id <> ?1
+      AND e.kind = 'postCreated'
+      AND e.kind IN (SELECT value FROM json_each(?4))
+      AND e.post_id IS NOT NULL
+    ORDER BY e.id DESC LIMIT ?3)
+  ```
+  - The outer `SELECT` adds `e.post_id`.
+  - The branch joins nothing else, because the FK cascade guarantees that the post exists.
+  - The extended `tests/review2.rs` N1 test (kinds include `postCreated`) keeps every assertion: `idx_activity_actor_id (actor_id=? AND id<?)`, and no scan of `activity_events`, `games`, `collections` or `screenshots`. It also asserts that the plan never scans `posts`.
+- **Read assembly** (`routes/posts.rs`). `POST_SELECT`:
+  ```sql
+  SELECT p.id, p.author_id, p.body, p.attachment_type, p.game_id, p.collection_id, p.created_at,
+         u.id AS a_id, u.username AS a_username, u.display_name AS a_display_name,
+         u.avatar_ext AS a_avatar_ext, u.avatar_version AS a_avatar_version
+  FROM posts p JOIN users u ON u.id = p.author_id
+  ```
+  `posts_for(state, rows, viewer)` uses a fixed number of queries per call, never one per row:
+  1. `is_admin(viewer)` (only when signed in).
+  2. `{GAME_SELECT} WHERE g.id IN (SELECT value FROM json_each(?))` for the rows' `game_id`s. Only games with `visible_to(viewer)` are kept.
+  3. `{COLLECTION_SELECT} WHERE c.id IN (SELECT value FROM json_each(?))` for the rows' `collection_id`s (`COLLECTION_SELECT`, `collections_from_rows` are now `pub(crate)`). These are filtered by `visible_to(viewer, admin)`, then passed to `summaries_for(state, &rows, viewer)`.
+  4. Per row:
+     - `author` = `user_ref_from_row(row, "a_")`;
+     - `canDelete` = viewer is the author or `admin`;
+     - `attachment` = `None` when `attachment_type` is NULL, else `Some { type, game, collection }` with the visible target or `None`;
+     - a stored `attachment_type` other than `game`/`collection` reads as `attachment: null` and logs a warning.
+
+  Callers:
+  - `get_post`: `{POST_SELECT} WHERE p.id = ?`.
+  - `list_user_posts`:
+    ```sql
+    SELECT COUNT(*) FROM posts WHERE author_id = ?1;
+    {POST_SELECT} WHERE p.author_id = ?1 ORDER BY p.created_at DESC, p.id LIMIT ?2 OFFSET ?3;
+    ```
+    A test asserts that the page plan uses `idx_posts_author_created` without `USE TEMP B-TREE FOR ORDER BY`.
+  - `get_feed`: `{POST_SELECT} WHERE p.id IN (SELECT value FROM json_each(?))` for the page's `post_id`s, then `posts_for` with the viewer. A `postCreated` row whose post is missing is skipped.
+- **Delete** (`remove_post(state, id)`, used by `DELETE /api/posts/{id}` and the report `delete` action), in one transaction:
+  ```sql
+  UPDATE reports SET status = 'resolved', resolution = 'delete', resolved_at = ?2
+   WHERE target_type = 'post' AND target_id = ?1 AND status = 'open';
+  DELETE FROM posts WHERE id = ?1;   -- the activity_events row cascades (idx_activity_post)
+  ```
+- **Stats.** `ProfileStats.posts` = `SELECT COUNT(*) FROM posts WHERE author_id = ?1`, the same set as the list's `total`.
+- **Reports.** `TARGET_TYPES` gains `"post"`, with no schema change since `0016`. `create_report`'s `post` branch stores `target_game_id` NULL and `target_preview` = the first 140 chars of the body. The resolve validity table is unchanged; `("delete", "post")` calls `remove_post`.
+- **UI** (`@webgame/ui`):
+  - **Pure helpers.** `posts.ts`: body rules, `linkifyPost` (spec § 0.4; links only what `isSafeProfileUrl` accepts), paths and `parseAttachParam`. `share.ts`: `postShareUrl`.
+  - **Components.** `PostCard`, `PostAttachmentCard`, `PostComposer` and `ProfilePosts` (the `ProfileScreenshots` loading model with `pagesForOffset`).
+  - **Routes.**
+    - `u/:username/posts` → `ProfilePostsTab`, inside the F028 shell.
+    - `p/:id` → `PostPage`.
+    - The Overview gains a Posts shelf.
+    - `FeedPage` gains a Posts tab (`kinds=postCreated`).
+    - `FeedItem` renders `postCreated` with `PostCard`.
+    - `GamePage` and `CollectionPage` link to the composer with `?attach=`.
+  - **Typing.** `FeedItem.game` becomes nullable. The existing renderers take `GameFeedItem` (`FeedItem & { game: GameSummary }`), and `isKnownFeedItem` drops non-post items without a game.
+- **Desktop.** No source changes. Links in posts go through the existing `external.rs` handler. Attachment images use `api.url`, which the CSP `img-src` already allows. `f030.desktop.test.tsx` verifies this.
+- **Ownership**:
+  - backend-dev: the migration, `ratelimit.rs`, `activity.rs`, `routes/posts.rs`, `routes/feed.rs`, `routes/users.rs`, `routes/collections.rs` (visibility of three items), `routes/reports.rs`, `routes/mod.rs`, `tests/f030.rs`, and the `tests/f008.rs`, `tests/f028.rs` and `tests/review2.rs` updates.
+  - frontend-dev: `api/types.ts`, `api/client.ts`, `posts.ts`, `share.ts`, `profile.ts`, the new components, `ProfilePage`, `ProfileSections`, `PostPage`, `NotFoundPage`, `FeedPage`, `FeedItem`, `GamePage`, `CollectionPage`, `Report.tsx`, `AdminPage`, `WebGameApp.tsx`, `index.ts`, `styles.css` and tests.
+  - desktop-dev: `src/__tests__/f030.desktop.test.tsx`.

@@ -1051,3 +1051,7 @@ These rules replace any earlier F023 or F019 text that says pad A reports `confi
   - **Effect:** `!ui.editing` guards hold in that step whether they come before or after the field.
 - **Known gap:** only the buttons above are filtered. A direction action remapped to another button, for example `up` on `RB`, moves the keyboard cursor and also fires for the game.
 - **For creators:** you no longer need a special guard for pad A or `confirm` while the keyboard is shown. Pad A reports `confirm` only when a field is being edited without the keyboard, so guard gameplay with `ui.editing` there.
+
+
+## F030 additions
+None. User posts are a platform-only feature: there are no engine, message, game.json, bundle or player page changes. Games can't read or create posts, and nothing about posts reaches the game iframe.

@@ -68,7 +68,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F024 | "Screenshot of your game" notifications for creators | S | shipped |
 | F028 | Public profiles 2: banner, links, profile sections and sharing | M | shipped |
 | F029 | Featured games on profiles | S | proposed |
-| F030 | User posts: short text posts on profiles and in followers' feeds | M | proposed |
+| F030 | User posts: short text posts on profiles and in followers' feeds | M | specced |
 | F031 | Post replies and hearts, with notifications | M | proposed |
 | F032 | Home and discover 2: sectioned home page and creator spotlight | M | proposed |
 | F033 | Search page: games, creators and collections | M | proposed |
@@ -77,6 +77,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F036 | Tags index and tag pages | S | proposed |
 | F037 | About and Help pages | S | proposed |
 | F038 | Images in posts | S | proposed |
+| F039 | Post composer 2: attachment picker and drafts | S | proposed |
 | F027 | Featured screenshots: owners pin up to 3 shots on the game page | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
@@ -335,26 +336,39 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0024_f028.sql`, banner pipeline, link rules, stats, `user` reports), frontend (profile shell, header, sections, settings, admin), desktop (menu item, test). No engine changes.
 - **Depends on**: F002, F005, F008, F015 (all shipped). It is the foundation for F029 and F030.
 
-### F029: Featured games on profiles (S, proposed; after F028)
+### F029: Featured games on profiles (S, proposed; after F028; recommended next, kept out of F030 so both stay one round)
 - **Pitch**: users feature up to 4 published games, their own or anyone's, as a "Featured" row at the top of their profile Overview, in their chosen order. A "Feature on profile" picker in the profile's Overview (own games + favorites, with Move up/down) and `PUT /api/users/me/featured` (`gameIds`, max 4, published at write time; unpublished or deleted games are hidden at read time). `UserProfileResponse.featured: GameSummary[]`.
 - **User value**: creators lead with their best work instead of their newest. Players who don't make games can show their favourites. It composes with the F028 shell.
 - **Areas**: backend (one table `profile_featured`, one endpoint, read-time filter), frontend (Overview row, picker dialog). No engine changes.
 
-### F030: User posts (M, proposed; after F028)
+### F030: User posts (M, specced → [spec](features/F030-user-posts.md))
 - **Pitch**:
-  - Short text posts (1–500 characters, plain text with auto-linked URLs that pass the F028 link rule), optionally attached to one game or one public collection, which is shown as a card.
-  - Posts appear in a new **Posts** section of the F028 profile shell (`/u/{u}/posts`) and on a permalink page `/p/{id}`.
-  - Followers see them in the feed: a `postCreated` kind and a Posts tab.
-  - Authors delete their own posts and admins any post. Posts can be reported (`targetType: "post"`, delete action).
-  - `Limit::Post` (e.g. 10 per 10 min) and a per-user daily cap.
-  - Absorbs F022: a post with a collection attachment is how curators announce a list.
+  - **Posts:** short text posts, optionally attached to one published game or one public collection, which is shown as a card. Bodies are 1–500 code points and up to 12 lines of plain text, using the F028 forbidden-character set. URLs that pass the F028 link rule are linked.
+  - **Where they appear:**
+    - a **Posts** section in the F028 profile shell (`/u/{u}/posts`, with the composer on your own profile);
+    - a 3-post shelf on the Overview;
+    - a permalink page `/p/{id}` with Copy link;
+    - a `postCreated` feed kind and a Posts tab, for followers only.
+  - **✎ Post about this** on game and collection pages opens the composer with the attachment prefilled (`?attach=`). This absorbs F022.
+  - **Moderation:** authors delete their own posts and admins any post. Reports use `targetType: "post"` with `dismiss`/`delete`.
+  - **Caps:** `Limit::Post` (10 per 10 min) and at most 25 posts in any 24 hours (guarded insert).
+- **Decisions (2026-11-18)**:
+  - Replies and hearts stay in **F031**: two tables, two notification kinds with settings and mutes, and a thread UI make a second M.
+  - **F029 stays separate:** it is a clean S and should run next.
+  - The composer has no attachment picker; that is **F039**.
+  - F030 writes no notifications.
 - **User value**: the first way to talk to followers that isn't tied to a game: dev logs, "new level coming", "check out this list". It makes profiles and the feed social.
-- **Areas**: backend (`posts` table, CRUD + list endpoints, feed kind, report target), frontend (composer on own profile and feed, post card, Posts section, permalink, feed tab, admin rows), desktop (verification). No engine changes.
+- **Areas**:
+  - backend: migration `0025_f030.sql` with `posts` and an `activity_events` rebuild for a `post_id` column (the F021 CHECK requires a game or collection), four endpoints, feed branch (d), report target, `stats.posts`;
+  - frontend: composer, post card, Posts section and shelf, permalink, feed tab, entry points, admin rows;
+  - desktop: verification test only.
+  - No engine changes.
 
 ### F031: Post replies and hearts (M, proposed; after F030)
 - **Pitch**: hearts on posts, and one level of replies under each post. This reuses the F006 comment patterns (the `HeartButton`, 3-reply preview and "Show N more", permalinks `/p/{id}?reply={rid}`), F017-style author lock, and F007 notifications: `postReply` and `postHeart` for the author, coalesced like comment hearts, with settings switches and F018 thread mutes.
 - **User value**: posts become conversations, and creators hear back from their audience.
 - **Areas**: backend (`post_replies`, `post_hearts`, notification kinds, report target for replies), frontend (thread UI on post cards and the permalink, notification texts, settings). No engine changes.
+- **Builds on F030**: `PostCard` gains the heart and the thread below its body, and `remove_post` must also cascade replies and resolve their reports. It needs no `activity_events` change, because replies don't enter the feed.
 
 ### F032: Home and discover 2 (M, proposed)
 - **Pitch**:
@@ -397,3 +411,12 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: one optional image per post (the F005 re-encode pipeline, a thumbnail in the feed, the lightbox on the permalink), or "attach a screenshot" from your own F015 gallery.
 - **User value**: dev-log posts with work-in-progress art, and sharing a favourite moment with followers.
 - **Areas**: backend (post image column + storage), frontend (composer attach, card image). No engine changes.
+
+### F039: Post composer 2: attachment picker and drafts (S, proposed; after F030)
+- **Pitch**:
+  - An **Attach** button in the F030 composer opens a dialog with two tabs:
+    - **Games:** search published games by title through `GET /api/games?q=`, plus your favorites;
+    - **Collections:** your public collections from `GET /api/users/me/collections`.
+  - The unsent text and attachment are kept as a draft per device, restored when you come back, and cleared after posting.
+- **User value**: attaching no longer requires visiting the game or collection page first, and a half-written dev log survives a page change.
+- **Areas**: frontend only (dialog, composer, local draft). No backend changes: F030's `POST /api/posts` already takes either id.

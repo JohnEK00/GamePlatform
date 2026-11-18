@@ -1824,3 +1824,162 @@ The stored value is the trimmed URL with its scheme lowercased. Labels are store
 - **Opening a profile:**
   - **Username casing:** opening a profile with the wrong letter case redirects to the correct case without fetching again.
   - **Query strings:** an unknown query string on `/u/{u}` is ignored and the Overview shows.
+
+
+## F030 additions
+User posts: short text posts on profiles and in followers' feeds (spec: `docs/features/F030-user-posts.md`; § 0 there settles every ambiguity). All earlier rules apply, including F002 (feed), F008 (collection visibility, report flow), F015/F021 (feed rules) and F028 (forbidden characters, profile stats). There are four new endpoints, one new feed kind, one new report target and one new rate-limit bucket. **No notifications.**
+
+### Types
+```ts
+type PostAttachmentType = "game" | "collection"
+
+type PostAttachment = {
+  type: PostAttachmentType;            // fixed when the post is created; clients render nothing for an unknown type
+  game: GameSummary | null;            // type "game": the game when visible to the viewer (published, or owned by the viewer); else null
+  collection: CollectionSummary | null;// type "collection": the collection when visible to the viewer (F008: public, or owner/admin); else null
+}
+// For type "game", collection is always null, and vice versa. A target that was deleted, unpublished
+// or made private after posting reads as null; the post itself is still returned.
+
+type Post = {
+  id: string;                          // UUID v4
+  author: UserRef;
+  body: string;                        // plain text, 1–500 code points, 1–12 lines ("\n" separated); see "Body rules"
+  attachment: PostAttachment | null;   // null = the post has no attachment
+  createdAt: string;                   // RFC3339 millis Z
+  canDelete: boolean;                  // 🔓 the viewer is the author or an admin; false when anonymous
+  path: string;                        // "/p/{id}" (in-app route)
+}
+
+type CreatePostRequest = {
+  body: string;                        // required
+  gameId?: string | null;              // at most one of gameId / collectionId may be a string
+  collectionId?: string | null;
+}
+
+type FeedItemKind = "gamePublished" | "gameUpdated" | "personalBest" | "achievementUnlocked"
+                  | "collectionUpdated" | "screenshotPosted"
+                  | "postCreated";                     // F030
+
+type FeedItem = {
+  ...F015,
+  game: GameSummary | null;            // F030: null for postCreated (its attachment is in post); a GameSummary for every other kind
+  post: Post | null;                   // F030: postCreated only; null for every other kind. Older servers omit it (treat as null).
+}
+// For postCreated: actor = the post author; reason = "following" (always); createdAt = post.createdAt;
+// version, score, achievement, update, collection and screenshots are null.
+
+type ProfileStats = {
+  ...F028,
+  posts: number;                       // F030: all of the user's posts (posts are public, so the same for every viewer). Older servers omit it.
+}
+
+type ReportTargetType = "game" | "comment" | "screenshot" | "collection" | "user"
+                      | "post";        // F030: targetId = the post id
+// Report for targetType "post": targetPreview = the body's first 140 code points at report time;
+// targetGameId, targetImageUrl and targetImageFullUrl = null.
+```
+- Clients must still ignore feed items with an unknown `kind` (F002). Clients that know `postCreated` must skip an item whose `post` is missing or null.
+- Clients must treat a missing `stats.posts` as "posts unsupported" (hide the Posts section and shelf).
+
+### Body rules (`POST /api/posts` `body`)
+Applied in this order. The first failure → 422 `validation`:
+
+| Step | Rule | Message |
+|---|---|---|
+| 1 | `\r\n` and `\r` become `\n`, then leading and trailing whitespace is trimmed | – |
+| 2 | 1–500 Unicode scalar values (code points) | `body must be 1–500 characters` |
+| 3 | at most 11 `\n` (12 lines) | `body must be at most 12 lines` |
+| 4 | no character other than `\n` from the F028 forbidden set: U+0000–U+001F (so `\t` too), U+007F–U+009F, U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+FEFF | `body must be plain text` |
+
+The stored and returned body is the result of step 1. The server never interprets the body: no HTML, no Markdown, no link detection. Clients render it as plain text and may turn URLs that pass the F028 link URL rule into links (spec § 0.4).
+
+### Attachments (`POST /api/posts`)
+Checked after the body rules, in this order:
+1. `gameId` and `collectionId` are both strings → 422 `A post can have at most one attachment`. `null` or absent means "none". An empty string is looked up like any id.
+2. **`gameId`:**
+   - unknown, or not visible to the author under `GET /api/games/{id}` rules → 404 `not_found` `Game not found`;
+   - visible but `published` is false → 422 `Only published games can be attached`.
+3. **`collectionId`:**
+   - unknown, or not visible to the author (F008) → 404 `not_found` `Collection not found`;
+   - visible but `visibility` is `"private"` → 422 `Only public collections can be attached`.
+
+   Anyone's public collection may be attached, including an empty one.
+
+An attachment can't be changed after posting. Posts can't be edited.
+
+### Endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| POST 🔒 | /api/posts | `CreatePostRequest` | 201 `Post` |
+| GET 🔓 | /api/posts/{id} | – | `Post` |
+| DELETE 🔒 author/admin | /api/posts/{id} | – | 204 |
+| GET 🔓 | /api/users/{username}/posts | `?page=1&perPage=20` | `Page<Post>`, newest first (`createdAt` desc, then `id` asc) |
+
+**`POST /api/posts`**, checked in this order:
+1. Auth → 401.
+2. Malformed JSON → 400 `bad_request`. Not an object, `body` missing, or a field with the wrong JSON type (for example `body: 5` or `gameId: 3`) → 422 `validation` (JSON extractor). Unknown fields are ignored.
+3. `Limit::Post` → 429 `rate_limited` with `Retry-After`.
+4. Body rules → 422.
+5. Attachments → 404/422.
+6. The author already has **25** posts with `createdAt` in the last 24 hours (rolling, strictly later than now − 24 h) → 422 `validation` `You can post at most 25 times in 24 hours`. The check and the insert are atomic, so concurrent posts can't exceed 25. Deleted posts no longer count, and deleting doesn't refund the `Limit::Post` token.
+7. 201 with the `Post` as the author sees it (`canDelete: true`).
+
+**`GET /api/posts/{id}`**: an unknown id → 404 `not_found` `Post not found`. There is no rate limit. Anonymous viewers get `canDelete: false`.
+
+**`DELETE /api/posts/{id}`**:
+- Auth → 401. Unknown → 404 `Post not found`. Neither the author nor an admin → 403 `forbidden`.
+- It deletes the post and its feed event, and marks every open report on it `resolved` with resolution `delete`, in one transaction.
+- No rate limit.
+
+**`GET /api/users/{username}/posts`**:
+- `{username}` is matched case-insensitively. An unknown user → 404 `not_found` `User not found`. The user is looked up before paging is parsed (the F015 rule).
+- `page`: default 1, clamped to 1–1,000,000 (review 9 L7); non-integer → 400 `bad_request` `page must be an integer`.
+- `perPage`: default **20**, clamped to **1–50**; non-integer → 400 `bad_request` `perPage must be an integer`.
+- `total` counts all of the user's posts. Every post is listed for every viewer.
+- No rate limit.
+
+### Feed: event production
+| Kind | Written when | Coalescing |
+|---|---|---|
+| `postCreated` | `POST /api/posts` returns 201 (written in the same transaction as the post) | none: one item per post |
+
+- Best effort, as for every kind: a failure is logged and the post still returns 201. A refused post (4xx, including 429 and the 24-hour cap) writes nothing.
+- Deleting the post deletes the event.
+
+### Feed: sources and visibility
+- `postCreated` items come **only** from users the viewer follows. The favorites clause never applies, and the viewer's own posts are never shown (F002 rule 2).
+- An item is shown while its post exists. The attachment's visibility never hides the item; it only nulls `attachment.game` or `attachment.collection` for the viewer.
+- `kinds` accepts `postCreated`. An older server answers it with 400 `Unknown feed kind 'postCreated'`.
+- Paging is unchanged (`id` cursor). A row whose post was deleted during assembly is skipped without affecting `nextCursor`.
+
+### Changed endpoints
+- `GET /api/users/{username}`: `stats` gains `posts`.
+- `GET /api/feed`: the `postCreated` kind, `FeedItem.post`, and `FeedItem.game` nullable for that kind only.
+- `POST /api/reports`:
+  - `targetType: "post"` with `targetId` = a post id;
+  - unknown → 404 `not_found` `Post not found`; your own post → 422 `You can't report your own post`;
+  - an unknown `targetType` → 422 `targetType must be "game", "comment", "screenshot", "collection", "user" or "post"`;
+  - the duplicate-open rule (409) and `Limit::Report` are unchanged.
+- `POST /api/admin/reports/{id}/resolve` for post reports:
+  - `dismiss` → unchanged;
+  - `delete` → the effects of `DELETE /api/posts/{id}`; a post that is already gone is not an error;
+  - `unpublish` → 422 `unpublish is only valid for game reports`;
+  - `clearProfile` → 422 `clearProfile is only valid for user reports`;
+  - the F028 validity table otherwise applies unchanged (posts behave like the "comment / screenshot / collection" column).
+- `clearProfile` (F028) doesn't touch posts.
+
+### Web routes
+- `/u/{username}/posts`: the profile's Posts section (inside the F028 shell).
+- `/u/{username}/posts?attach=game:{gameId}` or `?attach=collection:{collectionId}`: on your own profile, the composer opens with that attachment. It is ignored elsewhere and when malformed.
+- `/p/{id}`: the post permalink.
+- Share links are `{origin}/p/{id}` (desktop: `{serverBase}/p/{id}`).
+- With `WEB_DIST` set, both fall back to `index.html` like every SPA route.
+
+### Rate limits
+- `POST /api/posts`: **`Limit::Post`, 10 per 10 min, per user**. Over the limit → 429 `rate_limited` + `Retry-After`. The 24-hour cap (25) is a separate, persistent rule reported as 422 and unaffected by `RATE_LIMIT=off`.
+- Post reports share `Limit::Report` (10/hour).
+- `GET /api/posts/{id}`, `GET /api/users/{u}/posts` and `DELETE /api/posts/{id}` have no limit. Feed reads keep `Limit::Feed`.
+
+### Privacy
+Posts are public to everyone, including anonymous visitors, and reach the author's followers' feeds. No reader, follower or view data is exposed. Report previews hold at most the first 140 code points of the body.
