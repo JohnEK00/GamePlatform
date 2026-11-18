@@ -115,6 +115,9 @@ export type { TextEvent } from './uitext';
 
 type NavButton = 'Up' | 'Down' | 'Left' | 'Right' | 'A' | 'B' | 'X' | 'Y' | 'Start' | 'LB';
 
+/** F023: the gamepad 0 buttons the on-screen keyboard uses; they never reach the game's actions while it takes input. */
+const OSK_PAD_BUTTONS: readonly NavButton[] = Object.freeze(['A', 'B', 'X', 'Y', 'LB', 'Start', 'Up', 'Down', 'Left', 'Right'] as NavButton[]);
+
 /**
  * What Ui reads from `engine.input`. The F019 members are optional so minimal hosts (and the F012
  * test doubles) keep working; `engine.input` provides all of them.
@@ -147,6 +150,11 @@ export interface UiInput {
   setKeyboardCapture?(on: boolean): void;
   /** F019: editing starts in this step: capture keyboard actions from this step on (engine-internal). */
   captureKeyboardNow?(): void;
+  /**
+   * F023: the on-screen keyboard takes these gamepad 0 buttons in this step; held ones stop counting
+   * for actions until released (engine-internal).
+   */
+  consumePadButtons?(buttons: readonly NavButton[]): void;
   /** F023: the kind of device used last (F016); absent counts as `"keyboard"`. */
   readonly lastDevice?: string;
 }
@@ -445,6 +453,11 @@ export class Ui {
   private oskRepH: RepTimer | null = null;
   private oskRepDel: RepTimer | null = null;
   private _keyboardRect: Readonly<{ x: number; y: number; w: number; h: number }> | null = null;
+  /**
+   * The field the keyboard took input for in this step: `ui.editing` keeps reporting it until the
+   * step ends, even after its edit ends (unless the game assigns `ui.editing`).
+   */
+  private editHold: string | null = null;
 
   constructor(deps: UiDeps) {
     this.input = deps.input;
@@ -483,11 +496,15 @@ export class Ui {
    * step (caret at the end) if that step declares an enabled text field with that id; setting
    * `null` stops editing with a commit. A field that starts editing in this step (typing on it,
    * pressing it, activating it) is reported from the start of the step, before its call.
+   * F023: in a step where the on-screen keyboard takes input, the field is reported until the step
+   * ends even when its edit ends in that step (Start / OK submit, B revert, a press outside), unless
+   * the game assigns `ui.editing` in that step.
    */
   get editing(): string | null {
-    return this._editing ?? this.editRequestNow ?? this.pendingStart ?? this.editRequestNext;
+    return this._editing ?? this.editRequestNow ?? this.pendingStart ?? this.editRequestNext ?? this.editHold;
   }
   set editing(id: string | null) {
+    this.editHold = null;
     const next = typeof id === 'string' && id ? id : null;
     if (next === null) {
       if (this._editing !== null) this.stopEditing(this._editing);
@@ -592,6 +609,11 @@ export class Ui {
     this.oskLive = osk !== null && osk.shown && osk.layout !== null && this._keyboardRect !== null && this._editing === osk.field;
     if (!this.oskLive) this.oskRepV = this.oskRepH = this.oskRepDel = null;
     if (!this.oskLive && osk) osk.pressKey = -1;
+    // F023 (review 10): the keyboard's pad buttons never reach the game's actions in a step where it
+    // takes input (held ones stay latched until released), and `ui.editing` keeps reporting the field
+    // for the rest of the step even if the edit ends in it.
+    this.editHold = this.oskLive ? this._editing : null;
+    if (this.oskLive) this.input.consumePadButtons?.(OSK_PAD_BUTTONS);
     this.pointerStep();
     this.navigateStep();
     // F019: editing that starts in this step captures the keyboard from this step on, so the key
@@ -959,6 +981,7 @@ export class Ui {
     this.oskStep = null;
     this.oskPointerKey = -1;
     this.oskLive = false;
+    this.editHold = null;
     this.committedList = this.building;
     this.building = [];
     this.prevHits = this.hits;

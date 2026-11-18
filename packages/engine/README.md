@@ -691,7 +691,21 @@ stays on the field). It is a 10×5 grid: digits, `QWERTYUIOP`, `ASDFGHJKL'`, `ZX
 * **Disabled keys**: keys your `allow` rejects, character keys and `SPACE` once `maxLength` is reached, and `DEL` at the
   start of the text draw dimmed and do nothing. Restrict names with `allow` and the player sees the filter.
 * **Keyboard events stay in the field**: they never appear in `input.textEvents`, never change `input.lastDevice` and
-  never fire actions. Pad A itself still reports your `confirm` action, so guard gameplay with `ui.editing`.
+  never fire actions.
+* **Its pad buttons stay in the keyboard** (review 10): in a step where the keyboard takes input, gamepad 0's `A`, `B`,
+  `X`, `Y`, `LB`, `Start` and D-pad never reach your actions. Their `actionPressed` doesn't fire, and an action held
+  only through them is down no longer (it reports `actionReleased` once). The D-pad doesn't count for the `axis()`
+  fallback either. A button that is held then stays latched until it is released, even after the keyboard closes, so
+  the `Start` that submits never also fires `pause` in the next step. Other pad buttons (`RB`, triggers) still reach
+  actions. Raw `input.gamepad(i)` reads are not filtered. Without the keyboard (hidden, `"never"`, or it doesn't fit),
+  F019 applies unchanged: pad A submits and still reports `confirm`.
+* **`ui.editing` in the closing step**: in a step where the keyboard takes input, `ui.editing` keeps returning the
+  field until the step ends, even after `Start`/`OK` submits, `B` reverts or a press elsewhere commits. The field's
+  returned value and `ui.committed(id)` report the result as usual. Assigning `ui.editing` in that step ends this. So a
+  `!ui.editing` guard placed after the field still holds in that step; from the next step it reads `null`.
+* **Accessibility**: the keyboard exists only as pixels on the canvas. It has no DOM elements and makes no screen-reader
+  announcements: opening it, the key under the cursor and the typed text are not read out. Screen-reader users should
+  type on a physical keyboard. The first physical key hides the panel and the field works as in F019.
 * **`ui.keyboardRect`** (read-only): `{ x, y, w, h }` of the panel drawn at the end of the last step, or `null`. It docks
   at the bottom (at the top when the field would be covered). Move HUD elements out of it, and if you read raw
   `input.mouse`/`touches` while editing, ignore presses inside it.

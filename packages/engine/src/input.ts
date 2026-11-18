@@ -1,5 +1,16 @@
 /** Keyboard / mouse / touch / gamepad input with per-step pressed/released edges. */
-import { ActionMap, applyOverrides, gamepadLabel, isKeyboardCode, keyLabel as defaultKeyLabel, type ButtonSource, type ControlAction } from './actions';
+import {
+  ActionMap,
+  applyOverrides,
+  gamepadLabel,
+  isGamepadButtonName,
+  isKeyboardCode,
+  keyLabel as defaultKeyLabel,
+  type ButtonSource,
+  type ControlAction,
+  type GamepadButtonName,
+  type PadSource,
+} from './actions';
 import { filterText, TEXT_EDIT_KEYS, type TextEvent } from './uitext';
 
 /** At most this many `textEvents` per step (GAME_FORMAT § F019); extras are dropped. */
@@ -294,6 +305,15 @@ export class Input {
   private captureApplied = false;
   /** Keyboard codes held when capture ended: they count as up for actions until released. */
   private readonly captureLatch = new Set<string>();
+  /** The keyboard source this step's actions were computed with (reused by same-step recomputes). */
+  private stepKeys: ButtonSource | null = null;
+  /**
+   * F023 pad latch: gamepad 0 buttons consumed by the on-screen keyboard. They count as up for
+   * actions and the `axis()` fallback until released.
+   */
+  private readonly padLatch = new Set<GamepadButtonName>();
+  /** Buttons latched in this step while already held at the previous poll: they report `wasReleased` once. */
+  private readonly padLatchReleased = new Set<GamepadButtonName>();
   private defaults: readonly ControlAction[] = Object.freeze([]);
   private effective: readonly ControlAction[] = Object.freeze([]);
   private overrides: unknown = {};
@@ -482,7 +502,51 @@ export class Input {
   captureKeyboardNow(): void {
     if (this.capture) return;
     this.capture = true;
-    this.map.update(this.actionKeys(), this.pads.find((p) => p.connected) ?? null, true);
+    this.stepKeys = this.actionKeys();
+    this.map.update(this.stepKeys, this.actionPad(), true);
+  }
+
+  /**
+   * Engine-internal (F023): the on-screen keyboard takes gamepad 0's `buttons` in this step
+   * (`ui.beginStep`, before the game's update). Each of them held now is latched: it counts as up
+   * for actions and the `axis()` fallback, with no `pressed` edge, until it is released (an action
+   * held through it reports `actionReleased` in this step). This step's actions are recomputed.
+   * No effect when gamepad 0 is not connected. Raw `gamepad(i)` reads are unaffected.
+   */
+  consumePadButtons(buttons: readonly string[]): void {
+    const p = this.pads[0]!;
+    if (!p.connected) return;
+    let changed = false;
+    for (const b of buttons) {
+      if (!isGamepadButtonName(b) || this.padLatch.has(b) || !p.isDown(b)) continue;
+      this.padLatch.add(b);
+      if (!p.wasPressed(b)) this.padLatchReleased.add(b);
+      changed = true;
+    }
+    if (changed) this.map.update(this.stepKeys ?? this.actionKeys(), this.actionPad(), true);
+  }
+
+  /** The pad the actions read (the first connected one), seen through the F023 pad latch. */
+  private actionPad(): PadSource | null {
+    const p = this.pads.find((x) => x.connected) ?? null;
+    if (!p || this.padLatch.size === 0) return p;
+    const latch = this.padLatch;
+    const rel = this.padLatchReleased;
+    return {
+      connected: true,
+      isDown: (b) => !latch.has(b) && p.isDown(b),
+      wasPressed: (b) => !latch.has(b) && p.wasPressed(b),
+      wasReleased: (b) => (latch.has(b) ? rel.has(b) : p.wasReleased(b)),
+    };
+  }
+
+  /** Start of step: a latched pad button counts again once released (or when gamepad 0 is gone). */
+  private prunePadLatch(): void {
+    this.padLatchReleased.clear();
+    if (this.padLatch.size === 0) return;
+    const p = this.pads[0]!;
+    if (!p.connected) this.padLatch.clear();
+    else for (const b of this.padLatch) if (!p.isDown(b)) this.padLatch.delete(b);
   }
 
   /** True while a `ui.textField` is editing: actions and `axis()` ignore keyboard keys (F019). */
@@ -520,7 +584,9 @@ export class Input {
       this.map = this.next;
       this.next = null;
     }
-    this.map.update(this.actionKeys(), this.pads.find((p) => p.connected) ?? null);
+    this.prunePadLatch();
+    this.stepKeys = this.actionKeys();
+    this.map.update(this.stepKeys, this.actionPad());
   }
 
   /**
@@ -711,17 +777,18 @@ export class Input {
   axis(name: 'horizontal' | 'vertical'): number {
     const s = { isDown: (code: string) => this.axisKey(code) };
     const pad = this.pads.find((p) => p.connected);
+    const dpad = this.actionPad(); // F023: D-pad buttons latched by the on-screen keyboard count as up
     // F009: with both movement actions declared, follow the (remappable) actions + left stick.
     const [negId, posId] = name === 'horizontal' ? ['left', 'right'] : ['up', 'down'];
     if (this.effective.some((a) => a.id === negId) && this.effective.some((a) => a.id === posId))
       return combineAxis(this.map.down(negId), this.map.down(posId), (name === 'horizontal' ? pad?.leftX : pad?.leftY) ?? 0);
     if (name === 'horizontal') {
-      const neg = s.isDown('ArrowLeft') || s.isDown('KeyA') || !!pad?.isDown('Left');
-      const pos = s.isDown('ArrowRight') || s.isDown('KeyD') || !!pad?.isDown('Right');
+      const neg = s.isDown('ArrowLeft') || s.isDown('KeyA') || !!dpad?.isDown('Left');
+      const pos = s.isDown('ArrowRight') || s.isDown('KeyD') || !!dpad?.isDown('Right');
       return combineAxis(neg, pos, pad?.leftX ?? 0);
     }
-    const neg = s.isDown('ArrowUp') || s.isDown('KeyW') || !!pad?.isDown('Up');
-    const pos = s.isDown('ArrowDown') || s.isDown('KeyS') || !!pad?.isDown('Down');
+    const neg = s.isDown('ArrowUp') || s.isDown('KeyW') || !!dpad?.isDown('Up');
+    const pos = s.isDown('ArrowDown') || s.isDown('KeyS') || !!dpad?.isDown('Down');
     return combineAxis(neg, pos, pad?.leftY ?? 0);
   }
 }

@@ -1031,3 +1031,23 @@ None. Public profiles 2 (banner, links, profile sections) is a platform-only fea
 ### F023 known limits (review 10, L1 and L2)
 - **Accessibility:** the on-screen keyboard is drawn only on the canvas. It has no DOM content, so screen readers don't announce the panel, its keys or the typed text, and explore-by-touch taps don't reach the keys. Screen-reader users should type on a physical keyboard; the first key they press hides the panel.
 - **Cancelling and moving the caret:** touch players can't cancel an edit, because OK and a tap outside the panel both commit. Gamepad players can't move the caret. Both are planned for F025.
+
+
+### F023 review-fix additions (REVIEW-2026-11-17-10, M1)
+These rules replace any earlier F023 or F019 text that says pad A reports `confirm` while the keyboard is shown.
+
+- **When the keyboard takes input:** in any step that starts with the keyboard drawn (at the end of the previous step) for a field that is still being edited.
+- **Gamepad buttons used by the keyboard:** in such a step, these gamepad 0 buttons never reach the game's actions: `A`, `B`, `X`, `Y`, `LB`, `Start`, `Up`, `Down`, `Left`, `Right`.
+  - **Latching:** each of these buttons that is held in that step is latched. A latched button counts as up for actions and for the `axis()` D-pad fallback, and has no `pressed` edge.
+  - **Until release:** it stays latched until it is released, even after the keyboard closes. So the `Start` that submits never fires an action bound to `Start`, in that step or in later steps while it is held.
+  - **Actions already down:** if an action was down only through a button that gets latched, it reports `actionReleased` once in that step.
+  - **Other inputs:** `RB`, `LT`, `RT`, `Back`, `LS`, `RS` and keyboard keys follow their usual rules. Keyboard keys are captured as in F019.
+  - **Raw reads:** `input.gamepad(i)` is not filtered.
+  - **Keyboard not taking input:** this covers a keyboard hidden by physical typing, `keyboard: "never"`, or one that doesn't fit. In those cases F019 applies unchanged: pad A submits and reports `confirm`.
+- **`ui.editing` in the closing step:** in a step where the keyboard takes input, `ui.editing` returns the edited field's id until the step ends, even if the edit ends during that step.
+  - **Ways the edit can end:** `Start`/`OK`/`Enter` submit, `B`/`Escape` revert, `ArrowUp`/`ArrowDown` commit, or a press outside the panel.
+  - **Reporting:** the field's return value, `ui.committed(id)` and `ui.changed(id)` report the result as usual. From the next step, `ui.editing` reads `null`.
+  - **Exceptions:** if the game assigns `ui.editing` in that step, the new value applies at once. If another field starts editing in that step, `ui.editing` reports that field.
+  - **Effect:** `!ui.editing` guards hold in that step whether they come before or after the field.
+- **Known gap:** only the buttons above are filtered. A direction action remapped to another button, for example `up` on `RB`, moves the keyboard cursor and also fires for the game.
+- **For creators:** you no longer need a special guard for pad A or `confirm` while the keyboard is shown. Pad A reports `confirm` only when a field is being edited without the keyboard, so guard gameplay with `ui.editing` there.

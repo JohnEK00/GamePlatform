@@ -270,3 +270,8 @@ Engine first. `osk.ts` and its tests can land before the `ui.ts` wiring. Fronten
   - Phone (LAN dev, `WEBGAME_LAN=1`): Menu & HUD, tap NAME, type `MIA`, OK. The HUD shows `MIA 0`.
   - Gamepad on the web player: the same flow with `A`/`Start`. `B` restores the old name.
   - A Bluetooth or physical keyboard while the panel is open: the panel hides on the first key.
+
+## Review-fix additions (REVIEW-2026-11-17-10)
+- **M1:** while the keyboard takes input, the gamepad buttons it uses never reach game actions, and they stay latched until released. `ui.editing` keeps reporting the field for the rest of the step in which the keyboard submits or closes. The exact rules are in GAME_FORMAT § "F023 review-fix additions".
+- **L1 (accessibility):** the keyboard is drawn only on the canvas and makes no screen-reader announcements. Screen-reader users should type on a physical keyboard, and the first key they press hides the panel.
+- **L2:** touch players can't cancel an edit and gamepad players can't move the caret. Both are planned for F025.
