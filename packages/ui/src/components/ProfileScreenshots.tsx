@@ -12,7 +12,15 @@ import { ScreenshotLightbox } from "./ScreenshotLightbox";
 /** F015 § 2.3: profile screenshots page size. */
 export const PROFILE_SCREENSHOTS_PER_PAGE = 12;
 
-export type ProfileScreenshotsProps = { username: string; isMe: boolean };
+export type ProfileScreenshotsProps = {
+  username: string;
+  isMe: boolean;
+  /**
+   * F028: a shelf of at most `preview` shots (one request with `perPage = preview`), no "Load more", and a
+   * "See all {total} screenshots →" link to the profile's Screenshots section when there are more.
+   */
+  preview?: number;
+};
 
 type State = {
   items: UserScreenshot[];
@@ -38,7 +46,9 @@ const gameIdOf = (s: UserScreenshot) => (s.game && typeof s.game.id === "string"
  * game; "Load more" and a lightbox. Your own profile always shows it (empty state, error with Retry); other profiles
  * show it only once there is something to show. A 404 (older server) hides it everywhere.
  */
-export function ProfileScreenshots({ username, isMe }: ProfileScreenshotsProps) {
+export function ProfileScreenshots({ username, isMe, preview }: ProfileScreenshotsProps) {
+  const previewSize = typeof preview === "number" && preview > 0 ? Math.floor(preview) : 0;
+  const perPage = previewSize || PROFILE_SCREENSHOTS_PER_PAGE;
   const api = useApi();
   const { user, loading: authLoading } = useAuth();
   const titleId = useId();
@@ -56,8 +66,8 @@ export function ProfileScreenshots({ username, isMe }: ProfileScreenshotsProps) 
     (offset: number, total = 0) => {
       const g = offset === 0 ? ++gen.current : gen.current;
       setSt((s) => (offset === 0 ? { ...INITIAL } : { ...s, loading: true, error: null }));
-      const pages = offset === 0 ? [1] : pagesForOffset(offset, total, PROFILE_SCREENSHOTS_PER_PAGE);
-      Promise.all(pages.map((page) => api.listUserScreenshots(username, { page, perPage: PROFILE_SCREENSHOTS_PER_PAGE }))).then(
+      const pages = offset === 0 ? [1] : pagesForOffset(offset, total, perPage);
+      Promise.all(pages.map((page) => api.listUserScreenshots(username, { page, perPage }))).then(
         (rs) => {
           if (g !== gen.current) return;
           setSt((s) => {
@@ -80,7 +90,7 @@ export function ProfileScreenshots({ username, isMe }: ProfileScreenshotsProps) 
         },
       );
     },
-    [api, username],
+    [api, username, perPage],
   );
 
   // (Re)load from page 1 on user or viewer change (canDelete depends on the session); wait for the session first.
@@ -111,7 +121,8 @@ export function ProfileScreenshots({ username, isMe }: ProfileScreenshotsProps) 
   // Other profiles: nothing while loading, when empty, or on an error (a local delete keeps the heading).
   if (!isMe && items.length === 0 && !emptiedLocally) return null;
 
-  const hasMore = items.length < total;
+  const hasMore = !previewSize && items.length < total;
+  const seeAll = !!previewSize && total > items.length;
   const loadMore = () => load(items.length, total);
   const firstLoading = !loaded && !error;
 
@@ -121,6 +132,11 @@ export function ProfileScreenshots({ username, isMe }: ProfileScreenshotsProps) 
         <h2 id={titleId} className="pf-section-title" ref={headingRef} tabIndex={-1}>
           Screenshots{total > 0 ? <span className="pf-tab__count">{total}</span> : null}
         </h2>
+        {seeAll && (
+          <Link className="pf-shelf__more" to={`/u/${encodeURIComponent(username)}/screenshots`}>
+            See all {total} screenshots →
+          </Link>
+        )}
       </div>
       {error && items.length === 0 ? (
         <LoadError message="Couldn't load your screenshots." onRetry={() => load(0)} />

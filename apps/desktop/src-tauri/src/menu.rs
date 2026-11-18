@@ -1,7 +1,8 @@
 //! Native application menu. Window actions (reload, fullscreen, devtools, about, quit) run in Rust;
 //! navigation items are forwarded to the webview as a `MENU_EVENT` event whose payload is the item id
-//! (`"upload"`, `"open-folder"`, `"settings"`, `"feed"`, `"notifications"`, `"collections"`, `"docs"`, `"screenshot"`,
-//! `"controls"`), handled in src/nativeMenu.ts. `"notifications"` is View → Notifications (`CmdOrCtrl+Shift+N`, F007);
+//! (`"upload"`, `"open-folder"`, `"settings"`, `"profile"`, `"feed"`, `"notifications"`, `"collections"`, `"docs"`,
+//! `"screenshot"`, `"controls"`), handled in src/nativeMenu.ts. `"profile"` is View → My Profile (no accelerator,
+//! F028), which opens the user's own profile via `/me`. `"notifications"` is View → Notifications (`CmdOrCtrl+Shift+N`, F007);
 //! `"collections"` is View → Collections (`CmdOrCtrl+Shift+L`, F008), which opens the user's collections.
 //! `"screenshot"` (View → Take Screenshot, `CmdOrCtrl+Shift+S`) is a native accelerator, so it fires even while
 //! the sandboxed game iframe has focus; the webview turns it into `PLAYER_SCREENSHOT_EVENT`. Likewise
@@ -21,6 +22,7 @@ const FORWARDED: &[&str] = &[
     "upload",
     "open-folder",
     "settings",
+    "profile",
     "feed",
     "notifications",
     "collections",
@@ -107,6 +109,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .build()?;
 
     let view = SubmenuBuilder::new(app, "&View")
+        .item(&item(app, "profile", "My &Profile")?)
+        .separator()
         .item(&item(app, "feed", "F&eed")?)
         .item(&item(app, "notifications", "&Notifications")?)
         .item(&item(app, "collections", "Co&llections")?)
@@ -221,6 +225,14 @@ mod tests {
         assert_eq!(accelerator("controls"), Some("CmdOrCtrl+Shift+K"));
         assert_eq!(accelerator("fullscreen"), Some("F11"));
         assert_eq!(accelerator("upload"), None);
+    }
+
+    /// F028: View → My Profile is forwarded and has no accelerator (so it cannot collide with text entry).
+    #[test]
+    fn profile_is_forwarded_without_an_accelerator() {
+        assert!(FORWARDED.contains(&"profile"));
+        assert_eq!(accelerator("profile"), None);
+        assert!(ACCELERATORS.iter().all(|(id, _)| *id != "profile"));
     }
 
     /// F023: while the on-screen keyboard is open, the only bare (unmodified) key the shell takes from the game is

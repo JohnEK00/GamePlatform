@@ -1818,3 +1818,9 @@ The stored value is the trimmed URL with its scheme lowercased. Labels are store
   - **Client:** clients check the raw label for these characters before trimming.
 - **Banner upload while the server is busy:** a 503 returns the `Limit::Image` token it used, the same as screenshot uploads.
 - **Deleted user:** a report about a user who has since been deleted can still be resolved with `clearProfile`, which then does nothing.
+
+### F028 implementation notes (frontend)
+- **Client label checks:** the client runs the forbidden-character check on the raw label, so it also rejects a leading or trailing tab or newline that the server would trim off and accept. The client is stricter than the server, which is intended. The input's `maxLength={30}` counts UTF-16 units, while validation counts code points.
+- **Opening a profile:**
+  - **Username casing:** opening a profile with the wrong letter case redirects to the correct case without fetching again.
+  - **Query strings:** an unknown query string on `/u/{u}` is ignored and the Overview shows.

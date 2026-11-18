@@ -1,6 +1,7 @@
 // F008: pure helpers for collections (limits, validators mirroring docs/API.md § F008 "Text rules", reordering,
 // share links). No React, no I/O.
 import type { WebGameConfig } from "./context/config";
+import { appShareUrl } from "./share";
 
 export const COLLECTION_TITLE_MAX = 60;
 export const COLLECTION_DESCRIPTION_MAX = 500;
@@ -77,24 +78,13 @@ export function collectionPath(c: { id: string; path?: string }): string {
   return `/c/${encodeURIComponent(c.id)}`;
 }
 
-function currentOrigin(): string {
-  return typeof window !== "undefined" && window.location ? window.location.origin : "";
-}
-
 /**
  * Absolute share link of a collection (spec § 2.7). Web (browser router): this page's origin (plus the router
  * basename). Desktop (hash router): the configured server (`apiBaseUrl`), which serves the web app; falls back to
- * the page origin when `apiBaseUrl` is empty. Never a `#/` URL.
+ * the page origin when `apiBaseUrl` is empty. Never a `#/` URL. (F028: delegates to `appShareUrl`, same output.)
  */
 export function collectionShareUrl(config: Pick<WebGameConfig, "apiBaseUrl" | "routerMode" | "basename">, id: string): string {
-  const path = `/c/${encodeURIComponent(id)}`;
-  if (config.routerMode === "hash") {
-    const base = (config.apiBaseUrl ?? "").trim().replace(/\/+$/, "");
-    return `${base || currentOrigin()}${path}`;
-  }
-  const basename = (config.basename ?? "").replace(/\/+$/, "");
-  const prefix = basename && basename.startsWith("/") ? basename : "";
-  return `${currentOrigin()}${prefix}${path}`;
+  return appShareUrl(config, `/c/${encodeURIComponent(id)}`);
 }
 
 /** "1 game" / "{n} games". */

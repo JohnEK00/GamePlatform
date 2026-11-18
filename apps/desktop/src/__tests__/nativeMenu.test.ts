@@ -69,6 +69,7 @@ describe("native menu events", () => {
     for (const [id, route] of [
       ["upload", "/upload"],
       ["settings", "/settings"],
+      ["profile", "/me"],
       ["feed", "/feed"],
       ["notifications", "/notifications"],
       ["collections", "/collections"],
@@ -85,6 +86,17 @@ describe("native menu events", () => {
     window.location.hash = "#/play/abc";
     m.handler!({ payload: "collections" });
     expect(window.location.hash).toBe("#/collections");
+  });
+
+  it("profile (View → My Profile, F028) navigates to #/me from any route", async () => {
+    const seen = capture("webgame:player-screenshot", "webgame:player-controls", "webgame:studio-open-folder");
+    cleanup = installNativeIntegrations();
+    await flush();
+    window.location.hash = "#/u/sam/games";
+    m.handler!({ payload: "profile" });
+    expect(window.location.hash).toBe("#/me");
+    expect(seen).toEqual([]);
+    expect(pendingFlag()).toBeUndefined();
   });
 
   it("dispatches screenshot and controls events without navigating", async () => {

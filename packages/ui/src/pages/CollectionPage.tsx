@@ -11,11 +11,12 @@ import { CollectionFormDialog } from "../components/CollectionFormDialog";
 import { CollectionItemRow, collectionItemTitle, type MoveDirection } from "../components/CollectionItemRow";
 import { ConfirmDialog, EmptyState, ErrorState, Skeleton, Spinner, UserLink } from "../components/common";
 import { ReportButton } from "../components/Report";
+import { LINK_COPIED_MS } from "../share";
 import { errorMessage, formatDate, useAsync, useDocumentTitle } from "../util";
 import { NotFoundPage } from "./NotFoundPage";
 
-/** How long "Link copied" stays on the Copy link button. */
-export const LINK_COPIED_MS = 2000;
+/** How long "Link copied" stays on the Copy link button (F028: lives in share.ts; re-exported for compatibility). */
+export { LINK_COPIED_MS };
 export const COLLECTION_CONFLICT_MESSAGE = "This collection changed in another tab. Reloaded.";
 
 type FocusRequest = { get: () => HTMLElement | null | undefined; select?: boolean };

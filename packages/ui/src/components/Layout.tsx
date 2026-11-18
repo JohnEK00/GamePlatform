@@ -82,7 +82,7 @@ function UserMenu() {
       </button>
       {open && (
         <div className="pf-usermenu__menu" role="menu">
-          <Link role="menuitem" to={`/u/${encodeURIComponent(user.username)}`}>
+          <Link role="menuitem" to="/me">
             Profile
           </Link>
           <Link role="menuitem" to="/dashboard">

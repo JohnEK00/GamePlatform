@@ -1,5 +1,15 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
+import type { ProfileLink, UpdateMeRequest } from "../api/types";
+import { BannerSettings } from "../components/BannerSettings";
+import {
+  linkLabelErrors,
+  linkRowErrors,
+  linksForSave,
+  ProfileLinksEditor,
+  type ProfileLinkRow,
+  type ProfileLinksEditorHandle,
+} from "../components/ProfileLinksEditor";
 import { useApi, usePlatform } from "../context/config";
 import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
@@ -8,6 +18,10 @@ import { FileDrop } from "../components/FileDrop";
 import { NotificationSettingsSection } from "../components/NotificationSettings";
 import { errorMessage, useDocumentTitle } from "../util";
 import { IMAGE_ACCEPT } from "./UploadPage";
+
+function linkRowsOf(links: ProfileLink[] | undefined): ProfileLinkRow[] {
+  return Array.isArray(links) ? links.map((l) => ({ label: l?.label ?? "", url: l?.url ?? "" })) : [];
+}
 
 export function SettingsPage() {
   const api = useApi();
@@ -22,20 +36,58 @@ export function SettingsPage() {
   const [avatar, setAvatar] = useState<File | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [links, setLinks] = useState<ProfileLinkRow[]>(() => linkRowsOf(user?.links));
+  const [linkErrorsShown, setLinkErrorsShown] = useState(false);
+  const linksEditor = useRef<ProfileLinksEditorHandle>(null);
 
   useEffect(() => {
     setDisplayName(user?.displayName ?? "");
     setBio(user?.bio ?? "");
+    setLinks(linkRowsOf(user?.links));
+    setLinkErrorsShown(false);
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [linkFocus, setLinkFocus] = useState<{ index: number; field: "label" | "url"; n: number } | null>(null);
+  useEffect(() => {
+    if (!linkFocus) return;
+    if (linkFocus.field === "label") linksEditor.current?.focusLabel(linkFocus.index);
+    else linksEditor.current?.focusUrl(linkFocus.index);
+  }, [linkFocus]);
 
   if (!user) return null;
 
+  // F028: older servers omit `links`: no editor, and `links` is never sent.
+  const linksSupported = Array.isArray(user.links);
+  const linkErrors = linksSupported && linkErrorsShown ? linkRowErrors(links) : undefined;
+  const linkLabelErrs = linksSupported && linkErrorsShown ? linkLabelErrors(links) : undefined;
+
   const save = async (e: FormEvent) => {
     e.preventDefault();
+    const body: UpdateMeRequest = { displayName: displayName.trim(), bio };
+    if (linksSupported) {
+      const urlErrs = linkRowErrors(links);
+      const labelErrs = linkLabelErrors(links);
+      // The first invalid input in DOM order (a row's label comes before its URL).
+      const row = links.findIndex((_, i) => labelErrs[i] !== null || urlErrs[i] !== null);
+      if (row !== -1) {
+        setLinkErrorsShown(true);
+        setError(null);
+        // Focus after the errors render (aria-invalid / aria-describedby in place).
+        const field = labelErrs[row] !== null ? "label" : "url";
+        setLinkFocus((f) => ({ index: row, field, n: (f?.n ?? 0) + 1 }));
+        return;
+      }
+      body.links = linksForSave(links);
+    }
     setSaving(true);
     setError(null);
     try {
-      setUser(await api.updateMe({ displayName: displayName.trim(), bio }));
+      const saved = await api.updateMe(body);
+      setUser(saved);
+      if (linksSupported) {
+        setLinks(linkRowsOf(saved.links ?? body.links ?? []));
+        setLinkErrorsShown(false);
+      }
       toast.success("Profile saved");
     } catch (err) {
       setError(errorMessage(err));
@@ -83,6 +135,7 @@ export function SettingsPage() {
           </label>
           <textarea id="pf-bio" className="pf-input" rows={4} maxLength={1000} value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Tell players about yourself" />
         </div>
+        {linksSupported && <ProfileLinksEditor ref={linksEditor} value={links} onChange={setLinks} errors={linkErrors} labelErrors={linkLabelErrs} />}
         {error && <Alert>{error}</Alert>}
         <div className="pf-form__actions">
           <button type="submit" className="pf-btn pf-btn--primary" disabled={saving}>
@@ -107,6 +160,8 @@ export function SettingsPage() {
           </div>
         </div>
       </section>
+
+      <BannerSettings />
 
       <NotificationSettingsSection />
 

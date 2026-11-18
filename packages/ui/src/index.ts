@@ -373,13 +373,42 @@ export type { CollectionItemRowProps, MoveDirection } from "./components/Collect
 export { ProfileCollections, NewCollectionButton, PROFILE_COLLECTIONS_LIMIT } from "./components/ProfileCollections";
 export type { ProfileCollectionsProps } from "./components/ProfileCollections";
 
+// F028: public profiles 2
+export { appShareUrl, profileShareUrl } from "./share";
+export type { ShareConfig } from "./share";
+export {
+  PROFILE_LINKS_MAX,
+  PROFILE_LINK_LABEL_MAX,
+  PROFILE_LINK_URL_MAX,
+  PROFILE_LINK_URL_MESSAGE,
+  PROFILE_OVERVIEW_GAMES,
+  PROFILE_GAMES_PER_PAGE,
+  PROFILE_SCREENSHOTS_PREVIEW,
+  isSafeProfileUrl,
+  validateProfileLinkUrl,
+  validateProfileLinkLabel,
+  trimLinkLabel,
+  linkHost,
+  profilePath,
+} from "./profile";
+export type { ProfileSection } from "./profile";
+export { CopyLinkButton } from "./components/CopyLinkButton";
+export type { CopyLinkButtonProps } from "./components/CopyLinkButton";
+export { ProfileHeader, ProfileHeaderSkeleton, PROFILE_COMPACT_QUERY } from "./components/ProfileHeader";
+export type { ProfileHeaderProps } from "./components/ProfileHeader";
+export { ProfileLinksEditor, linkRowErrors, linkLabelErrors, linksForSave, isEmptyLinkRow } from "./components/ProfileLinksEditor";
+export type { ProfileLinksEditorProps, ProfileLinksEditorHandle, ProfileLinkRow } from "./components/ProfileLinksEditor";
+export { BannerSettings, BANNER_MAX_BYTES } from "./components/BannerSettings";
+
 // Pages
 export { HomePage } from "./pages/HomePage";
 export { GamePage } from "./pages/GamePage";
 export { UploadPage } from "./pages/UploadPage";
 export { EditGamePage } from "./pages/EditGamePage";
 export { DashboardPage } from "./pages/DashboardPage";
-export { ProfilePage } from "./pages/ProfilePage";
+export { ProfilePage, MyProfileRedirect, useProfileOutlet } from "./pages/ProfilePage";
+export type { ProfileOutletContext } from "./pages/ProfilePage";
+export { ProfileOverview, ProfileGamesTab, ProfileScreenshotsTab } from "./pages/ProfileSections";
 export { SettingsPage } from "./pages/SettingsPage";
 export { LoginPage, RegisterPage } from "./pages/AuthPages";
 export { DocsPage } from "./pages/DocsPage";
@@ -402,6 +431,7 @@ export type { FollowListMode } from "./pages/FollowListPage";
 export {
   formatCount,
   formatDate,
+  formatMonthYear,
   timeAgo,
   errorMessage,
   looksLikeZip,

@@ -1,4 +1,4 @@
-import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
+import { Navigate, useParams, useSearchParams } from "react-router-dom";
 import { isApiError } from "../api/client";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
@@ -8,49 +8,52 @@ import { EmptyState, ErrorState, Pagination } from "../components/common";
 import { NewCollectionButton } from "../components/ProfileCollections";
 import { useAsync, useDocumentTitle } from "../util";
 import { NotFoundPage } from "./NotFoundPage";
+import { useProfileOutlet } from "./ProfilePage";
 
 export const USER_COLLECTIONS_PER_PAGE = 24;
 
-/** `/u/:username/collections`: all of a user's collections visible to the viewer, paged by `?page=`. */
+/**
+ * `/u/:username/collections`: all of a user's collections visible to the viewer, paged by `?page=`. Since F028 it
+ * renders inside the profile shell (which shows whose collections these are).
+ */
 export function UserCollectionsPage() {
   const { username = "" } = useParams();
   const api = useApi();
   const { user: me } = useAuth();
+  const shell = useProfileOutlet();
   const [params, setParams] = useSearchParams();
   const page = Math.max(1, Number(params.get("page")) || 1);
-  const isMe = !!me && me.username.toLowerCase() === username.toLowerCase();
+  const isMe = shell ? shell.isMe : !!me && me.username.toLowerCase() === username.toLowerCase();
   const { data, loading, error, reload } = useAsync(
     () => api.listUserCollections(username, { page, perPage: USER_COLLECTIONS_PER_PAGE }),
-    [api, username, page, me?.id],
+    [api, username.toLowerCase(), page, me?.id],
   );
-  const ownerName = data?.items?.[0]?.owner ? data.items[0].owner.displayName || data.items[0].owner.username : isMe && me ? me.displayName || me.username : username;
-  useDocumentTitle(isMe ? "My collections" : `Collections by ${ownerName}`);
-  const profilePath = `/u/${encodeURIComponent(username)}`;
+  const shellUser = shell?.profile.user;
+  const ownerName = shellUser
+    ? shellUser.displayName || shellUser.username
+    : data?.items?.[0]?.owner
+      ? data.items[0].owner.displayName || data.items[0].owner.username
+      : isMe && me
+        ? me.displayName || me.username
+        : username;
+  useDocumentTitle(`Collections · ${ownerName}`);
 
   if (error && isCollectionsUnsupportedError(error))
     return (
-      <div className="pf-container pf-page">
+      <section className="pf-profile-section">
         <EmptyState icon="📚" title="Collections aren't available here yet">
           This server doesn't support collections.
         </EmptyState>
-      </div>
+      </section>
     );
   if (error && isApiError(error) && error.status === 404) return <NotFoundPage what="player" />;
 
   return (
-    <div className="pf-container pf-page">
+    <section className="pf-profile-section">
       <header className="pf-pagehead pf-pagehead--row">
         <div>
-          <h1>{isMe ? "My collections" : "Collections"}</h1>
-          <p className="pf-muted">
-            {isMe ? (
-              "Public collections appear on your profile and on game pages; private ones only here."
-            ) : (
-              <>
-                Curated by <Link to={profilePath}>{ownerName}</Link>
-              </>
-            )}
-          </p>
+          <h2 className="pf-section-title">Collections</h2>
+          {isMe && <p className="pf-muted">Public collections appear on your profile and on game pages; private ones only here.</p>}
         </div>
         {isMe && data && data.items.length > 0 && <NewCollectionButton className="pf-btn pf-btn--primary" />}
       </header>
@@ -80,7 +83,7 @@ export function UserCollectionsPage() {
           }}
         />
       )}
-    </div>
+    </section>
   );
 }
 

@@ -6,6 +6,8 @@ import type { Page, User, UserProfileResponse, UserScreenshot } from "../api/typ
 import { useAuth } from "../context/auth";
 import { PROFILE_SCREENSHOTS_PER_PAGE, ProfileScreenshots } from "../components/ProfileScreenshots";
 import { ProfilePage } from "../pages/ProfilePage";
+import { ProfileOverview } from "../pages/ProfileSections";
+import { game } from "./collectionFixtures";
 import { WebGameProviders } from "../WebGameApp";
 
 const ana: User = { id: "u1", username: "ana", displayName: "Ana", avatarUrl: null, bio: "", createdAt: "2026-01-01T00:00:00Z", role: "user" };
@@ -259,7 +261,8 @@ describe("ProfilePage placement (F015 § 0.10)", () => {
     vi.spyOn(client, "listMyFavorites").mockResolvedValue({ items: [], total: 0, page: 1, perPage: 100 });
     vi.spyOn(client, "unreadNotificationCount").mockResolvedValue({ unread: 0, latestAt: null, pollAfterSecs: 60 });
     vi.spyOn(client, "listUserAchievements").mockResolvedValue([]);
-    const profile: UserProfileResponse = { user: ana, games: [], gamesTotal: 0, followers: 0, following: 0, isFollowing: false };
+    // F028: another user's Overview omits an empty Games shelf, so Ana has one game here.
+    const profile: UserProfileResponse = { user: ana, games: [game("g1", "Kiln Clash", { owner: ana })], gamesTotal: 1, followers: 0, following: 0, isFollowing: false };
     vi.spyOn(client, "getUser").mockResolvedValue(profile);
     const coll = vi.spyOn(client, "listUserCollections").mockResolvedValue({ items: [], total: 0, page: 1, perPage: 6 });
     const shots = vi.spyOn(client, "listUserScreenshots").mockResolvedValue(page([shot(1)]));
@@ -267,13 +270,16 @@ describe("ProfilePage placement (F015 § 0.10)", () => {
       <WebGameProviders config={{ apiBaseUrl: "http://api.test", routerMode: "browser" }} client={client}>
         <MemoryRouter initialEntries={["/u/ana"]}>
           <Routes>
-            <Route path="/u/:username" element={<ProfilePage />} />
+            <Route path="/u/:username" element={<ProfilePage />}>
+              <Route index element={<ProfileOverview />} />
+            </Route>
           </Routes>
         </MemoryRouter>
       </WebGameProviders>,
     );
     await screen.findByRole("heading", { name: "Ana" });
-    await waitFor(() => expect(shots).toHaveBeenCalledWith("ana", { page: 1, perPage: 12 }));
+    // F028: the Overview shows a preview shelf of 4.
+    await waitFor(() => expect(shots).toHaveBeenCalledWith("ana", { page: 1, perPage: 4 }));
     await waitFor(() => expect(coll).toHaveBeenCalled());
     await screen.findByRole("button", { name: "Screenshot of Game 1" });
     const titles = Array.from(document.querySelectorAll("h2.pf-section-title")).map((h) => h.textContent);
@@ -299,7 +305,9 @@ describe("ProfilePage placement (F015 § 0.10)", () => {
       <WebGameProviders config={{ apiBaseUrl: "http://api.test", routerMode: "browser" }} client={client}>
         <MemoryRouter initialEntries={["/u/ana"]}>
           <Routes>
-            <Route path="/u/:username" element={<ProfilePage />} />
+            <Route path="/u/:username" element={<ProfilePage />}>
+              <Route index element={<ProfileOverview />} />
+            </Route>
           </Routes>
         </MemoryRouter>
       </WebGameProviders>,

@@ -14,7 +14,8 @@ import { GamePage } from "./pages/GamePage";
 import { UploadPage } from "./pages/UploadPage";
 import { EditGamePage } from "./pages/EditGamePage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { ProfilePage } from "./pages/ProfilePage";
+import { MyProfileRedirect, ProfilePage } from "./pages/ProfilePage";
+import { ProfileGamesTab, ProfileOverview, ProfileScreenshotsTab } from "./pages/ProfileSections";
 import { SettingsPage } from "./pages/SettingsPage";
 import { LoginPage, RegisterPage } from "./pages/AuthPages";
 import { DocsPage } from "./pages/DocsPage";
@@ -140,8 +141,20 @@ export function WebGameRoutes({ extraRoutes }: { extraRoutes?: ReactNode }) {
           }
         />
         <Route path="c/:id" element={<CollectionPage />} />
-        <Route path="u/:username" element={<ProfilePage />} />
-        <Route path="u/:username/collections" element={<UserCollectionsPage />} />
+        <Route path="u/:username" element={<ProfilePage />}>
+          <Route index element={<ProfileOverview />} />
+          <Route path="games" element={<ProfileGamesTab />} />
+          <Route path="screenshots" element={<ProfileScreenshotsTab />} />
+          <Route path="collections" element={<UserCollectionsPage />} />
+        </Route>
+        <Route
+          path="me"
+          element={
+            <RequireAuth>
+              <MyProfileRedirect />
+            </RequireAuth>
+          }
+        />
         <Route path="u/:username/followers" element={<FollowListPage mode="followers" />} />
         <Route path="u/:username/following" element={<FollowListPage mode="following" />} />
         <Route

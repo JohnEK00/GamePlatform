@@ -1,39 +1,119 @@
-import { useEffect } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { Navigate, NavLink, Outlet, useLocation, useMatch, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { isApiError } from "../api/client";
+import type { UserProfileResponse } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
-import { Avatar, EmptyState, ErrorState, Pagination, Skeleton } from "../components/common";
-import { FollowButton, useFollows } from "../components/Follow";
-import { GameGrid } from "../components/GameCard";
-import { RecentAchievements } from "../components/Achievements";
-import { ProfileCollections } from "../components/ProfileCollections";
-import { ProfileScreenshots } from "../components/ProfileScreenshots";
-import { formatCount, formatDate, useAsync, useDocumentTitle } from "../util";
+import { ErrorState } from "../components/common";
+import { useCollectionsSupported } from "../components/collectionsSupport";
+import { ProfileHeader, ProfileHeaderSkeleton } from "../components/ProfileHeader";
+import { profilePath } from "../profile";
+import { formatCount, useAsync } from "../util";
 import { NotFoundPage } from "./NotFoundPage";
 
-const GAMES_PER_PAGE = 24;
+/** What the profile shell passes to its sections (`useProfileOutlet()`). */
+export type ProfileOutletContext = {
+  profile: UserProfileResponse;
+  /** The viewer is this user. */
+  isMe: boolean;
+  /** Refetches the profile (header and counts). */
+  reload: () => void;
+};
 
+/** The profile shell's context, or null when rendered outside the shell (e.g. a standalone test route). */
+export function useProfileOutlet(): ProfileOutletContext | null {
+  const ctx = useOutletContext<ProfileOutletContext | undefined>();
+  return ctx && typeof ctx === "object" && "profile" in ctx ? ctx : null;
+}
+
+/** `?page=n` on the bare profile URL (the pre-F028 games pager): n ≥ 2, else null. */
+function legacyPage(search: string): number | null {
+  const raw = new URLSearchParams(search).get("page");
+  if (raw === null || !/^\d+$/.test(raw.trim())) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 2 ? n : null;
+}
+
+function Count({ n }: { n: number | undefined }) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return null;
+  return (
+    <>
+      {" "}
+      <span className="pf-profile-tabs__count">{formatCount(n)}</span>
+    </>
+  );
+}
+
+const tabClass = ({ isActive }: { isActive: boolean }) => `pf-tab pf-profile-tabs__link${isActive ? " is-active" : ""}`;
+
+/** F028 section strip: links (not ARIA tabs), one per section URL; React Router marks the current one. */
+function ProfileTabs({ profile }: { profile: UserProfileResponse }) {
+  const collections = useCollectionsSupported();
+  const location = useLocation();
+  const ref = useRef<HTMLElement>(null);
+  const base = profilePath(profile.user.username);
+  const stats = profile.stats;
+
+  // Keep the active link visible when the strip scrolls horizontally (narrow screens).
+  useEffect(() => {
+    const nav = ref.current;
+    if (!nav || nav.scrollWidth <= nav.clientWidth) return;
+    const active = nav.querySelector<HTMLElement>('[aria-current="page"]');
+    if (active && typeof active.scrollIntoView === "function") active.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [location.pathname]);
+
+  return (
+    <nav className="pf-profile-tabs" aria-label="Profile sections" ref={ref}>
+      <NavLink to={base} end className={tabClass}>
+        Overview
+      </NavLink>
+      <NavLink to={`${base}/games`} className={tabClass}>
+        Games
+        <Count n={profile.gamesTotal} />
+      </NavLink>
+      <NavLink to={`${base}/screenshots`} className={tabClass}>
+        Screenshots
+        <Count n={stats?.screenshots} />
+      </NavLink>
+      {collections && (
+        <NavLink to={`${base}/collections`} className={tabClass}>
+          Collections
+          <Count n={stats?.collections} />
+        </NavLink>
+      )}
+    </nav>
+  );
+}
+
+/**
+ * F028 profile shell (`/u/:username` layout route): loads the profile once per (username, viewer), renders the header
+ * and the section strip, and the active section through `<Outlet context={{ profile, isMe, reload }} />`. Switching
+ * sections never refetches or remounts the header. Also redirects the legacy `?page=n` URL to the Games section
+ * and replaces a non-canonical username case in the URL.
+ */
 export function ProfilePage() {
   const { username = "" } = useParams();
   const api = useApi();
   const { user: me } = useAuth();
-  const follows = useFollows();
-  const [params, setParams] = useSearchParams();
-  const page = Math.max(1, Number(params.get("page")) || 1);
-  const { data, loading, error, reload } = useAsync(
-    () => api.getUser(username, page > 1 ? { page, perPage: GAMES_PER_PAGE } : {}),
-    [api, username, page, me?.id],
-  );
-  useDocumentTitle(data ? data.user.displayName || data.user.username : undefined);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const atIndex = useMatch("/u/:username");
+  // Lookups are case-insensitive, so the canonical-case redirect doesn't refetch.
+  const key = username.toLowerCase();
+  const { data, loading, error, reload } = useAsync(() => api.getUser(username), [api, key, me?.id]);
+  const current = !!data && data.user.username.toLowerCase() === key;
 
-  // Fresh profile data is the server truth for the follow cache (keeps other buttons for this user in sync).
-  const seed = follows?.seed;
+  // Canonical username: same section and search, exact case from the server.
   useEffect(() => {
-    if (data && seed && typeof data.isFollowing === "boolean") {
-      seed(data.user.username, { following: data.isFollowing, followers: data.followers });
-    }
-  }, [data, seed]);
+    if (!data || !current || username === data.user.username) return;
+    const parts = location.pathname.split("/");
+    // ["", "u", "{username}", ...section]
+    const suffix = parts.length > 3 ? `/${parts.slice(3).join("/")}` : "";
+    navigate({ pathname: `${profilePath(data.user.username)}${suffix}`, search: location.search, hash: location.hash }, { replace: true });
+  }, [data, current, username, location.pathname, location.search, location.hash, navigate]);
+
+  const legacy = atIndex ? legacyPage(location.search) : null;
+  if (legacy !== null) return <Navigate to={`${profilePath(username, "games")}?page=${legacy}`} replace />;
 
   if (error && isApiError(error) && error.status === 404) return <NotFoundPage what="player" />;
   if (error)
@@ -43,115 +123,28 @@ export function ProfilePage() {
       </div>
     );
 
-  const isMe = !!data && !!me && me.id === data.user.id;
-  const gamesTotal = data ? (typeof data.gamesTotal === "number" ? data.gamesTotal : data.games.length) : 0;
-  // The plays sum is only meaningful when every game is on this page.
-  const allGamesShown = !!data && page === 1 && gamesTotal <= data.games.length;
-  const plays = data?.games.reduce((s, g) => s + g.plays, 0) ?? 0;
-  const followState = data
-    ? (follows?.get(data.user.username, { following: !!data.isFollowing, followers: data.followers }) ?? { following: !!data.isFollowing, followers: data.followers })
-    : null;
-  const followers = followState?.followers ?? data?.followers ?? 0;
-  const profilePath = data ? `/u/${encodeURIComponent(data.user.username)}` : "";
+  // A refetch of the same user (reload, viewer change) keeps the current content; a different user shows the skeleton.
+  if (!data || !current || (loading && !current))
+    return (
+      <div className="pf-container pf-page pf-profile-page" aria-busy="true">
+        <ProfileHeaderSkeleton />
+      </div>
+    );
 
+  const isMe = !!me && me.id === data.user.id;
+  const ctx: ProfileOutletContext = { profile: data, isMe, reload };
   return (
-    <div className="pf-container pf-page">
-      <section className="pf-profile">
-        {loading || !data ? (
-          <>
-            <Skeleton width={96} height={96} radius={48} />
-            <div className="pf-profile__info">
-              <Skeleton width={200} height={28} />
-              <Skeleton width={120} height={16} />
-              <Skeleton width="80%" height={16} />
-            </div>
-          </>
-        ) : (
-          <>
-            <Avatar user={data.user} size={96} />
-            <div className="pf-profile__info">
-              <h1>{data.user.displayName || data.user.username}</h1>
-              <p className="pf-muted">
-                @{data.user.username} · joined {formatDate(data.user.createdAt)}
-              </p>
-              {data.user.bio ? <p className="pf-profile__bio">{data.user.bio}</p> : isMe ? <p className="pf-muted">You haven't written a bio yet.</p> : null}
-              <div className="pf-profile__stats">
-                <span>
-                  <strong>{formatCount(gamesTotal)}</strong> {gamesTotal === 1 ? "game" : "games"}
-                </span>
-                {allGamesShown && (
-                  <span>
-                    <strong>{formatCount(plays)}</strong> plays
-                  </span>
-                )}
-                {typeof data.followers === "number" && (
-                  <Link to={`${profilePath}/followers`} className="pf-profile__stat-link">
-                    <strong>{formatCount(followers)}</strong> {followers === 1 ? "follower" : "followers"}
-                  </Link>
-                )}
-                {typeof data.following === "number" && (
-                  <Link to={`${profilePath}/following`} className="pf-profile__stat-link">
-                    <strong>{formatCount(data.following)}</strong> following
-                  </Link>
-                )}
-              </div>
-            </div>
-            {isMe ? (
-              <Link to="/settings" className="pf-btn pf-btn--ghost pf-profile__edit">
-                Edit profile
-              </Link>
-            ) : (
-              <div className="pf-profile__edit">
-                <FollowButton
-                  username={data.user.username}
-                  displayName={data.user.displayName}
-                  isFollowing={!!data.isFollowing}
-                  followers={data.followers}
-                />
-              </div>
-            )}
-          </>
-        )}
-      </section>
-
-      {data && <RecentAchievements username={data.user.username} />}
-
-      <h2 className="pf-section-title">Games</h2>
-      {data && data.games.length === 0 ? (
-        <EmptyState
-          icon="🎮"
-          title={isMe ? "No games yet" : "Nothing here yet"}
-          action={
-            isMe && (
-              <Link to="/upload" className="pf-btn pf-btn--primary">
-                Upload a game
-              </Link>
-            )
-          }
-        >
-          {isMe ? "Your uploaded games will appear here." : "This player hasn't published any games."}
-        </EmptyState>
-      ) : (
-        <GameGrid games={data?.games} loading={loading || !data} skeletons={4} showStatus={isMe} />
-      )}
-      {data && gamesTotal > data.games.length && (
-        <Pagination
-          page={page}
-          total={gamesTotal}
-          perPage={GAMES_PER_PAGE}
-          onPage={(p) => {
-            const next = new URLSearchParams(params);
-            if (p === 1) next.delete("page");
-            else next.set("page", String(p));
-            setParams(next);
-          }}
-        />
-      )}
-
-      {/* Keyed per user (fresh state on navigation); prefixed so it can't clash with ProfileCollections' key. */}
-      {data && <ProfileScreenshots key={`shots:${data.user.username}`} username={data.user.username} isMe={isMe} />}
-
-      {data && <ProfileCollections key={data.user.username} username={data.user.username} isMe={isMe} />}
+    <div className="pf-container pf-page pf-profile-page">
+      <ProfileHeader profile={data} isMe={isMe} />
+      <ProfileTabs profile={data} />
+      <Outlet context={ctx} />
     </div>
   );
+}
+
+/** `/me` (inside RequireAuth): the signed-in user's profile. */
+export function MyProfileRedirect() {
+  const { user } = useAuth();
+  if (!user) return null;
+  return <Navigate to={profilePath(user.username)} replace />;
 }

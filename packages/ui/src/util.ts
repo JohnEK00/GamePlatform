@@ -13,6 +13,13 @@ export function formatDate(iso: string): string {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+/** F028: "March 2024" (locale month name + year); "" for an invalid date. */
+export function formatMonthYear(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "long" });
+}
+
 export function timeAgo(iso: string): string {
   const d = new Date(iso).getTime();
   if (Number.isNaN(d)) return "";

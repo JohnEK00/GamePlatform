@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError } from "../api/client";
 import type { CollectionSummary, Page, User, UserProfileResponse } from "../api/types";
 import { ProfilePage } from "../pages/ProfilePage";
+import { ProfileOverview } from "../pages/ProfileSections";
 import { WebGameProviders, WebGameRoutes } from "../WebGameApp";
 import { anaUser, collection, samUser, summary } from "./collectionFixtures";
 
@@ -39,7 +40,10 @@ async function setup(viewed: User, list: Page<CollectionSummary> | Error, me: Us
     <WebGameProviders config={{ apiBaseUrl: "http://api.test", routerMode: "browser" }} client={client}>
       <MemoryRouter initialEntries={[`/u/${viewed.username}`]}>
         <Routes>
-          <Route path="/u/:username" element={<ProfilePage />} />
+          {/* F028: the profile is a shell; the collections shelf lives in the Overview section. */}
+          <Route path="/u/:username" element={<ProfilePage />}>
+            <Route index element={<ProfileOverview />} />
+          </Route>
           <Route path="*" element={<LocationProbe />} />
         </Routes>
       </MemoryRouter>
@@ -137,6 +141,8 @@ describe("Collections routes", () => {
   it("/collections redirects to the signed-in user's list, which the user menu links to", async () => {
     const client = makeClient(anaUser);
     const spy = vi.spyOn(client, "listUserCollections").mockResolvedValue({ ...page([summary("c1", "Cozy games")]), perPage: 24 });
+    // F028: /u/{me}/collections renders inside the profile shell, which loads the profile.
+    vi.spyOn(client, "getUser").mockResolvedValue(profile(anaUser));
     render(
       <WebGameProviders config={{ apiBaseUrl: "http://api.test", routerMode: "browser" }} client={client}>
         <MemoryRouter initialEntries={["/collections"]}>
@@ -144,7 +150,9 @@ describe("Collections routes", () => {
         </MemoryRouter>
       </WebGameProviders>,
     );
-    await screen.findByRole("heading", { level: 1, name: "My collections" });
+    // F028: the section heading is an h2 "Collections" under the profile's h1.
+    await screen.findByRole("heading", { level: 2, name: "Collections" });
+    expect(screen.getByRole("heading", { level: 1, name: anaUser.displayName || anaUser.username })).toBeTruthy();
     // The heading can be found (MutationObserver) before the page's passive fetch effect has run: wait for the call.
     await waitFor(() => expect(spy).toHaveBeenCalledWith("ana", { page: 1, perPage: 24 }));
     expect((await screen.findByRole("link", { name: "Cozy games" })).getAttribute("href")).toBe("/c/c1");

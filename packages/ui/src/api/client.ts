@@ -326,6 +326,16 @@ export class ApiClient {
     form.append("avatar", avatar, fileName(avatar, "avatar"));
     return this.upload("PUT", "/api/users/me/avatar", form, onProgress);
   }
+  /** F028: PUT /api/users/me/banner (multipart field `banner`, PNG/JPEG/WebP ≤ 2 MB; cropped to 3:1 server-side). */
+  uploadBanner(banner: Blob, onProgress?: UploadProgress): Promise<User> {
+    const form = new FormData();
+    form.append("banner", banner, fileName(banner, "banner"));
+    return this.upload("PUT", "/api/users/me/banner", form, onProgress);
+  }
+  /** F028: DELETE /api/users/me/banner (idempotent). */
+  deleteBanner(): Promise<User> {
+    return this.request("/api/users/me/banner", { method: "DELETE" });
+  }
 
   // ---------- Games ----------
   listGames(query: ListGamesQuery = {}, signal?: AbortSignal): Promise<Page<GameSummary>> {

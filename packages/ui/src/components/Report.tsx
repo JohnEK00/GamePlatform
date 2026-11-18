@@ -69,7 +69,15 @@ export function ReportDialog({ open, targetType, targetId, targetLabel, onClose 
   };
 
   const what =
-    targetType === "game" ? "game" : targetType === "screenshot" ? "screenshot" : targetType === "collection" ? "collection" : "comment";
+    targetType === "game"
+      ? "game"
+      : targetType === "screenshot"
+        ? "screenshot"
+        : targetType === "collection"
+          ? "collection"
+          : targetType === "user"
+            ? "profile"
+            : "comment";
   return (
     <div className="pf-modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <form className="pf-modal pf-report" role="dialog" aria-modal="true" aria-labelledby={`${uid}-title`} ref={ref} onSubmit={submit}>

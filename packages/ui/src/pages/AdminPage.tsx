@@ -47,13 +47,26 @@ const ACTION_COPY: Record<ReportAction, { label: string; title: (r: Report) => s
             : "The comment is removed permanently, together with any replies to it.",
     danger: true,
   },
+  clearProfile: {
+    label: "Clear profile",
+    title: (r) => `Clear ${r.targetPreview}'s profile?`,
+    body: () => "Their display name, bio, links, avatar and banner are reset. Their games, comments and other content stay up.",
+    danger: true,
+  },
 };
 
-const KNOWN_TARGET_TYPES: ReadonlySet<string> = new Set(["game", "comment", "screenshot", "collection"]);
+const KNOWN_TARGET_TYPES: ReadonlySet<string> = new Set(["game", "comment", "screenshot", "collection", "user"]);
+
+/** "@mia" → "mia" (a user report's preview); null when it isn't a username preview. */
+function previewUsername(preview: string): string | null {
+  const m = /^@([^\s/?#]+)$/.exec((preview ?? "").trim());
+  return m ? m[1] : null;
+}
 
 /** Moderation actions per target type; unknown (newer) types get Dismiss only. */
 export function reportActions(targetType: string): ReportAction[] {
   if (targetType === "game") return ["dismiss", "unpublish", "delete"];
+  if (targetType === "user") return ["dismiss", "clearProfile"];
   if (KNOWN_TARGET_TYPES.has(targetType)) return ["dismiss", "delete"];
   return ["dismiss"];
 }
@@ -118,6 +131,15 @@ function ReportRow({ report, onResolved }: { report: Report; onResolved: (r: Rep
             <Link to={`/c/${encodeURIComponent(report.targetId)}`} className="pf-small">
               View collection →
             </Link>
+          </>
+        ) : report.targetType === "user" ? (
+          <>
+            <strong className="pf-report-row__title pf-report-row__title--text">{report.targetPreview}</strong>{" "}
+            {previewUsername(report.targetPreview) && (
+              <Link to={`/u/${encodeURIComponent(previewUsername(report.targetPreview)!)}`} className="pf-small">
+                View profile →
+              </Link>
+            )}
           </>
         ) : report.targetType === "screenshot" ? (
           <div className="pf-report-row__shot">
@@ -217,7 +239,7 @@ export function AdminPage() {
       <header className="pf-pagehead pf-pagehead--row">
         <div>
           <h1>Moderation</h1>
-          <p className="pf-muted">Review reported games, comments, screenshots and collections.</p>
+          <p className="pf-muted">Review reported games, comments, screenshots, collections and profiles.</p>
         </div>
       </header>
       <Tabs

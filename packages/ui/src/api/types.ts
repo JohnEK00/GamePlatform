@@ -15,6 +15,33 @@ export type User = UserRef & {
   createdAt: string;
   /** v2. Admins see the moderation queue. */
   role: UserRole;
+  /**
+   * F028: "/media/banners/{userId}.jpg?v={n}" (resolve against the API base); null = no banner.
+   * Older servers omit it: treat as unsupported (hide banner settings) and as no banner.
+   */
+  bannerUrl?: string | null;
+  /** F028: 0–3 links in the owner's order. Older servers omit it: hide the links editor, show no links. */
+  links?: ProfileLink[];
+};
+
+/** F028: one profile link. */
+export type ProfileLink = {
+  /** Trimmed, 0–30 chars, no control chars; "" = clients show the URL's host (without "www."). */
+  label: string;
+  /** Absolute http(s) URL, ≤ 200 chars; the server lowercases only the scheme. */
+  url: string;
+};
+
+/** F028: profile totals, computed for the viewer (same visibility as the lists they summarise). */
+export type ProfileStats = {
+  /** Sum of GameSummary.plays over the games counted in gamesTotal. */
+  plays: number;
+  /** Unlocked achievements on games published or owned by the viewer. */
+  achievements: number;
+  /** == total of GET /api/users/{u}/screenshots for the same viewer. */
+  screenshots: number;
+  /** == total of GET /api/users/{u}/collections for the same viewer. */
+  collections: number;
 };
 
 export type AuthResponse = { token: string; user: User };
@@ -316,8 +343,15 @@ export type UserProfileResponse = {
   following: number;
   /** F002: the viewer follows this user; false when anonymous or viewing yourself. */
   isFollowing: boolean;
+  /** F028: totals for the viewer. Older servers omit it (hide plays/achievements and section counts). */
+  stats?: ProfileStats;
 };
-export type UpdateMeRequest = { displayName?: string; bio?: string };
+export type UpdateMeRequest = {
+  displayName?: string;
+  bio?: string;
+  /** F028: omitted or null = unchanged; [] = clear; max 3. */
+  links?: ProfileLink[] | null;
+};
 
 export type GameSort = "new" | "popular" | "top" | "favorites" | "trending";
 
@@ -432,9 +466,20 @@ export type GameStats = {
 
 export type ReportReason = "spam" | "offensive" | "broken" | "copyright" | "other";
 /** F005: "screenshot" added; F008: "collection" added. Render unknown types with Dismiss only. */
-export type ReportTargetType = "game" | "comment" | "screenshot" | "collection";
+export type ReportTargetType =
+  | "game"
+  | "comment"
+  | "screenshot"
+  | "collection"
+  /** F028: targetId = the user's id; targetPreview = "@{username}"; targetGameId = null. */
+  | "user";
 export type ReportStatus = "open" | "resolved";
-export type ReportAction = "dismiss" | "unpublish" | "delete";
+export type ReportAction =
+  | "dismiss"
+  | "unpublish"
+  | "delete"
+  /** F028: user reports only. Resets display name, bio, links, avatar and banner. */
+  | "clearProfile";
 
 export type Report = {
   id: string;

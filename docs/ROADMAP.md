@@ -66,7 +66,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F015 | Screenshots in the feed and on profiles | S | shipped |
 | F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | shipped |
 | F024 | "Screenshot of your game" notifications for creators | S | shipped |
-| F028 | Public profiles 2: banner, links, profile sections and sharing | M | specced |
+| F028 | Public profiles 2: banner, links, profile sections and sharing | M | shipped |
 | F029 | Featured games on profiles | S | proposed |
 | F030 | User posts: short text posts on profiles and in followers' feeds | M | proposed |
 | F031 | Post replies and hearts, with notifications | M | proposed |
@@ -324,7 +324,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: engine (`osk.ts` pages, `ui.ts`), frontend (docs table). No backend or desktop changes.
 - **Priority (2026-11-17)**: engine-only; moved to the bottom under the platform-first direction.
 
-### F028: Public profiles 2: banner, links, profile sections and sharing (M, specced → [spec](features/F028-public-profiles-2.md))
+### F028: Public profiles 2: banner, links, profile sections and sharing (M, shipped → [spec](features/F028-public-profiles-2.md))
 - **Pitch**:
   - A 3:1 profile banner (re-encoded server-side, `PUT`/`DELETE /api/users/me/banner`) and up to 3 validated links.
   - A redesigned header with plays and achievements totals.
