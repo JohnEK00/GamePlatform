@@ -29,6 +29,12 @@ pub const THUMB_MAX: u32 = 480;
 pub const DECODE_BUDGET: u64 = 80 * 1024 * 1024;
 pub const FULL_JPEG_QUALITY: u8 = 90;
 pub const THUMB_JPEG_QUALITY: u8 = 80;
+/// F028 banners: minimum crop, output size (when wider) and JPEG quality.
+pub const BANNER_MIN_W: u32 = 600;
+pub const BANNER_MIN_H: u32 = 200;
+pub const BANNER_W: u32 = 1500;
+pub const BANNER_H: u32 = 500;
+pub const BANNER_JPEG_QUALITY: u8 = 85;
 
 /// A re-encoded screenshot, ready to be written.
 #[derive(Debug)]
@@ -194,9 +200,10 @@ fn flatten(img: DynamicImage) -> RgbImage {
     }
 }
 
-/// Validate dimensions and the memory budget from the header, decode (with limits), flatten
-/// alpha on black and re-encode. CPU-bound: run inside `spawn_blocking`.
-pub fn process_screenshot(bytes: &[u8]) -> Result<Processed, AppError> {
+/// Steps 1-3 shared by the screenshot and banner pipelines: validate dimensions and the memory
+/// budget from the header, decode (with limits) and flatten alpha on black. Returns the RGB8
+/// image and the input format. CPU-bound.
+fn decode_rgb(bytes: &[u8]) -> Result<(RgbImage, ImageFormat), AppError> {
     // 1. Header only: format, dimensions, color type, before any pixel decoding.
     let mut r = reader(bytes)?;
     let format = match r.format() {
@@ -230,7 +237,14 @@ pub fn process_screenshot(bytes: &[u8]) -> Result<Processed, AppError> {
     }
 
     // 3. RGB8 with alpha composited on black (reusing the decoded buffer where possible).
-    let rgb = flatten(img);
+    Ok((flatten(img), format))
+}
+
+/// Validate dimensions and the memory budget from the header, decode (with limits), flatten
+/// alpha on black and re-encode. CPU-bound: run inside `spawn_blocking`.
+pub fn process_screenshot(bytes: &[u8]) -> Result<Processed, AppError> {
+    let (rgb, format) = decode_rgb(bytes)?;
+    let (w, h) = rgb.dimensions();
 
     // 4. Encode. The encoders write pixels only: no EXIF, XMP, text chunks or ICC. The
     // thumbnail uses the integer area sampler, which allocates only the output.
@@ -258,6 +272,43 @@ pub fn process_screenshot(bytes: &[u8]) -> Result<Processed, AppError> {
         width: w,
         height: h,
     })
+}
+
+/// F028: the centred 3:1 crop `(x, y, cw, ch)` of a `w`×`h` image (integer division).
+pub fn banner_crop(w: u32, h: u32) -> (u32, u32, u32, u32) {
+    if u64::from(w) >= 3 * u64::from(h) {
+        let cw = 3 * h;
+        ((w - cw) / 2, 0, cw, h)
+    } else {
+        let ch = w / 3;
+        (0, (h - ch) / 2, w, ch)
+    }
+}
+
+/// F028: decode (F005 rules), centre-crop to 3:1, require at least 600×200, scale down to
+/// 1500×500 when wider, and encode as a metadata-free JPEG. CPU-bound: run inside
+/// `spawn_blocking`.
+pub fn process_banner(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
+    let (rgb, _) = decode_rgb(bytes)?;
+    let (x, y, cw, ch) = banner_crop(rgb.width(), rgb.height());
+    if cw < BANNER_MIN_W || ch < BANNER_MIN_H {
+        return Err(AppError::validation(format!(
+            "banner must be at least {BANNER_MIN_W}×{BANNER_MIN_H} pixels after cropping to 3:1"
+        )));
+    }
+    let cropped = image::imageops::crop_imm(&rgb, x, y, cw, ch).to_image();
+    drop(rgb);
+    let out = if cw > BANNER_W {
+        image::imageops::resize(
+            &cropped,
+            BANNER_W,
+            BANNER_H,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        cropped
+    };
+    encode_jpeg(&out, BANNER_JPEG_QUALITY)
 }
 
 fn encode_jpeg(img: &RgbImage, quality: u8) -> Result<Vec<u8>, AppError> {
@@ -364,6 +415,45 @@ mod tests {
         assert_eq!(id_of_file("abc_t.jpg"), Some("abc"));
         assert_eq!(id_of_file("abc.webp"), None);
         assert_eq!(id_of_file(".png"), None);
+    }
+
+    #[test]
+    fn f028_banner_crop() {
+        assert_eq!(banner_crop(3000, 500), (750, 0, 1500, 500));
+        assert_eq!(banner_crop(900, 900), (0, 300, 900, 300));
+        assert_eq!(banner_crop(600, 200), (0, 0, 600, 200));
+        assert_eq!(banner_crop(1000, 301), (48, 0, 903, 301));
+    }
+
+    fn png_of(w: u32, h: u32) -> Vec<u8> {
+        let img = RgbImage::from_fn(w, h, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 90]));
+        let mut out = Vec::new();
+        DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn f028_process_banner_sizes() {
+        let dims = |w, h| {
+            let jpeg = process_banner(&png_of(w, h)).unwrap();
+            assert!(jpeg.starts_with(&[0xFF, 0xD8, 0xFF]));
+            let img = image::load_from_memory_with_format(&jpeg, ImageFormat::Jpeg).unwrap();
+            (img.width(), img.height())
+        };
+        assert_eq!(dims(1800, 600), (1500, 500));
+        assert_eq!(dims(700, 700), (700, 233));
+        assert_eq!(dims(600, 200), (600, 200));
+        let err = process_banner(&png_of(500, 500)).unwrap_err();
+        assert_eq!(
+            message(err),
+            "banner must be at least 600×200 pixels after cropping to 3:1"
+        );
+        let err = process_banner(&png_of(50, 50)).unwrap_err();
+        assert_eq!(message(err), message(dims_error()));
+        let err = process_banner(b"not an image").unwrap_err();
+        assert_eq!(message(err), message(decode_error()));
     }
 
     const MIB: u64 = 1024 * 1024;

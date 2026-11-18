@@ -841,6 +841,12 @@ pub struct UserCollectionsQuery {
     pub per_page: Option<String>,
 }
 
+/// The visibility filter of [`list_user_collections`] (alias `c`; binds `?1` owner id, `?2`
+/// viewer id or NULL, `?3` is_self). F028: the profile `stats.collections` count reuses it.
+pub(crate) const USER_COLLECTIONS_FILTER: &str = "c.owner_id = ?1 AND (?3 = 1 OR (c.visibility = 'public' AND EXISTS ( \
+     SELECT 1 FROM collection_games cg JOIN games g ON g.id = cg.game_id \
+     WHERE cg.collection_id = c.id AND (g.published = 1 OR g.owner_id = ?2))))";
+
 /// `GET /api/users/{username}/collections`: the user themself sees all their collections;
 /// everyone else sees public ones with at least one game visible to them.
 pub async fn list_user_collections(
@@ -860,10 +866,7 @@ pub async fn list_user_collections(
         .await?;
     let owner = owner.ok_or_else(|| AppError::not_found("User"))?;
     let is_self = viewer.id() == Some(owner.as_str());
-    // ?1 owner, ?2 viewer, ?3 is_self.
-    let filter = "c.owner_id = ?1 AND (?3 = 1 OR (c.visibility = 'public' AND EXISTS ( \
-         SELECT 1 FROM collection_games cg JOIN games g ON g.id = cg.game_id \
-         WHERE cg.collection_id = c.id AND (g.published = 1 OR g.owner_id = ?2))))";
+    let filter = USER_COLLECTIONS_FILTER;
     let total: i64 = sqlx::query_scalar(&format!(
         "SELECT COUNT(*) FROM collections c WHERE {filter}"
     ))

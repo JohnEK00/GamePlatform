@@ -5,6 +5,7 @@
 //! data/thumbnails/{id}.{ext}
 //! data/avatars/{userId}.{ext}
 //! data/screenshots/{id}.{png|jpg}, data/screenshots/{id}_t.jpg   (F005)
+//! data/banners/{userId}.jpg   (F028)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ impl Storage {
         std::fs::create_dir_all(self.thumbnails_dir())?;
         std::fs::create_dir_all(self.avatars_dir())?;
         std::fs::create_dir_all(self.screenshots_dir())?;
+        std::fs::create_dir_all(self.banners_dir())?;
         Ok(())
     }
 
@@ -59,6 +61,11 @@ impl Storage {
     /// F005: stored screenshots and their thumbnails.
     pub fn screenshots_dir(&self) -> PathBuf {
         self.root.join("screenshots")
+    }
+
+    /// F028: profile banners (`{userId}.jpg`).
+    pub fn banners_dir(&self) -> PathBuf {
+        self.root.join("banners")
     }
 
     pub fn thumbnail_path(&self, game_id: &str, ext: &str) -> PathBuf {

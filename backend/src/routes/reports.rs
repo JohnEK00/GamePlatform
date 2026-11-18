@@ -19,6 +19,7 @@ use crate::routes::games::{
     fetch_visible_game, limit_user, page_offset, parse_paging, remove_game,
 };
 use crate::routes::screenshots::{is_admin, remove_screenshot};
+use crate::routes::users::clear_profile;
 use crate::screenshots::{image_url, thumb_url};
 
 pub const REPORT_DETAILS_MAX: usize = 1000;
@@ -27,7 +28,7 @@ pub const REASONS: &[&str] = &["spam", "offensive", "broken", "copyright", "othe
 /// F008: the report target types. Since migration 0016 the database no longer has a CHECK on
 /// `reports.target_type`; this list (enforced in [`create_report`]) is the only check, so a
 /// later target type needs no table rebuild.
-pub const TARGET_TYPES: &[&str] = &["game", "comment", "screenshot", "collection"];
+pub const TARGET_TYPES: &[&str] = &["game", "comment", "screenshot", "collection", "user"];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +37,8 @@ pub struct Report {
     pub target_type: String,
     pub target_id: String,
     pub target_preview: String,
-    /// F008: `None` for `"collection"` reports; a game id for every other type.
+    /// F008: `None` for `"collection"` and (F028) `"user"` reports; a game id for every other
+    /// type.
     pub target_game_id: Option<String>,
     pub reason: String,
     pub details: String,
@@ -94,7 +96,7 @@ async fn load_report(state: &AppState, id: &str) -> AppResult<Report> {
 
 fn unknown_target_type() -> AppError {
     AppError::validation(
-        "targetType must be \"game\", \"comment\", \"screenshot\" or \"collection\"",
+        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\" or \"user\"",
     )
 }
 
@@ -178,6 +180,19 @@ pub async fn create_report(
             let admin = is_admin(&state, Some(&user.id)).await?;
             let c = load_collection(&state, &body.target_id, Some(&user.id), admin).await?;
             (None, c.title.chars().take(PREVIEW_MAX).collect())
+        }
+        // F028: a profile; usernames never change, so the preview stays accurate.
+        "user" => {
+            let row: Option<(String, String)> =
+                sqlx::query_as("SELECT id, username FROM users WHERE id = ?")
+                    .bind(&body.target_id)
+                    .fetch_optional(&state.db)
+                    .await?;
+            let (id, username) = row.ok_or_else(|| AppError::not_found("User"))?;
+            if id == user.id {
+                return Err(AppError::validation("You can't report yourself"));
+            }
+            (None, format!("@{username}"))
         }
         _ => return Err(unknown_target_type()),
     };
@@ -286,16 +301,28 @@ pub async fn admin_resolve_report(
 ) -> AppResult<Json<Report>> {
     let report = load_report(&state, &id).await?;
     let action = body.action.as_str();
+    // F028: the validity table in API § F028 (checked before the "already resolved" 409).
     match (action, report.target_type.as_str()) {
+        ("dismiss" | "clearProfile", "user") => {}
+        ("unpublish" | "delete", "user") => {
+            return Err(AppError::validation(
+                "action must be \"dismiss\" or \"clearProfile\" for user reports",
+            ));
+        }
         ("dismiss" | "delete", _) | ("unpublish", "game") => {}
         ("unpublish", _) => {
             return Err(AppError::validation(
                 "unpublish is only valid for game reports",
             ));
         }
+        ("clearProfile", _) => {
+            return Err(AppError::validation(
+                "clearProfile is only valid for user reports",
+            ));
+        }
         _ => {
             return Err(AppError::validation(
-                "action must be \"dismiss\", \"unpublish\" or \"delete\"",
+                "action must be \"dismiss\", \"unpublish\", \"delete\" or \"clearProfile\"",
             ));
         }
     }
@@ -320,6 +347,8 @@ pub async fn admin_resolve_report(
         // F008: same effects as `DELETE /api/collections/{id}` (items cascade, open reports
         // on it resolved); a collection that is already gone is a no-op.
         ("delete", "collection") => remove_collection(&state, &report.target_id).await?,
+        // F028: reset the profile (name, bio, links, avatar, banner); content stays.
+        ("clearProfile", "user") => clear_profile(&state, &report.target_id).await?,
         _ => {}
     }
 

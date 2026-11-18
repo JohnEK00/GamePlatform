@@ -64,6 +64,13 @@ pub fn api_router() -> Router<AppState> {
             "/users/me/avatar",
             put(users::upload_avatar).layer(image_limit),
         )
+        // F028: static, so it wins over `/users/{username}`.
+        .route(
+            "/users/me/banner",
+            put(users::upload_banner)
+                .delete(users::delete_banner)
+                .layer(image_limit),
+        )
         .route("/users/me/favorites", get(favorites::my_favorites))
         // F008: static, so it wins over `/users/{username}/collections` ("me" is not a valid
         // username).
@@ -267,6 +274,13 @@ pub fn public_router(state: &AppState) -> Router<AppState> {
             "/media/screenshots",
             Router::new()
                 .fallback_service(ServeDir::new(state.storage.screenshots_dir()))
+                .layer(axum::middleware::map_response(screenshot_media_headers)),
+        )
+        // F028: profile banners get the screenshot media headers (re-encoded, moderated).
+        .nest_service(
+            "/media/banners",
+            Router::new()
+                .fallback_service(ServeDir::new(state.storage.banners_dir()))
                 .layer(axum::middleware::map_response(screenshot_media_headers)),
         )
 }

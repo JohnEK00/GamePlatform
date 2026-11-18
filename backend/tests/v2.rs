@@ -710,7 +710,8 @@ async fn reports_and_moderation() {
     // Validation + missing targets.
     for body in [
         json!({"targetType": "game", "targetId": gid, "reason": "meh"}),
-        json!({"targetType": "user", "targetId": gid, "reason": "spam"}),
+        // An unknown target type ("user" became valid in F028).
+        json!({"targetType": "profile", "targetId": gid, "reason": "spam"}),
         json!({"targetType": "game", "targetId": gid, "reason": "spam", "details": "d".repeat(1001)}),
     ] {
         let r = report(&t, &r2, body.clone()).await;

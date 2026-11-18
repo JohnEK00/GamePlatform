@@ -275,7 +275,7 @@ pub async fn list_user_screenshots(
     }))
 }
 
-fn busy() -> Response {
+pub(crate) fn busy() -> Response {
     let mut res =
         AppError::ServiceUnavailable("The server is busy, try again in a few seconds".into())
             .into_response();

@@ -1802,3 +1802,19 @@ The stored value is the trimmed URL with its scheme lowercased. Labels are store
 
 ### Privacy
 `stats` only summarises content the same viewer can already list. Links are opt-in and public. Banners are public like avatars.
+
+### F028 implementation notes (backend)
+- **Link labels:**
+  - **Allowed characters:** labels may not contain these characters anywhere:
+    - C0 controls and U+007F–U+009F
+    - U+200B–U+200F
+    - U+202A–U+202E
+    - U+2060–U+2064
+    - U+2066–U+2069
+    - U+FEFF
+
+    Any of them gives `links[{i}].label must not contain control characters`.
+  - **Length:** counted in Unicode characters, so 1–30 characters after trimming.
+  - **Client:** clients check the raw label for these characters before trimming.
+- **Banner upload while the server is busy:** a 503 returns the `Limit::Image` token it used, the same as screenshot uploads.
+- **Deleted user:** a report about a user who has since been deleted can still be resolved with `clearProfile`, which then does nothing.

@@ -21,6 +21,18 @@ pub struct User {
     pub bio: String,
     pub created_at: String,
     pub role: String,
+    /// F028: `/media/banners/{id}.jpg?v={n}`, or `None` without a banner.
+    pub banner_url: Option<String>,
+    /// F028: 0-3 profile links, in the owner's order.
+    pub links: Vec<ProfileLink>,
+}
+
+/// F028: one profile link (label trimmed, 0-30 chars; url an absolute http(s) URL).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLink {
+    pub label: String,
+    pub url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -366,12 +378,23 @@ pub fn user_ref_from_row(row: &SqliteRow, prefix: &str) -> Result<UserRef, sqlx:
     })
 }
 
-pub const USER_COLUMNS: &str =
-    "id, username, display_name, avatar_ext, avatar_version, bio, created_at, role";
+pub const USER_COLUMNS: &str = "id, username, display_name, avatar_ext, avatar_version, bio, \
+     created_at, role, banner_ext, banner_version, links_json";
+
+/// F028: the public URL of a user's banner.
+pub fn banner_url(user_id: &str, ext: Option<&str>, version: i64) -> Option<String> {
+    ext.map(|ext| format!("/media/banners/{user_id}.{ext}?v={version}"))
+}
 
 pub fn user_from_row(row: &SqliteRow) -> Result<User, sqlx::Error> {
+    let user_ref = user_ref_from_row(row, "")?;
+    let banner_ext: Option<String> = row.try_get("banner_ext")?;
+    let banner_version: i64 = row.try_get("banner_version")?;
+    let links_json: String = row.try_get("links_json")?;
     Ok(User {
-        user_ref: user_ref_from_row(row, "")?,
+        banner_url: banner_url(&user_ref.id, banner_ext.as_deref(), banner_version),
+        links: serde_json::from_str::<Vec<ProfileLink>>(&links_json).unwrap_or_default(),
+        user_ref,
         bio: row.try_get("bio")?,
         created_at: row.try_get("created_at")?,
         role: row.try_get("role")?,
