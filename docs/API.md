@@ -2281,3 +2281,22 @@ type UserProfileResponse = {
 
   `isFollowing` and the spotlight's `games` (including the F029 featured order) are always live. Response shapes, orders and errors are unchanged.
 - **`sort=updated` with `owner=me`.** As with every other sort, the caller also sees their own unpublished games that have a `lastUpdatedAt`.
+
+## F034 additions
+Navigation and UI polish, with F037 About and Help folded in (spec: `docs/features/F034-navigation-and-ui-polish.md`; § 0 there settles every ambiguity). All earlier rules apply. There are **no new or changed endpoints, types, status codes, rate limits or migrations**; this section only lists the new client routes.
+
+### Web routes
+| Path | Auth | Content |
+|---|---|---|
+| `/about` | public | Static About page (F037). On the desktop app it also shows a "This app" section (version, server). |
+| `/help` | public | Static Help/FAQ page (F037) with ten topics. |
+| `/help?topic={helpTopicId}` | public | The same page, scrolled to and focusing the topic heading `#help-{helpTopicId}`. |
+
+```ts
+type HelpTopicId =
+  | "account" | "playing" | "controls" | "saves" | "uploading"
+  | "screenshots" | "collections" | "posts" | "reporting" | "desktop"
+```
+- `topic` is matched exactly (case-sensitive) against `HelpTopicId`. A missing, empty or unknown value shows the page from the top; it is never an error and never redirects.
+- Links that use it: footer `Report a problem` → `/help?topic=reporting`; About `How reporting works` → `/help?topic=reporting`; Upload page `upload help` → `/help?topic=uploading`.
+- With `WEB_DIST` set, both paths fall back to `index.html` like every SPA route (no server change). Under the desktop hash router they are `#/about` and `#/help?topic={id}`.

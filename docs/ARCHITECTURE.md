@@ -2077,3 +2077,54 @@ Home and discover 2, with F029 featured games on profiles (spec: `docs/features/
 - **Cost (debug build).** About 200 ms per request before, about 0.9 ms after, plus about 340 ms per background refresh.
 - **Feed plan (F021 feed SQL).** The new partial index `idx_collections_public_updated` changed SQLite's plan for feed branch (c). `FEED_SQL` now uses unary `+` on `c.visibility` and `c.owner_id`, so the collections primary key stays the probe. That is the same pattern `list_filter` uses.
 - **`PUT /api/users/me/featured`.** Shape errors (`{}`, `gameIds` not an array, non-string items) are 422 `validation`. Malformed JSON is 400.
+
+## F034 additions
+Navigation and UI polish, with F037 About and Help folded in (spec: `docs/features/F034-navigation-and-ui-polish.md`; contract: API § F034, web routes only). Frontend and desktop only: no migration (the next free number stays `0028`), no endpoints, no new dependencies, no engine changes, no Tauri capability changes.
+
+- **Host contract** (`context/config.tsx`):
+  ```ts
+  type PlatformConfig = {
+    // …existing fields…
+    /** F034: extra content for /about's "This app" section (desktop: version and server). Absent = no section. */
+    aboutExtra?: ReactNode;
+  }
+  ```
+  Like `extraSettings`, it is a trusted host-provided node rendered inside the router and the providers.
+- **Link model** (`nav.ts`, pure). One table per surface, so every destination has a single home per surface (spec § 0.1):
+  - `MAIN_NAV`: Browse `/browse`, Creators `/creators`, Feed `/feed` (signed in), Studio `/studio`;
+  - `ACCOUNT_ITEMS`: Profile `/me`, My games `/dashboard`, Favorites `/favorites`, Collections `/collections` (when supported), Settings `/settings`, Moderation `/admin` (admins);
+  - `SHEET_GROUPS`: Explore, Create (Studio, Make a game `/docs`, Upload a game), Pixelforge Arcade (About, Help);
+  - `FOOTER_COLUMNS`: Play, Create, Arcade;
+  - `accountLinkCurrent(id, pathname, username)`, `HELP_TOPIC_IDS`, `isHelpTopicId`, `helpPath`.
+- **Header** (`components/Layout.tsx`). Wide and narrow are decided by the existing `HEADER_COLLAPSE_QUERY` = `(max-width: 860px)` through `useMediaQuery`:
+  - **Wide:** `Logo`, `#pf-mainnav` (Main nav, `SearchBox`, `NotificationBell`, actions with `+ Upload` and the user menu). No toggle and no sheet.
+  - **Narrow:** `Logo`, then `NotificationBell` (signed in) or `Log in` (anonymous), then the ☰ toggle (`aria-haspopup="dialog"`). `#pf-mainnav` is not rendered.
+  - **User menu:** an APG menu button, with arrow keys, Home/End, Escape back to the button and Tab to leave.
+- **Menu sheet** (`components/MenuSheet.tsx`):
+  - A `role="dialog" aria-modal="true"` panel, `#pf-menu-sheet`. It is rendered as a sibling after `<header>`, because the header's `backdrop-filter` would otherwise be the containing block for `position: fixed`.
+  - It is mounted only while open, and its z-index is 800 (header 40, bell panel 45, modals 900, toasts 1000).
+  - Focus trap, Escape and focus return come from the shared `useModal`. Initial focus goes to `Close menu`.
+  - While it is open, `document.documentElement.style.overflow` is `hidden`, and the previous value is restored when it closes.
+  - It closes on a route change, on Escape, on the close button, on a backdrop mousedown, on Log out, and when the viewport becomes wide.
+  - Its slide-in animation runs only under `prefers-reduced-motion: no-preference`.
+- **Footer** (`Footer` in `Layout.tsx`): a brand block and one `<nav aria-label="Footer">` with three labelled lists (Play, Create, Arcade). Links are `NavLink end`, except `Report a problem` (a plain `Link`, because it has a query).
+- **Shared page building blocks:**
+  - `components/PageHeader.tsx`: `PageHeader` (renders `header.pf-pagehead`, `--row` with actions) and `Breadcrumbs` (`nav[aria-label=Breadcrumb] > ol`; the last crumb is a `span[aria-current=page]`).
+  - `components/PageStates.tsx`:
+    - `PageError`: a 404 `ApiError` renders `NotFoundPage what`; anything else renders `ErrorState` in a page container.
+    - `PageLoading`: a centred `Spinner` with `aria-busy`.
+  - `common.tsx`:
+    - `EmptyState.headingLevel` (2 or 3, default 3);
+    - `ErrorState.headingLevel`;
+    - `ErrorState` shows the title `Can't reach the server` for `ApiError.status === 0`.
+  - Adoption is limited to the pages in spec § 0.8. Other pages migrate opportunistically.
+- **Pages:**
+  - `pages/AboutPage.tsx` (route `about`) and `pages/HelpPage.tsx` (route `help`, which exports `HELP_TOPICS`). Both are static, public and registered next to `docs`.
+  - Help deep links use `?topic=` rather than `#fragment`, because the desktop's HashRouter owns the fragment. The jump runs in a `setTimeout(0)` after `Layout`'s scroll-to-top effect and follows the `DocsPage` `jumpTo` reduced-motion rule.
+- **Desktop:**
+  - The Help menu holds Help and FAQ (`"help"` → `/help`), Make a game (`"docs"`, unchanged) and About Pixelforge Arcade (`"about"` → `/about`). Both ids are forwarded and have no accelerators.
+  - The native About message dialog is removed, and with it the `DialogExt` use in `menu.rs`.
+  - `DesktopAbout` (via `aboutExtra`) shows `APP_VERSION`, which `src/appInfo.ts` reads from `tauri.conf.json?raw` at build time, and `useServer().server`. Neither needs a Tauri permission.
+- **Ownership:**
+  - frontend-dev: `nav.ts` (new), `components/Layout.tsx`, `components/MenuSheet.tsx` (new), `components/PageHeader.tsx` (new), `components/PageStates.tsx` (new), `components/common.tsx`, `context/config.tsx`, `pages/AboutPage.tsx` (new), `pages/HelpPage.tsx` (new), the migrated pages in spec § 0.8 plus `NotFoundPage.tsx`, `WebGameApp.tsx`, `index.ts`, `styles.css`, `packages/ui/README.md` and tests.
+  - desktop-dev: `src-tauri/src/menu.rs`, `src/nativeMenu.ts`, `src/appInfo.ts` (new), `src/DesktopAbout.tsx` (new), `src/App.tsx`, `src/__tests__/nativeMenu.test.ts`, `src/__tests__/f034.desktop.test.tsx` (new), `apps/desktop/README.md`.

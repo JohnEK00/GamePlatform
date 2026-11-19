@@ -5,7 +5,17 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 
 **Direction (2026-11-17, set by the user):** new work should improve the **platform itself**: more pages, UI improvements, public profile pages, and letting people post. Platform items (profiles, posts, home and discovery, navigation and search, new pages) come first. Engine-only and notification-plumbing items (F025, F026) move to the bottom. Creation tools (F011, F014) and the desktop library (F010) sit in between.
 
-**Cycle plan (2026-11-19, second update):** F031 and F035 shipped. This round ships **F032** (M) with **F029** folded in.
+**Cycle plan (2026-11-19, third update):** F032 (with F029) shipped. This round ships **F034** (M) with **F037** folded in.
+- **Why F034 now:** after F028–F035 the site has many pages but the chrome hasn't kept up. The header nav and the user menu still duplicate four links. Below 860 px a dropdown hangs off the header with no focus handling. The footer has five links, and there is no About or Help page.
+- **Why F037 folds in:** the new footer and the desktop Help menu link to `/about` and `/help`, and both pages are static content in the UI package.
+- **Scope kept to one round:**
+  - shared states adopt on a fixed list of pages (spec § 0.8);
+  - breadcrumbs go on three pages only (Edit, Stats, Followers/Following);
+  - route-change focus and announcements move to **F048**.
+- **Migration:** none (the next free number stays `0028`). Backend is not dispatched.
+- **Next after this cycle:** F043, F033, F041. F042 follows.
+
+**Earlier cycle (2026-11-19, second update):** F031 and F035 shipped. That round shipped **F032** (M) with **F029** folded in.
 - **Why F032 now:** with `/creators` live, the home page is the biggest visible gap: one Featured block, one shelf and a long grid. F032 makes `/` a discover page (trending, new, recently updated, a daily creator spotlight, player collections, tags) and gives the grid its own `/browse` page.
 - **Why F029 folds in:** the spotlight shows each creator's featured games first, so featured games are the creator's control over how the home page presents them. F029 adds one table, one endpoint and one dialog to a round that already touches the profile shell's neighbours.
 - **What moved out:** admin-curated home picks (the original F032 pitch's `PUT /api/admin/featured`) become **F047**, so F032 stays one round. The home "Featured" block keeps its top-rated source until then.
@@ -81,14 +91,15 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F035 | Explore creators page | S | shipped |
 | F032 | Home and discover 2: sectioned home page, `/browse` and creator spotlight (with F029) | M | shipped |
 | F029 | Featured games on profiles (folded into F032) | S | shipped |
-| F034 | Navigation and UI polish: header, mobile menu, footer, shared states | S | proposed |
+| F034 | Navigation and UI polish: header, mobile menu sheet, footer, breadcrumbs, shared states (with F037) | M | specced |
+| F037 | About and Help pages (folded into F034) | S | specced |
 | F043 | Continue playing: recently played games | S | proposed |
 | F033 | Search page: games, creators and collections | M | proposed |
 | F041 | Link previews: Open Graph and Twitter cards for shared links | S | proposed |
 | F042 | Block users | M | proposed |
 | F047 | Curated home picks: admin-chosen Featured games on the home page | S | proposed |
 | F036 | Tags index and tag pages | S | proposed |
-| F037 | About and Help pages | S | proposed |
+| F048 | Route-change focus and page announcements | S | proposed |
 | F044 | Posts about this game, on game pages | S | proposed |
 | F038 | Images in posts | S | proposed |
 | F039 | Post composer 2: attachment picker and drafts | S | proposed |
@@ -423,16 +434,32 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: people and lists become findable. Today search only covers games and lives inside the home page.
 - **Areas**: backend (two search endpoints with indexes and limits), frontend (search page, header search, result cards). No engine changes.
 
-### F034: Navigation and UI polish (S, proposed)
+### F034: Navigation and UI polish (M, specced → [spec](features/F034-navigation-and-ui-polish.md); F037 folded in)
 - **Pitch**:
-  - A regrouped header: Browse, Feed, Collections and Studio, with "Make a game" moved under Studio. The user menu keeps only personal items.
-  - A full-height mobile menu sheet with focus trap and Escape.
-  - A richer footer (About, Help, Docs, Browse, Creators, Tags).
-  - A shared `PageHeader` with optional breadcrumbs (Game › Edit / Stats, Profile › Followers).
-  - One `EmptyState`/`LoadError` usage audit, so every list page has an icon, a one-line explanation and an action.
-- **User value**: less hunting for pages, especially on phones, and a consistent feel across the app.
-- **Areas**: frontend only (Layout, styles, page headers); desktop verification.
-- **Planned next (2026-11-19):** recommended right after F032, with **F037** (About and Help) folded in, because the new footer links to `/about` and `/help`. After F032 the header already has `Browse` → `/browse` and the logo → `/`, so the regroup starts from there.
+  - **Header:** one home per link. The wide nav is Browse, Creators, Feed (signed in) and Studio. The user menu holds Profile, My games, Favorites, Collections, Settings, Moderation and Log out, and gains APG arrow-key navigation. `Make a game`, `Admin` and the doubled Feed, Studio and Upload entries go.
+  - **Mobile menu sheet** (≤ 860 px): a right-docked `role="dialog"` with search and the groups Explore, Create, You and Pixelforge Arcade. It traps focus (`useModal`), closes on Escape, ✕, a backdrop tap or navigation, returns focus to ☰, locks page scroll, and doesn't animate under reduced motion.
+  - **Footer:** a brand block and three columns: Play (Browse, Creators), Create (Studio, Docs, Upload), Arcade (About, Help, Report a problem).
+  - **Shared building blocks:**
+    - `PageHeader` with `Breadcrumbs`, on Edit game, Game stats and Followers/Following;
+    - `PageError` (404 → not found, otherwise the error state) and `PageLoading`;
+    - an `EmptyState`/`ErrorState` `headingLevel` prop and a "Can't reach the server" state for network errors;
+    - adoption on a fixed list of pages.
+  - **F037:** `/about` and `/help`, with ten FAQ topics deep-linkable as `?topic=`. Desktop Help → Help and FAQ and Help → About open them; About shows the desktop version and server.
+- **Decisions (2026-11-19)**:
+  - Tags stay out of the footer until F036 ships `/tags`.
+  - Help deep links use `?topic=`, not `#`, because the desktop's HashRouter owns the fragment.
+  - The native About dialog is replaced by `/about` (`PlatformConfig.aboutExtra`), so no Tauri permission is needed for the version.
+  - Route-change focus management is split out as **F048**.
+- **User value**: less hunting for pages, especially on phones. A consistent, accessible feel across the app, and newcomers can find out what the site is and how it works.
+- **Areas**:
+  - frontend: `nav.ts`, Layout, `MenuSheet`, `PageHeader`, `PageStates`, two pages, migrations, styles;
+  - desktop: Help menu, `DesktopAbout`, tests.
+  - No backend, migration or engine changes.
+
+### F048: Route-change focus and page announcements (S, proposed; added 2026-11-19; split out of F034)
+- **Pitch**: on every client-side navigation, move focus to the new page's h1 (or `#pf-main` when there is none) and announce the document title through a polite live region, except for in-page query changes (sort, page, tabs) and Back/Forward scroll restoration. Pages that already manage focus (F031 reply links, F028 sections, the creators and notifications headings) opt out through a small `useRouteFocus` contract.
+- **User value**: screen-reader and keyboard users hear where they landed after every link, instead of staying on the link they pressed or falling back to the top of the document.
+- **Areas**: frontend (`Layout`, a hook, opt-outs on the pages that already focus). Desktop verification only.
 
 ### F035: Explore creators page (S, shipped → [spec](features/F035-explore-creators.md); ships with F031)
 - **Pitch**:
@@ -453,7 +480,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: browsable genres with shareable URLs; the home page's chip row only shows the top tags.
 - **Areas**: backend (`GET /api/tags?all=1` with counts), frontend (two pages, chip links). No engine changes.
 
-### F037: About and Help pages (S, proposed)
+### F037: About and Help pages (S, specced inside F034 → [spec](features/F034-navigation-and-ui-polish.md) § 0.10–0.13)
+- **Folded into F034 (2026-11-19):** `/about` (four sections and a host "This app" section) and `/help` (ten topics, `?topic=` deep links). Desktop Help → About opens `/about` instead of the native dialog. The original pitch is kept below.
 - **Pitch**: `/about` (what Pixelforge Arcade is, how to play, make and share, and links to the Studio and docs) and `/help` (an FAQ on accounts, uploading, controls, screenshots, collections, reporting and desktop), with anchors that the footer and empty states link to. Static content in the UI package. The desktop's Help → About opens `/about`.
 - **User value**: new visitors understand the site, and common questions stop being dead ends.
 - **Areas**: frontend (two pages, footer links), desktop (menu wiring).

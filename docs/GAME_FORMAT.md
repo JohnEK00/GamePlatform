@@ -1067,3 +1067,7 @@ None. The Explore creators page is platform-only: there are no engine, message, 
 
 ## F032 additions
 None. The sectioned home page, `/browse`, the creator spotlight and featured games on profiles are platform-only: there are no engine, message, game.json, bundle or player page changes.
+
+
+## F034 additions
+None. The regrouped header, the mobile menu sheet, the footer, breadcrumbs, the shared page states and the About and Help pages are platform UI only: there are no engine, message, game.json, bundle or player page changes. The Help page describes existing player controls (⌨ panel, 📷, F11) without changing them.
