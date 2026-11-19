@@ -31,7 +31,7 @@ To seed a demo account and the example games, see [backend/README.md](backend/RE
 - **Leaderboards**: daily, weekly and all-time boards, lower-is-better and time scores, and boards games can show in-game.
 - **Profiles**: public profiles at `/u/{name}` (and `/me`) with a banner, bio, up to 3 links, stats, Overview/Games/Screenshots/Collections sections, Copy link and profile reports.
 - **Posts**: short text posts (with clickable links and an optional game or collection attachment) on your profile, at `/p/{id}` and in followers' feeds; reportable.
-- **Social**: follow creators, an activity feed, threaded comment replies with hearts, creator pin/lock tools, per-game comment modes (on, replies only, off) with optional slow mode, and in-app notifications (including when someone posts a screenshot of your game; with optional desktop OS notifications, mutes per game or thread, and one polling tab per browser).
+- **Social**: follow creators, find them on the Explore creators page (`/creators`, sorted by popular, recently active or new), an activity feed, threaded comment replies with hearts, creator pin/lock tools, per-game comment modes (on, replies only, off) with optional slow mode, and in-app notifications (including when someone posts a screenshot of your game; with optional desktop OS notifications, mutes per game or thread, and one polling tab per browser).
 - **Collections**: curated, ordered game lists with notes, public (shareable `/c/{id}` links, shown on profiles and game pages) or private.
 - **Screenshots**: capture with 📷 or a game's own key, share to a per-game gallery or set as the thumbnail, and see them in the feed (Screenshots tab) and on profiles; every image is re-encoded before use.
 - **Controls**: games declare named actions; players remap keys and gamepad buttons per game from a controls panel, and signed-in players' bindings follow their account across devices. Games can show prompts for the device in use.
@@ -43,7 +43,7 @@ To seed a demo account and the example games, see [backend/README.md](backend/RE
 - **Security**: untrusted game code runs only in sandboxed iframes, owner previews use short-lived preview tokens, and rate limits protect auth, uploads and comments.
 - **Engine**: WebGL2 sprite batching, input with remappable actions, audio, scenes, tilemaps, physics, particles, tweens, bitmap and pixel fonts, 9-slice panels, menu widgets (buttons, sliders, toggles, text fields and lists), frame capture, and an F3 debug overlay. There are six example games: Space Dodge, Pixel Peaks, Brick Breaker, Ember Garden, Overclock and Kiln Clash.
 - **Studio extras**: open your own published games, publish updates with release notes, and start from templates including Time trial and Menu & HUD.
-- **Desktop**: native menu (Feed, Controls, Notifications, Collections, Take Screenshot), F11 fullscreen, native open and save dialogs, local game folders in the Studio, opt-in OS notifications, and a configurable server.
+- **Desktop**: native menu (Feed, Controls, Notifications, Collections, Creators, Take Screenshot), F11 fullscreen, native open and save dialogs, local game folders in the Studio, opt-in OS notifications, and a configurable server.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for shipped and upcoming features and [docs/reviews/](docs/reviews/) for the review history.
 

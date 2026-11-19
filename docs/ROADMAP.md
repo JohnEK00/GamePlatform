@@ -75,7 +75,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F028 | Public profiles 2: banner, links, profile sections and sharing | M | shipped |
 | F030 | User posts: short text posts on profiles and in followers' feeds | M | shipped |
 | F031 | Post replies and hearts, with notifications | M | specced |
-| F035 | Explore creators page | S | specced |
+| F035 | Explore creators page | S | shipped |
 | F029 | Featured games on profiles | S | proposed |
 | F041 | Link previews: Open Graph and Twitter cards for shared links | S | proposed |
 | F042 | Block users | M | proposed |
@@ -419,7 +419,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: less hunting for pages, especially on phones, and a consistent feel across the app.
 - **Areas**: frontend only (Layout, styles, page headers); desktop verification.
 
-### F035: Explore creators page (S, specced → [spec](features/F035-explore-creators.md); ships with F031)
+### F035: Explore creators page (S, shipped → [spec](features/F035-explore-creators.md); ships with F031)
 - **Pitch**:
   - `/creators` lists every user with at least one published game, as cards. Each card shows a banner, avatar, name, a 160-character bio excerpt, `games · plays · followers` and a Follow button.
   - Three sorts: "Popular" (followers, then plays), "Recently active" (latest first publish or bundle update) and "New creators" (first publish).

@@ -2167,7 +2167,7 @@ type Creator = {
 | GET 🔓 | /api/creators | `?sort=popular\|active\|new&page=1&perPage=24` | `Page<Creator>` |
 
 **`GET /api/creators`**, checked in this order:
-1. `sort`: absent or empty → `popular`. Anything else that isn't a `CreatorSort` → 400 `bad_request` `Unknown sort '{sort}' (expected popular, active or new)`.
+1. `sort`: absent or empty → `popular`. Anything else that isn't a `CreatorSort` → 400 `bad_request` `Unknown sort '{sort}' (expected popular, active or new)`. The echoed value is cut to its first 40 characters, as for comments.
 2. `page`: default 1, clamped to 1–1,000,000; non-integer → 400 `bad_request` `page must be an integer`.
 3. `perPage`: default **24**, clamped to **1–48**; non-integer → 400 `bad_request` `perPage must be an integer`.
 
