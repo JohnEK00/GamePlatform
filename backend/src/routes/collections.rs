@@ -453,6 +453,8 @@ async fn notify_added(
         dedupe: Dedupe::Group,
         thread_id: None,
         collection_id: Some(collection_id.to_string()),
+        post_id: None,
+        event_post_reply_id: None,
         now: chrono::Utc::now(),
     };
     notif::notify_pool(&state.db, &n).await;

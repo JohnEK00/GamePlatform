@@ -50,13 +50,15 @@ pub enum Limit {
     /// F005 screenshot posts (`POST …/screenshots`; own bucket, separate from `Image`): 10/hour,
     /// per user
     Screenshot,
-    /// F006 comment hearts (`PUT`/`DELETE …/heart`, shared): 120 per 10 min, per user
+    /// F006 comment hearts (`PUT`/`DELETE …/heart`, shared) and (F031) `…/posts/{id}/heart`:
+    /// 120 per 10 min, per user
     Heart,
     /// F007 notification endpoints (list, unread count, mark read, settings GET/PUT, shared):
     /// 120/min, per user
     Notifications,
     /// F017 creator thread tools (`PUT`/`DELETE …/pin` + `…/lock`), shared with the F020
-    /// `PUT /api/games/{id}/comment-settings`: 60 per 10 min, per user
+    /// `PUT /api/games/{id}/comment-settings` and (F031) `…/posts/{id}/lock`: 60 per 10 min,
+    /// per user
     ThreadTools,
     /// F008 collection writes, shared by the seven write endpoints: `POST /api/collections`,
     /// `PATCH`/`DELETE /api/collections/{id}`, `PUT`/`DELETE /api/collections/{id}/games/{gameId}`
@@ -69,6 +71,8 @@ pub enum Limit {
     Controls,
     /// F030 post creation (`POST /api/posts`): 10 per 10 min, per user
     Post,
+    /// F031 post replies (`POST /api/posts/{id}/replies`): 30 per 10 min, per user
+    PostReply,
 }
 
 impl Limit {
@@ -97,6 +101,7 @@ impl Limit {
             Limit::CommentList => (120, Duration::from_secs(60)),
             Limit::Controls => (60, Duration::from_secs(60)),
             Limit::Post => (10, Duration::from_secs(600)),
+            Limit::PostReply => (30, Duration::from_secs(600)),
         }
     }
 }

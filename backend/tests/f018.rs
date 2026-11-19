@@ -188,7 +188,8 @@ const EVENT_ROWS: &str = "SELECT id, notification_id, actor_id, comment_id, crea
 const SCHEMA_OF: &str = "SELECT type, name, tbl_name, sql FROM sqlite_master \
      WHERE tbl_name IN ('notifications', 'notification_events') AND type IN ('index', 'trigger') \
      AND sql IS NOT NULL \
-     AND name NOT IN ('idx_notifications_collection', 'idx_notification_events_screenshot') \
+     AND name NOT IN ('idx_notifications_collection', 'idx_notification_events_screenshot', \
+       'idx_notifications_post', 'idx_notification_events_post_reply') \
      ORDER BY type, name";
 
 /// `sqlite_master` entries whose name or SQL contains `_new`.
@@ -374,11 +375,12 @@ async fn migration_upgrade_from_0016() {
         )),
         "{fks:?}"
     );
-    // 0023 (F024) adds the screenshot foreign key; tests/f024.rs checks it.
+    // 0023 (F024) adds the screenshot foreign key (tests/f024.rs checks it) and 0026 (F031)
+    // the post reply one (tests/f031.rs).
     assert_eq!(
         fks.len(),
-        4,
-        "notification, actor, comment, screenshot: {fks:?}"
+        5,
+        "notification, actor, comment, screenshot, post reply: {fks:?}"
     );
     let with_new: Vec<String> = sqlx::query_scalar(WITH_NEW).fetch_all(&db).await.unwrap();
     assert_eq!(with_new, expected_with_new(), "no rebuild leftovers");

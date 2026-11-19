@@ -33,10 +33,14 @@ pub enum Kind {
     AddedToCollection,
     /// F024: a player posted a screenshot of the recipient's game.
     ScreenshotPosted,
+    /// F031: someone replied to the recipient's post, or answered their reply on a post.
+    PostReply,
+    /// F031: someone hearted the recipient's post.
+    PostHeart,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Comment,
         Kind::Reply,
         Kind::Heart,
@@ -45,6 +49,8 @@ impl Kind {
         Kind::Pinned,
         Kind::AddedToCollection,
         Kind::ScreenshotPosted,
+        Kind::PostReply,
+        Kind::PostHeart,
     ];
 
     /// The `NotificationKind` string (also the stored `kind` column). Since F018 the column has
@@ -59,6 +65,8 @@ impl Kind {
             Kind::Pinned => "pinned",
             Kind::AddedToCollection => "addedToCollection",
             Kind::ScreenshotPosted => "screenshotPosted",
+            Kind::PostReply => "postReply",
+            Kind::PostHeart => "postHeart",
         }
     }
 
@@ -74,6 +82,8 @@ impl Kind {
             Kind::Pinned => "pins",
             Kind::AddedToCollection => "collections",
             Kind::ScreenshotPosted => "screenshots",
+            Kind::PostReply => "post_replies",
+            Kind::PostHeart => "post_hearts",
         }
     }
 
@@ -103,6 +113,11 @@ pub fn pin_group(comment_id: &str) -> String {
 /// F021: the `addedToCollection` group of one (collection, game).
 pub fn collection_group(collection_id: &str, game_id: &str) -> String {
     format!("coll:{collection_id}:{game_id}")
+}
+
+/// F031: the `postReply` / `postHeart` group of one post (groups are per kind).
+pub fn post_group(post_id: &str) -> String {
+    format!("post:{post_id}")
 }
 
 pub const FOLLOW_GROUP: &str = "follow";
@@ -169,6 +184,10 @@ pub struct NewNotification {
     pub thread_id: Option<String>,
     /// F021: the collection of an `addedToCollection` notification; else `None`.
     pub collection_id: Option<String>,
+    /// F031: the post of a `postReply` / `postHeart` notification; else `None`.
+    pub post_id: Option<String>,
+    /// F031 `postReply`: the new reply; else `None`.
+    pub event_post_reply_id: Option<String>,
     pub now: DateTime<Utc>,
 }
 
@@ -242,8 +261,8 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     }
     let id: Option<i64> = sqlx::query_scalar(&format!(
         "INSERT INTO notifications (recipient_id, kind, group_key, game_id, comment_id, \
-         collection_id, created_at, updated_at) \
-         SELECT ?1, ?2, ?3, ?5, ?6, ?10, ?7, ?7 \
+         collection_id, post_id, created_at, updated_at) \
+         SELECT ?1, ?2, ?3, ?5, ?6, ?10, ?11, ?7, ?7 \
          WHERE NOT EXISTS (SELECT 1 FROM notification_settings s WHERE s.user_id = ?1 \
            AND s.{col} = 0) \
          AND NOT {MUTED} \
@@ -268,6 +287,7 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     .bind(dedupe)
     .bind(&n.thread_id)
     .bind(&n.collection_id)
+    .bind(&n.post_id)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(id) = id else {
@@ -276,12 +296,13 @@ async fn try_notify(conn: &mut SqliteConnection, n: &NewNotification) -> sqlx::R
     };
     sqlx::query(
         "INSERT OR IGNORE INTO notification_events (notification_id, actor_id, comment_id, \
-         screenshot_id, created_at) VALUES (?, ?, ?, ?, ?)",
+         screenshot_id, post_reply_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&n.actor_id)
     .bind(&n.event_comment_id)
     .bind(&n.event_screenshot_id)
+    .bind(&n.event_post_reply_id)
     .bind(&now)
     .execute(&mut *tx)
     .await?;
@@ -975,6 +996,8 @@ pub struct Notification {
     pub collection: Option<NotificationCollection>,
     /// F024: `screenshotPosted` only; `null` for every other kind.
     pub screenshot: Option<NotificationScreenshot>,
+    /// F031: postReply/postHeart only; null otherwise.
+    pub post_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1007,6 +1030,10 @@ pub struct NotificationSettings {
     pub collections: bool,
     /// F024: the `screenshotPosted` kind.
     pub screenshots: bool,
+    /// F031: the `postReply` kind.
+    pub post_replies: bool,
+    /// F031: the `postHeart` kind.
+    pub post_hearts: bool,
 }
 
 impl Default for NotificationSettings {
@@ -1020,6 +1047,8 @@ impl Default for NotificationSettings {
             pins: true,
             collections: true,
             screenshots: true,
+            post_replies: true,
+            post_hearts: true,
         }
     }
 }
@@ -1143,28 +1172,27 @@ pub async fn mark_read(
 }
 
 pub async fn load_settings(db: &SqlitePool, user_id: &str) -> sqlx::Result<NotificationSettings> {
-    type Row = (bool, bool, bool, bool, bool, bool, bool, bool);
-    let row: Option<Row> = sqlx::query_as(
-        "SELECT comments, replies, hearts, follows, new_games, pins, collections, screenshots \
-         FROM notification_settings WHERE user_id = ?",
+    let row = sqlx::query(
+        "SELECT comments, replies, hearts, follows, new_games, pins, collections, screenshots, \
+         post_replies, post_hearts FROM notification_settings WHERE user_id = ?",
     )
     .bind(user_id)
     .fetch_optional(db)
     .await?;
     Ok(match row {
         None => NotificationSettings::default(),
-        Some((comments, replies, hearts, follows, new_games, pins, collections, screenshots)) => {
-            NotificationSettings {
-                comments,
-                replies,
-                hearts,
-                follows,
-                new_games,
-                pins,
-                collections,
-                screenshots,
-            }
-        }
+        Some(r) => NotificationSettings {
+            comments: r.try_get("comments")?,
+            replies: r.try_get("replies")?,
+            hearts: r.try_get("hearts")?,
+            follows: r.try_get("follows")?,
+            new_games: r.try_get("new_games")?,
+            pins: r.try_get("pins")?,
+            collections: r.try_get("collections")?,
+            screenshots: r.try_get("screenshots")?,
+            post_replies: r.try_get("post_replies")?,
+            post_hearts: r.try_get("post_hearts")?,
+        },
     })
 }
 
@@ -1181,6 +1209,10 @@ pub struct SettingsPatch {
     pub collections: Option<bool>,
     /// F024
     pub screenshots: Option<bool>,
+    /// F031
+    pub post_replies: Option<bool>,
+    /// F031
+    pub post_hearts: Option<bool>,
 }
 
 impl SettingsPatch {
@@ -1193,6 +1225,8 @@ impl SettingsPatch {
             && self.pins.is_none()
             && self.collections.is_none()
             && self.screenshots.is_none()
+            && self.post_replies.is_none()
+            && self.post_hearts.is_none()
     }
 }
 
@@ -1206,15 +1240,18 @@ pub async fn update_settings(
     sqlx::query(
         "INSERT INTO notification_settings \
            (user_id, comments, replies, hearts, follows, new_games, pins, collections, \
-            screenshots, updated_at) \
+            screenshots, post_replies, post_hearts, updated_at) \
          VALUES (?1, COALESCE(?2, 1), COALESCE(?3, 1), COALESCE(?4, 1), COALESCE(?5, 1), \
-           COALESCE(?6, 1), COALESCE(?8, 1), COALESCE(?9, 1), COALESCE(?10, 1), ?7) \
+           COALESCE(?6, 1), COALESCE(?8, 1), COALESCE(?9, 1), COALESCE(?10, 1), \
+           COALESCE(?11, 1), COALESCE(?12, 1), ?7) \
          ON CONFLICT (user_id) DO UPDATE SET \
            comments = COALESCE(?2, comments), replies = COALESCE(?3, replies), \
            hearts = COALESCE(?4, hearts), follows = COALESCE(?5, follows), \
            new_games = COALESCE(?6, new_games), pins = COALESCE(?8, pins), \
            collections = COALESCE(?9, collections), \
-           screenshots = COALESCE(?10, screenshots), updated_at = ?7",
+           screenshots = COALESCE(?10, screenshots), \
+           post_replies = COALESCE(?11, post_replies), \
+           post_hearts = COALESCE(?12, post_hearts), updated_at = ?7",
     )
     .bind(user_id)
     .bind(patch.comments)
@@ -1226,6 +1263,8 @@ pub async fn update_settings(
     .bind(patch.pins)
     .bind(patch.collections)
     .bind(patch.screenshots)
+    .bind(patch.post_replies)
+    .bind(patch.post_hearts)
     .execute(db)
     .await?;
     Ok(())
@@ -1244,7 +1283,7 @@ pub async fn list_page(
            g.title, g.owner_id, g.thumbnail_ext, g.thumbnail_version, \
            EXISTS (SELECT 1 FROM notification_events e WHERE e.notification_id = n.id \
              AND e.actor_id = g.owner_id AND e.retracted_at IS NULL) AS creator_heart, \
-           n.collection_id, col.title AS col_title \
+           n.collection_id, col.title AS col_title, n.post_id \
          FROM notifications n LEFT JOIN games g ON g.id = n.game_id \
          LEFT JOIN collections col ON col.id = n.collection_id \
          WHERE n.recipient_id = ?1 AND {VISIBLE} \
@@ -1274,6 +1313,7 @@ pub async fn list_page(
         creator_heart: bool,
         collection_id: Option<String>,
         collection_title: Option<String>,
+        post_id: Option<String>,
     }
     let mut bases = Vec::with_capacity(rows.len());
     for r in &rows {
@@ -1297,6 +1337,7 @@ pub async fn list_page(
             creator_heart: r.try_get("creator_heart")?,
             collection_id: r.try_get("collection_id")?,
             collection_title: r.try_get("col_title")?,
+            post_id: r.try_get("post_id")?,
         });
     }
     let more = bases.len() as i64 > limit;
@@ -1400,6 +1441,70 @@ pub async fn list_page(
         .collect();
     }
 
+    // F031: the newest live reply of postReply groups, then the posts (author, excerpt) and the
+    // replies (excerpt). Only when the page has post kinds.
+    let post_reply_ids: Vec<i64> = bases
+        .iter()
+        .filter(|b| b.kind == Kind::PostReply)
+        .map(|b| b.id)
+        .collect();
+    let mut newest_reply: HashMap<i64, String> = HashMap::new();
+    if !post_reply_ids.is_empty() {
+        let pr_json = serde_json::to_string(&post_reply_ids).unwrap_or_else(|_| "[]".into());
+        newest_reply = sqlx::query_as::<_, (i64, String)>(
+            "SELECT notification_id, post_reply_id FROM ( \
+               SELECT notification_id, post_reply_id, ROW_NUMBER() OVER ( \
+                 PARTITION BY notification_id ORDER BY created_at DESC, id DESC) AS rn \
+               FROM notification_events \
+               WHERE notification_id IN (SELECT value FROM json_each(?1)) \
+                 AND post_reply_id IS NOT NULL AND retracted_at IS NULL) \
+             WHERE rn = 1",
+        )
+        .bind(&pr_json)
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .collect();
+    }
+    let post_ids: Vec<String> = bases
+        .iter()
+        .filter(|b| matches!(b.kind, Kind::PostReply | Kind::PostHeart))
+        .filter_map(|b| b.post_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    // post id → (author id, excerpt)
+    let mut posts: HashMap<String, (String, String)> = HashMap::new();
+    if !post_ids.is_empty() {
+        let pj = serde_json::to_string(&post_ids).unwrap_or_else(|_| "[]".into());
+        posts = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT id, author_id, substr(body, 1, ?2) FROM posts \
+             WHERE id IN (SELECT value FROM json_each(?1))",
+        )
+        .bind(&pj)
+        .bind(EXCERPT_CHARS)
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .map(|(id, author, excerpt)| (id, (author, excerpt)))
+        .collect();
+    }
+    let mut reply_excerpts: HashMap<String, String> = HashMap::new();
+    if !newest_reply.is_empty() {
+        let rj = serde_json::to_string(&newest_reply.values().collect::<Vec<_>>())
+            .unwrap_or_else(|_| "[]".into());
+        reply_excerpts = sqlx::query_as::<_, (String, String)>(
+            "SELECT id, substr(body, 1, ?2) FROM post_replies \
+             WHERE id IN (SELECT value FROM json_each(?1))",
+        )
+        .bind(&rj)
+        .bind(EXCERPT_CHARS)
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .collect();
+    }
+
     // Target comments (excerpts) and thread roots (ownsThread).
     let target_of = |b: &Base| -> Option<String> {
         match b.kind {
@@ -1408,7 +1513,9 @@ pub async fn list_page(
             Kind::Follow
             | Kind::GamePublished
             | Kind::AddedToCollection
-            | Kind::ScreenshotPosted => None,
+            | Kind::ScreenshotPosted
+            | Kind::PostReply
+            | Kind::PostHeart => None,
         }
     };
     let mut comment_ids: HashSet<String> = HashSet::new();
@@ -1495,15 +1602,27 @@ pub async fn list_page(
             _ => None,
         };
         let comment_id = target_of(b);
-        let excerpt = comment_id
-            .as_ref()
-            .and_then(|c| comments.get(c))
-            .map(|c| c.excerpt.clone());
-        let owns_thread = b.kind == Kind::Reply
-            && b.comment_id
+        let post = b.post_id.as_ref().and_then(|p| posts.get(p));
+        let excerpt = match b.kind {
+            Kind::PostReply => newest_reply
+                .get(&b.id)
+                .and_then(|r| reply_excerpts.get(r))
+                .cloned(),
+            Kind::PostHeart => post.map(|(_, excerpt)| excerpt.clone()),
+            _ => comment_id
+                .as_ref()
+                .and_then(|c| comments.get(c))
+                .map(|c| c.excerpt.clone()),
+        };
+        let owns_thread = match b.kind {
+            Kind::Reply => b
+                .comment_id
                 .as_ref()
                 .and_then(|root| comments.get(root))
-                .is_some_and(|c| c.author == recipient);
+                .is_some_and(|c| c.author == recipient),
+            Kind::PostReply => post.is_some_and(|(author, _)| author == recipient),
+            _ => false,
+        };
         let thread_id = match b.kind {
             Kind::Reply | Kind::Pinned => b.comment_id.clone(),
             Kind::Heart => b.comment_id.as_ref().and_then(|c| {
@@ -1515,7 +1634,9 @@ pub async fn list_page(
             | Kind::Follow
             | Kind::GamePublished
             | Kind::AddedToCollection
-            | Kind::ScreenshotPosted => None,
+            | Kind::ScreenshotPosted
+            | Kind::PostReply
+            | Kind::PostHeart => None,
         };
         let gid = b.game_id.as_deref().unwrap_or("");
         let path = match b.kind {
@@ -1529,6 +1650,14 @@ pub async fn list_page(
                 format!("/c/{}", b.collection_id.as_deref().unwrap_or(""))
             }
             Kind::ScreenshotPosted => format!("/games/{gid}?section=screenshots"),
+            Kind::PostReply => {
+                let pid = b.post_id.as_deref().unwrap_or("");
+                match newest_reply.get(&b.id) {
+                    Some(r) => format!("/p/{pid}?reply={r}"),
+                    None => format!("/p/{pid}"),
+                }
+            }
+            Kind::PostHeart => format!("/p/{}", b.post_id.as_deref().unwrap_or("")),
         };
         let collection = match (b.kind, &b.collection_id, &b.collection_title) {
             (Kind::AddedToCollection, Some(cid), Some(title)) => Some(NotificationCollection {
@@ -1539,7 +1668,7 @@ pub async fn list_page(
             _ => None,
         };
         let event_count = match b.kind {
-            Kind::Comment | Kind::Reply | Kind::ScreenshotPosted => events,
+            Kind::Comment | Kind::Reply | Kind::ScreenshotPosted | Kind::PostReply => events,
             _ => actor_count,
         };
         let screenshot = match b.kind {
@@ -1567,6 +1696,10 @@ pub async fn list_page(
             path,
             collection,
             screenshot,
+            post_id: match b.kind {
+                Kind::PostReply | Kind::PostHeart => b.post_id.clone(),
+                _ => None,
+            },
         });
     }
     Ok((items, next_cursor))
@@ -1616,7 +1749,14 @@ mod tests {
         assert_eq!(Kind::Pinned.as_str(), "pinned");
         assert_eq!(Kind::Pinned.setting_column(), "pins");
         assert_eq!(pin_group("c1"), "pin:c1");
-        assert_eq!(Kind::ALL.len(), 8);
+        assert_eq!(Kind::ALL.len(), 10);
+        assert_eq!(Kind::PostReply.as_str(), "postReply");
+        assert_eq!(Kind::PostReply.setting_column(), "post_replies");
+        assert_eq!(Kind::PostHeart.as_str(), "postHeart");
+        assert_eq!(Kind::PostHeart.setting_column(), "post_hearts");
+        assert_eq!(Kind::parse("postReply"), Some(Kind::PostReply));
+        assert_eq!(Kind::parse("postHeart"), Some(Kind::PostHeart));
+        assert_eq!(post_group("p1"), "post:p1");
         assert_eq!(Kind::ScreenshotPosted.as_str(), "screenshotPosted");
         assert_eq!(Kind::ScreenshotPosted.setting_column(), "screenshots");
         assert_eq!(

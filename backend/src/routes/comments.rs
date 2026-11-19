@@ -633,6 +633,8 @@ async fn notify_new_comment(
             dedupe: Dedupe::None,
             thread_id: None,
             collection_id: None,
+            post_id: None,
+            event_post_reply_id: None,
             now,
         };
         notif::notify_pool(&state.db, &n).await;
@@ -669,6 +671,8 @@ async fn notify_new_comment(
             dedupe: Dedupe::None,
             thread_id: Some(root.to_string()),
             collection_id: None,
+            post_id: None,
+            event_post_reply_id: None,
             now,
         };
         notif::notify_pool(&state.db, &n).await;
@@ -837,6 +841,8 @@ pub async fn heart(
             dedupe: Dedupe::Actor,
             thread_id: Some(meta.parent_id.clone().unwrap_or_else(|| id.clone())),
             collection_id: None,
+            post_id: None,
+            event_post_reply_id: None,
             now: chrono::Utc::now(),
         };
         notif::notify_pool(&state.db, &n).await;
@@ -982,6 +988,8 @@ pub async fn pin(
             dedupe: Dedupe::Group,
             thread_id: Some(id.clone()),
             collection_id: None,
+            post_id: None,
+            event_post_reply_id: None,
             now: chrono::Utc::now(),
         };
         notif::notify_pool(&state.db, &n).await;

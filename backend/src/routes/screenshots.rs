@@ -442,6 +442,8 @@ pub async fn create_screenshot(
                 dedupe: Dedupe::None,
                 thread_id: None,
                 collection_id: None,
+                post_id: None,
+                event_post_reply_id: None,
                 now: at,
             },
         )

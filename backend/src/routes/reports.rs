@@ -18,6 +18,7 @@ use crate::routes::comments::remove_comment;
 use crate::routes::games::{
     fetch_visible_game, limit_user, page_offset, parse_paging, remove_game,
 };
+use crate::routes::post_replies::remove_post_reply;
 use crate::routes::posts::remove_post;
 use crate::routes::screenshots::{is_admin, remove_screenshot};
 use crate::routes::users::clear_profile;
@@ -36,6 +37,7 @@ pub const TARGET_TYPES: &[&str] = &[
     "collection",
     "user",
     "post",
+    "postReply",
 ];
 
 #[derive(Debug, Serialize)]
@@ -59,11 +61,14 @@ pub struct Report {
     pub target_image_url: Option<String>,
     /// L7: the screenshot's full-size `imageUrl` while it exists; null for other target types.
     pub target_image_full_url: Option<String>,
+    /// F031: the post of a `post` or `postReply` report; null otherwise and for older rows of
+    /// other types.
+    pub target_post_id: Option<String>,
 }
 
 const REPORT_SELECT: &str = "SELECT r.id, r.target_type, r.target_id, r.target_preview, \
      r.target_game_id, r.reason, r.details, r.status, r.resolution, r.created_at, \
-     r.resolved_at, u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
+     r.resolved_at, r.target_post_id, u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
      u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version, s.id AS s_id, \
      s.ext AS s_ext \
      FROM reports r JOIN users u ON u.id = r.reporter_id \
@@ -90,6 +95,7 @@ fn report_from_row(row: &SqliteRow) -> Result<Report, sqlx::Error> {
             .as_deref()
             .zip(ext.as_deref())
             .map(|(id, ext)| image_url(id, ext)),
+        target_post_id: row.try_get("target_post_id")?,
     })
 }
 
@@ -104,7 +110,7 @@ async fn load_report(state: &AppState, id: &str) -> AppResult<Report> {
 
 fn unknown_target_type() -> AppError {
     AppError::validation(
-        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\" or \"post\"",
+        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\", \"post\" or \"postReply\"",
     )
 }
 
@@ -138,85 +144,113 @@ pub async fn create_report(
     if !TARGET_TYPES.contains(&body.target_type.as_str()) {
         return Err(unknown_target_type());
     }
-    let (game_id, preview): (Option<String>, String) = match body.target_type.as_str() {
-        "game" => {
-            let g = fetch_visible_game(&state, &body.target_id, Some(&user.id)).await?;
-            (Some(g.id), g.title)
-        }
-        "comment" => {
-            let row: Option<(String, String)> =
-                sqlx::query_as("SELECT game_id, body FROM comments WHERE id = ?")
-                    .bind(&body.target_id)
-                    .fetch_optional(&state.db)
-                    .await?;
-            let (game_id, text) = row.ok_or_else(|| AppError::not_found("Comment"))?;
-            // The comment's game must be visible to the reporter.
-            fetch_visible_game(&state, &game_id, Some(&user.id))
-                .await
-                .map_err(|_| AppError::not_found("Comment"))?;
-            (Some(game_id), text.chars().take(PREVIEW_MAX).collect())
-        }
-        "screenshot" => {
-            let row = sqlx::query(
-                "SELECT s.game_id, s.caption, u.username, u.display_name FROM screenshots s \
+    // F031: the third value is `target_post_id` (the post of a post / postReply report).
+    let (game_id, preview, post_id): (Option<String>, String, Option<String>) =
+        match body.target_type.as_str() {
+            "game" => {
+                let g = fetch_visible_game(&state, &body.target_id, Some(&user.id)).await?;
+                (Some(g.id), g.title, None)
+            }
+            "comment" => {
+                let row: Option<(String, String)> =
+                    sqlx::query_as("SELECT game_id, body FROM comments WHERE id = ?")
+                        .bind(&body.target_id)
+                        .fetch_optional(&state.db)
+                        .await?;
+                let (game_id, text) = row.ok_or_else(|| AppError::not_found("Comment"))?;
+                // The comment's game must be visible to the reporter.
+                fetch_visible_game(&state, &game_id, Some(&user.id))
+                    .await
+                    .map_err(|_| AppError::not_found("Comment"))?;
+                (
+                    Some(game_id),
+                    text.chars().take(PREVIEW_MAX).collect(),
+                    None,
+                )
+            }
+            "screenshot" => {
+                let row = sqlx::query(
+                    "SELECT s.game_id, s.caption, u.username, u.display_name FROM screenshots s \
                  JOIN users u ON u.id = s.author_id WHERE s.id = ?",
-            )
-            .bind(&body.target_id)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or_else(|| AppError::not_found("Screenshot"))?;
-            let game_id: String = row.try_get("game_id")?;
-            let caption: String = row.try_get("caption")?;
-            fetch_visible_game(&state, &game_id, Some(&user.id))
-                .await
-                .map_err(|_| AppError::not_found("Screenshot"))?;
-            let preview = if caption.is_empty() {
-                let display: String = row.try_get("display_name")?;
-                let name = if display.trim().is_empty() {
-                    row.try_get::<String, _>("username")?
+                )
+                .bind(&body.target_id)
+                .fetch_optional(&state.db)
+                .await?
+                .ok_or_else(|| AppError::not_found("Screenshot"))?;
+                let game_id: String = row.try_get("game_id")?;
+                let caption: String = row.try_get("caption")?;
+                fetch_visible_game(&state, &game_id, Some(&user.id))
+                    .await
+                    .map_err(|_| AppError::not_found("Screenshot"))?;
+                let preview = if caption.is_empty() {
+                    let display: String = row.try_get("display_name")?;
+                    let name = if display.trim().is_empty() {
+                        row.try_get::<String, _>("username")?
+                    } else {
+                        display
+                    };
+                    format!("Screenshot by {name}")
                 } else {
-                    display
+                    caption.chars().take(PREVIEW_MAX).collect()
                 };
-                format!("Screenshot by {name}")
-            } else {
-                caption.chars().take(PREVIEW_MAX).collect()
-            };
-            (Some(game_id), preview)
-        }
-        // F008: the collection must be visible to the reporter (private → owner/admin only).
-        "collection" => {
-            let admin = is_admin(&state, Some(&user.id)).await?;
-            let c = load_collection(&state, &body.target_id, Some(&user.id), admin).await?;
-            (None, c.title.chars().take(PREVIEW_MAX).collect())
-        }
-        // F028: a profile; usernames never change, so the preview stays accurate.
-        "user" => {
-            let row: Option<(String, String)> =
-                sqlx::query_as("SELECT id, username FROM users WHERE id = ?")
-                    .bind(&body.target_id)
-                    .fetch_optional(&state.db)
-                    .await?;
-            let (id, username) = row.ok_or_else(|| AppError::not_found("User"))?;
-            if id == user.id {
-                return Err(AppError::validation("You can't report yourself"));
+                (Some(game_id), preview, None)
             }
-            (None, format!("@{username}"))
-        }
-        // F030: posts are public; the preview is the body's first 140 code points.
-        "post" => {
-            let row: Option<(String, String)> =
-                sqlx::query_as("SELECT author_id, body FROM posts WHERE id = ?")
-                    .bind(&body.target_id)
-                    .fetch_optional(&state.db)
-                    .await?;
-            let (author_id, text) = row.ok_or_else(|| AppError::not_found("Post"))?;
-            if author_id == user.id {
-                return Err(AppError::validation("You can't report your own post"));
+            // F008: the collection must be visible to the reporter (private → owner/admin only).
+            "collection" => {
+                let admin = is_admin(&state, Some(&user.id)).await?;
+                let c = load_collection(&state, &body.target_id, Some(&user.id), admin).await?;
+                (None, c.title.chars().take(PREVIEW_MAX).collect(), None)
             }
-            (None, text.chars().take(PREVIEW_MAX).collect())
-        }
-        _ => return Err(unknown_target_type()),
-    };
+            // F028: a profile; usernames never change, so the preview stays accurate.
+            "user" => {
+                let row: Option<(String, String)> =
+                    sqlx::query_as("SELECT id, username FROM users WHERE id = ?")
+                        .bind(&body.target_id)
+                        .fetch_optional(&state.db)
+                        .await?;
+                let (id, username) = row.ok_or_else(|| AppError::not_found("User"))?;
+                if id == user.id {
+                    return Err(AppError::validation("You can't report yourself"));
+                }
+                (None, format!("@{username}"), None)
+            }
+            // F030: posts are public; the preview is the body's first 140 code points.
+            "post" => {
+                let row: Option<(String, String)> =
+                    sqlx::query_as("SELECT author_id, body FROM posts WHERE id = ?")
+                        .bind(&body.target_id)
+                        .fetch_optional(&state.db)
+                        .await?;
+                let (author_id, text) = row.ok_or_else(|| AppError::not_found("Post"))?;
+                if author_id == user.id {
+                    return Err(AppError::validation("You can't report your own post"));
+                }
+                (
+                    None,
+                    text.chars().take(PREVIEW_MAX).collect(),
+                    Some(body.target_id.clone()),
+                )
+            }
+            // F031: replies are public like posts; the preview is the body's first 140 code points.
+            "postReply" => {
+                let row: Option<(String, String, String)> = sqlx::query_as(
+                    "SELECT post_id, author_id, body FROM post_replies WHERE id = ?",
+                )
+                .bind(&body.target_id)
+                .fetch_optional(&state.db)
+                .await?;
+                let (post_id, author_id, text) = row.ok_or_else(|| AppError::not_found("Reply"))?;
+                if author_id == user.id {
+                    return Err(AppError::validation("You can't report your own reply"));
+                }
+                (
+                    None,
+                    text.chars().take(PREVIEW_MAX).collect(),
+                    Some(post_id),
+                )
+            }
+            _ => return Err(unknown_target_type()),
+        };
 
     let existing: Option<(String,)> = sqlx::query_as(
         "SELECT id FROM reports WHERE reporter_id = ? AND target_type = ? AND target_id = ? \
@@ -236,8 +270,8 @@ pub async fn create_report(
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO reports (id, target_type, target_id, target_game_id, target_preview, \
-         reason, details, reporter_id, status, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+         reason, details, reporter_id, status, created_at, target_post_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
     )
     .bind(&id)
     .bind(&body.target_type)
@@ -248,6 +282,7 @@ pub async fn create_report(
     .bind(&details)
     .bind(&user.id)
     .bind(now_rfc3339())
+    .bind(&post_id)
     .execute(&state.db)
     .await?;
     Ok((StatusCode::CREATED, Json(load_report(&state, &id).await?)))
@@ -372,6 +407,9 @@ pub async fn admin_resolve_report(
         ("clearProfile", "user") => clear_profile(&state, &report.target_id).await?,
         // F030: same effects as `DELETE /api/posts/{id}`; a post already gone is a no-op.
         ("delete", "post") => remove_post(&state, &report.target_id).await?,
+        // F031: same effects as `DELETE /api/post-replies/{id}`; a reply already gone is a
+        // no-op.
+        ("delete", "postReply") => remove_post_reply(&state, &report.target_id).await?,
         _ => {}
     }
 

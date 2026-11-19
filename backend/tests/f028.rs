@@ -860,7 +860,7 @@ async fn user_reports_and_action_rules() {
     );
     assert_422(
         &report(&t, &p_tok, "bogus", &uid).await,
-        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\" or \"post\"",
+        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\", \"post\" or \"postReply\"",
     );
 
     let user_msg = "action must be \"dismiss\" or \"clearProfile\" for user reports";
