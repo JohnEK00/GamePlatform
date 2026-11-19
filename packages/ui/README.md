@@ -95,7 +95,10 @@ Hosts (e.g. native menus) drive the UI with `window` CustomEvents; each does not
 | `/notifications` | In-app notifications (F007): All / Unread (`?filter=unread`), cursor "Load more", Mark all as read. The header bell (signed in) opens a 10-item panel with "See all" linking here. | 🔒 |
 | `/studio` | In-browser Studio: editor, live preview, open (template / folder / .zip / my game, `?open={gameId}`), publish & publish update | – (publishing needs a session) |
 | `/admin` | Moderation queue (`?status=open\|resolved&page=`); needs the `admin` role | 🔒 |
-| `/u/:username` | Profile (`?page=`) | – |
+| `/u/:username` | Profile Overview (F028): banner, links, stats, shelves. Wrong-case usernames redirect to the canonical case; the old `?page=n` redirects to `/u/:username/games?page=n` | – |
+| `/u/:username/games`, `/u/:username/posts`, `/u/:username/screenshots`, `/u/:username/collections` | Profile sections (F028/F030) inside the profile shell (`?page=`) | – |
+| `/me` | Redirects to your own profile (F028) | 🔒 |
+| `/p/:id` | Post permalink (F030); `?attach=game:{id}` or `collection:{id}` on the composer routes pre-fills an attachment | – |
 | `/u/:username/followers`, `/u/:username/following` | Follow lists (`?page=`) | – |
 | `/settings` | Profile, avatar, notification settings (`#notifications`, per-kind switches), `platform.extraSettings` | 🔒 |
 | `/login`, `/register` | Auth (`?next=/path` redirect) | – |
@@ -121,6 +124,8 @@ Everything is exported from the package root (`src/index.ts` is the source of tr
   - The `OsNotifications` type.
   - F018: `muteActionFor`. F024: `screenshotThumb`, `NotificationShot` and the `NotificationScreenshot` type (screenshot-of-your-game notifications).
 - **Screenshots (F005):** `useScreenshotCapture`, `ScreenshotTray`, `ScreenshotDialog`, `ScreenshotGallery`, `launderImage`, `sniffImage`, `readImageHeader`, `fitImageForUpload`, `browserImageCodec`, `screenshotFileName`, `sanitizeScreenshotCaption`, the `SCREENSHOT_*` limits, `SCREENSHOTS_CHANGED_EVENT`, `PLAYER_SCREENSHOT_EVENT`. F015: `ScreenshotLightbox`, `ProfileScreenshots` (`PROFILE_SCREENSHOTS_PER_PAGE`), `listUserScreenshots`, `gameScreenshotsPath`, `SCREENSHOTS_SECTION`, `pagesForOffset`, and the `screenshotPosted` feed item kind.
+- **Profiles (F028):** `ProfileHeader` (`ProfileHeaderSkeleton`), `CopyLinkButton`, `ProfileLinksEditor`, `BannerSettings`, `MyProfileRedirect`, `useProfileOutlet`, and helpers from `profile.ts` and `share.ts` (`validateProfileLinkLabel`, `linkLabelErrors`, `linksForSave`, `trimLinkLabel`, `BANNER_MAX_BYTES`, `collectionShareUrl`, `formatMonthYear`).
+- **Posts (F030):** `PostCard` (`PostBody`, `PostCardSkeleton`), `PostAttachmentCard`, `PostComposer`, `ProfilePosts`, `PostAboutThisLink`, `PostPage`, `postShareUrl`, and helpers from `posts.ts` (`normalizePostBody`, `postLength`, `validatePostBody`, `linkifyPost`, `postPath`, `parseAttachParam`, `postComposePath`, `isValidPost`); the `postCreated` feed item kind.
 - **Controls (F009, F016):** `ControlsPanel`, `ControlsSummary`, `KeyCaptureButton`, `GamepadCaptureButton`, `useControlsSync`, `startGamepadCapture`, the action/override helpers from `controls.ts` (`validateActions`, `effectiveActions`, `readOverrides`, `useStoredOverrides`, `readBindings`, `writeBindings`, `useStoredBindings`, `keyLabel`, …), `PLAYER_CONTROLS_EVENT`.
 - **Studio:** `StudioPreview`, `CodeEditor`, `PublishDialog`, `OpenGameDialog`, `STUDIO_TEMPLATES`, the zip writer/reader (`createZip`, `createZipAsync`, `readZip`, `MAX_OPEN_ZIP_BYTES`) and the project helpers (`buildBundleZip`, `validateProject`, `projectFromZip`, `projectFromFileList`, …), `STUDIO_OPEN_FOLDER_EVENT`.
 - **Pages:** `HomePage`, `GamePage`, `UploadPage`, `EditGamePage`, `DashboardPage`, `GameStatsPage`, `FavoritesPage`, `FeedPage`, `StudioPage`, `AdminPage`, `ProfilePage`, `FollowListPage`, `SettingsPage`, `NotificationsPage`, `LoginPage`, `RegisterPage`, `DocsPage`, `NotFoundPage`.

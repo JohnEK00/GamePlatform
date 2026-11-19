@@ -42,7 +42,7 @@ Desktop shell that mounts `<WebGameApp>` from `@webgame/ui` (hash router) inside
   - File → Upload game (`#/upload`), Open local game folder… (Ctrl+O; on `#/studio` it dispatches the
     `STUDIO_OPEN_FOLDER_EVENT` window event from @webgame/ui, otherwise it sets `window.__webgameStudioOpenPending`
     and navigates to `#/studio`, so loading goes through the Studio's normal Open folder flow), Settings (`#/settings`), Quit
-  - View → Feed (Ctrl+Shift+F, `#/feed`), Notifications (Ctrl+Shift+N, `#/notifications`), Take Screenshot
+  - View → My Profile (`#/me`), Feed (Ctrl+Shift+F, `#/feed`), Notifications (Ctrl+Shift+N, `#/notifications`), Collections (Ctrl+Shift+L, `#/collections`), Take Screenshot
     (Ctrl+Shift+S), Controls (Ctrl+Shift+K), Reload (Ctrl+R), Toggle Fullscreen (F11), Toggle Developer Tools (debug builds only)
   - Help → Make a game (`#/docs`), About (name + version dialog)
 
