@@ -131,7 +131,7 @@ describe("FeedPage: Posts tab (F030 section 0.16)", () => {
     const items = [postItem("3", post("p3", { body: "Third", canDelete: true })), gameItem("2", "Space Dodge"), postItem("1")];
     const { del } = await setup(async () => ({ items, nextCursor: null }));
     const article = document.querySelector<HTMLElement>("article[data-feed-id='3']")!;
-    fireEvent.click(within(article).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(article).getByRole("button", { name: /^Delete post by / }));
     await act(async () => {
       fireEvent.click(within(screen.getByRole("dialog", { name: "Delete this post?" })).getByRole("button", { name: "Delete" }));
     });
@@ -146,7 +146,7 @@ describe("FeedPage: Posts tab (F030 section 0.16)", () => {
   it("deleting the only post on the Posts tab shows the empty state and focuses the panel", async () => {
     localStorage.setItem(FEED_TAB_KEY, "posts");
     await setup(async () => ({ items: [postItem("3", post("p3", { canDelete: true }))], nextCursor: null }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delete post by / }));
     await act(async () => {
       fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
     });
@@ -157,7 +157,7 @@ describe("FeedPage: Posts tab (F030 section 0.16)", () => {
 
   it("deleting the last loaded post with more pages focuses Load more", async () => {
     await setup(async () => ({ items: [postItem("3", post("p3", { canDelete: true }))], nextCursor: "3" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delete post by / }));
     await act(async () => {
       fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
     });

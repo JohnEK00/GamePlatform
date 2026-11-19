@@ -11,7 +11,8 @@ import { MutedList } from "./MutedList";
 type Key = keyof Settings;
 
 /**
- * The switches, in display order (F007 spec § 2.4; F018 adds `pins`, F021 `collections`, F024 adds `screenshots`).
+ * The switches, in display order (F007 spec § 2.4; F018 adds `pins`, F021 `collections`, F024 adds `screenshots`,
+ * F031 `postReplies` and `postHearts` right after `pins`).
  * A switch is shown only when the server's settings have its field (older servers omit `pins` / `collections` /
  * `screenshots`).
  */
@@ -20,6 +21,8 @@ export const NOTIFICATION_SETTING_FIELDS: readonly { key: Key; label: string; hi
   { key: "replies", label: "Replies to my comments and to me", hint: "Someone answers in your thread or replies to you." },
   { key: "hearts", label: "Hearts on my comments", hint: "Someone hearts a comment you wrote." },
   { key: "pins", label: "Pins on your comments", hint: "A creator pins a comment you wrote." },
+  { key: "postReplies", label: "Replies to my posts", hint: "Someone replies to a post you wrote, or answers your reply on a post." },
+  { key: "postHearts", label: "Hearts on my posts", hint: "Someone hearts a post you wrote." },
   { key: "follows", label: "New followers", hint: "Someone starts following you." },
   { key: "newGames", label: "New games from creators I follow", hint: "A creator you follow publishes a new game." },
   { key: "collections", label: "My games added to collections", hint: "Someone adds a game you made to a public collection." },

@@ -55,7 +55,7 @@ const nav = () => screen.getByRole("navigation", { name: "Profile sections" });
 const cards = () => Array.from(document.querySelectorAll<HTMLElement>("article.pf-post"));
 
 async function deleteCard(card: HTMLElement) {
-  fireEvent.click(within(card).getByRole("button", { name: "Delete" }));
+  fireEvent.click(within(card).getByRole("button", { name: /^Delete post by / }));
   await act(async () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "Delete this post?" })).getByRole("button", { name: "Delete" }));
   });

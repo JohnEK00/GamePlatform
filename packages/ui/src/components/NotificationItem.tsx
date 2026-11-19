@@ -85,6 +85,16 @@ export function NotificationItem({ item, onActivate, variant = "panel", showMute
                 📷
               </span>
             )}
+            {item.kind === "postReply" && (
+              <span className="pf-notif__kind pf-notif__kind--post-reply" aria-hidden="true">
+                💬
+              </span>
+            )}
+            {item.kind === "postHeart" && (
+              <span className="pf-notif__kind pf-notif__kind--post-heart" aria-hidden="true">
+                ♥
+              </span>
+            )}
             <time dateTime={item.updatedAt}>{timeAgo(item.updatedAt)}</time>
           </span>
         </span>

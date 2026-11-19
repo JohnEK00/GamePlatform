@@ -77,6 +77,9 @@ import type {
   NotificationMuteList,
   CreatePostRequest,
   Post,
+  PostReply,
+  CreatePostReplyRequest,
+  PostHeartResponse,
 } from "./types";
 
 const STATUS_CODES: Record<number, ApiErrorCode> = {
@@ -783,6 +786,43 @@ export class ApiClient {
       query: { page: query.page, perPage: query.perPage },
       signal,
     });
+  }
+
+  // ---------- F031: Post replies and hearts ----------
+  /** Public, oldest first. perPage: default 50, 1–200. `total` = the post's `replyCount`. 404 `Post not found`. */
+  listPostReplies(postId: string, query: PageQuery = {}, signal?: AbortSignal): Promise<Page<PostReply>> {
+    return this.request(`/api/posts/${encodeURIComponent(postId)}/replies`, {
+      query: { page: query.page, perPage: query.perPage },
+      signal,
+    });
+  }
+  /** 201 `PostReply` as the caller sees it. 422 body rules, lock and the 200-reply cap; 404 post / reply; 429. */
+  createPostReply(postId: string, body: CreatePostReplyRequest): Promise<PostReply> {
+    return this.request(`/api/posts/${encodeURIComponent(postId)}/replies`, { method: "POST", json: body });
+  }
+  /** The reply's author, the post's author or an admin. 204. */
+  deletePostReply(id: string): Promise<void> {
+    return this.request(`/api/post-replies/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  /** Heart a post (idempotent). 422 on your own post. */
+  heartPost(id: string): Promise<PostHeartResponse> {
+    return this.request(`/api/posts/${encodeURIComponent(id)}/heart`, { method: "PUT" });
+  }
+  /** Remove the viewer's heart (idempotent). */
+  unheartPost(id: string): Promise<PostHeartResponse> {
+    return this.request(`/api/posts/${encodeURIComponent(id)}/heart`, { method: "DELETE" });
+  }
+  /** PUT or DELETE depending on `heart`. */
+  setPostHeart(id: string, heart: boolean): Promise<PostHeartResponse> {
+    return heart ? this.heartPost(id) : this.unheartPost(id);
+  }
+  /** Author or admin: turn replies off (idempotent). Returns the post as the caller sees it. */
+  lockPost(id: string): Promise<Post> {
+    return this.request(`/api/posts/${encodeURIComponent(id)}/lock`, { method: "PUT" });
+  }
+  /** Author or admin: turn replies on (idempotent). */
+  unlockPost(id: string): Promise<Post> {
+    return this.request(`/api/posts/${encodeURIComponent(id)}/lock`, { method: "DELETE" });
   }
 }
 

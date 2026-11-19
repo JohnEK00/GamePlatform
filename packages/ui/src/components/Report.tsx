@@ -79,7 +79,9 @@ export function ReportDialog({ open, targetType, targetId, targetLabel, onClose 
             ? "profile"
             : targetType === "post"
               ? "post"
-              : "comment";
+              : targetType === "postReply"
+                ? "reply"
+                : "comment";
   return (
     <div className="pf-modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <form className="pf-modal pf-report" role="dialog" aria-modal="true" aria-labelledby={`${uid}-title`} ref={ref} onSubmit={submit}>
@@ -135,12 +137,15 @@ export function ReportButton({
   targetLabel,
   className = "pf-linkbtn",
   children = "Report",
+  ariaLabel,
 }: {
   targetType: ReportTargetType;
   targetId: string;
   targetLabel?: string;
   className?: string;
   children?: ReactNode;
+  /** F031: the button's accessible name (e.g. "Report post by Mia"); absent = no aria-label. */
+  ariaLabel?: string;
 }) {
   const { user } = useAuth();
   const toast = useToast();
@@ -164,6 +169,7 @@ export function ReportButton({
           setOpen(true);
         }}
         aria-haspopup="dialog"
+        aria-label={ariaLabel}
       >
         {children}
       </button>

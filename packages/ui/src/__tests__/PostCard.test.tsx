@@ -120,14 +120,14 @@ describe("PostCard attachments", () => {
 describe("PostCard actions (F030 sections 0.13 and 0.14)", () => {
   it("anonymous: Report, no Delete; Report prompts to log in", async () => {
     const { article } = await show(post("p1"));
-    expect(within(article).queryByRole("button", { name: "Delete" })).toBeNull();
-    fireEvent.click(within(article).getByRole("button", { name: "⚑ Report" }));
+    expect(within(article).queryByRole("button", { name: /^Delete post by / })).toBeNull();
+    fireEvent.click(within(article).getByRole("button", { name: /^Report post by / }));
     expect(await screen.findByText("Log in to report content")).toBeTruthy();
   });
 
   it("another signed-in user: Report opens 'Report post'", async () => {
     const { article } = await show(post("p1"), { me: leoUser });
-    fireEvent.click(within(article).getByRole("button", { name: "⚑ Report" }));
+    fireEvent.click(within(article).getByRole("button", { name: /^Report post by / }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("heading").textContent).toBe("Report post");
   });
@@ -139,8 +139,8 @@ describe("PostCard actions (F030 sections 0.13 and 0.14)", () => {
 
   it("canDelete: Delete and no Report", async () => {
     const { article } = await show(post("p1", { canDelete: true }), { me: leoUser });
-    expect(within(article).queryByRole("button", { name: "⚑ Report" })).toBeNull();
-    const del = within(article).getByRole("button", { name: "Delete" });
+    expect(within(article).queryByRole("button", { name: /^Report post by / })).toBeNull();
+    const del = within(article).getByRole("button", { name: /^Delete post by / });
     expect(del.getAttribute("aria-haspopup")).toBe("dialog");
     expect(del.className).toContain("pf-btn--danger-text");
   });
@@ -149,7 +149,7 @@ describe("PostCard actions (F030 sections 0.13 and 0.14)", () => {
     const onDeleted = vi.fn();
     const p = post("p1", { canDelete: true });
     const { article, del } = await show(p, { me: miaUser, onDeleted });
-    fireEvent.click(within(article).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(article).getByRole("button", { name: /^Delete post by / }));
     const dialog = screen.getByRole("dialog", { name: "Delete this post?" });
     expect(within(dialog).getByText("It's removed from the profile and from followers' feeds. This can't be undone.")).toBeTruthy();
     // Cancel first: nothing happens.
@@ -157,7 +157,7 @@ describe("PostCard actions (F030 sections 0.13 and 0.14)", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(del).not.toHaveBeenCalled();
 
-    fireEvent.click(within(article).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(article).getByRole("button", { name: /^Delete post by / }));
     await act(async () => {
       fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
     });
@@ -171,7 +171,7 @@ describe("PostCard actions (F030 sections 0.13 and 0.14)", () => {
     const onDeleted = vi.fn();
     const { article, del } = await show(post("p1", { canDelete: true }), { me: miaUser, onDeleted });
     del.mockRejectedValue(new ApiError("forbidden", "Not allowed", 403));
-    const opener = within(article).getByRole("button", { name: "Delete" });
+    const opener = within(article).getByRole("button", { name: /^Delete post by / });
     opener.focus();
     fireEvent.click(opener);
     await act(async () => {
@@ -183,6 +183,6 @@ describe("PostCard actions (F030 sections 0.13 and 0.14)", () => {
     expect(onDeleted).not.toHaveBeenCalled();
     expect(article.isConnected).toBe(true);
     // Focus goes back to the Delete button.
-    expect(document.activeElement).toBe(within(article).getByRole("button", { name: "Delete" }));
+    expect(document.activeElement).toBe(within(article).getByRole("button", { name: /^Delete post by / }));
   });
 });

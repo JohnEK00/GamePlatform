@@ -4,9 +4,10 @@ import type { Post } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
 import { useToast } from "../context/toast";
-import { linkifyPost, postPath } from "../posts";
+import { hasPostSocial, linkifyPost, postPath, repliesLinkLabel, repliesLinkText } from "../posts";
 import { errorMessage, formatDate, timeAgo } from "../util";
 import { Avatar, ConfirmDialog, Skeleton } from "./common";
+import { HeartButton, type HeartState } from "./HeartButton";
 import { PostAttachmentCard } from "./PostAttachmentCard";
 import { ReportButton } from "./Report";
 
@@ -35,10 +36,17 @@ export type PostCardProps = {
   onDeleted?: (post: Post) => void;
   /** Feed item id: adds `data-kind="postCreated" data-feed-id` (the feed's focus rule finds items by it). */
   feedId?: string;
+  /**
+   * F031: the card sits above its own reply thread (the permalink page), so the replies link is hidden. Default false.
+   */
+  inThread?: boolean;
 };
 
-/** F030 § 0.13: one post (head, body, attachment, Delete or Report). */
-export function PostCard({ post, onDeleted, feedId }: PostCardProps) {
+/**
+ * F030 § 0.13: one post (head, body, attachment, Delete or Report). F031 § 0.11: with the server's F031 fields the
+ * actions row always shows the heart and (outside the thread) a replies link before Delete / Report.
+ */
+export function PostCard({ post, onDeleted, feedId, inThread = false }: PostCardProps) {
   const api = useApi();
   const toast = useToast();
   const { user } = useAuth();
@@ -52,6 +60,12 @@ export function PostCard({ post, onDeleted, feedId }: PostCardProps) {
   const isAuthor = !!user && (user.id === author.id || user.username.toLowerCase() === author.username.toLowerCase());
   const canDelete = post.canDelete === true;
   const showReport = !canDelete && !isAuthor;
+  const social = hasPostSocial(post);
+  const hearts = social ? Math.max(0, post.hearts ?? 0) : 0;
+  const replyCount = social ? Math.max(0, post.replyCount ?? 0) : 0;
+  const showReplies = social && !inThread && !(post.locked === true && replyCount === 0);
+  const onToggle = (on: boolean): Promise<HeartState> =>
+    api.setPostHeart(post.id, on).then((r) => ({ hearts: r.hearts, myHeart: r.hearted, creatorHeart: false }));
 
   const doDelete = async () => {
     setBusy(true);
@@ -91,22 +105,36 @@ export function PostCard({ post, onDeleted, feedId }: PostCardProps) {
       </div>
       <PostBody body={post.body} />
       {post.attachment ? <PostAttachmentCard attachment={post.attachment} /> : null}
-      {(canDelete || showReport) && (
-        <div className="pf-post__actions">
+      {(social || canDelete || showReport) && (
+        <div className={`pf-post__actions${social ? " pf-post__actions--social" : ""}`}>
+          {social && (
+            <HeartButton
+              comment={{ id: post.id, author, hearts, myHeart: post.myHeart === true, creatorHeart: false }}
+              interactive={!!user && !isAuthor}
+              subject="post"
+              onToggle={onToggle}
+            />
+          )}
+          {showReplies && (
+            <Link className="pf-linkbtn pf-post__replies" to={postPath(post.id)} aria-label={repliesLinkLabel(replyCount, name)}>
+              <span aria-hidden="true">💬</span> {repliesLinkText(replyCount)}
+            </Link>
+          )}
           {canDelete ? (
             <button
               type="button"
               className="pf-btn pf-btn--ghost pf-btn--sm pf-btn--danger-text"
               aria-haspopup="dialog"
+              aria-label={`Delete post by ${name}`}
               onClick={() => setConfirm(true)}
             >
               Delete
             </button>
-          ) : (
-            <ReportButton targetType="post" targetId={post.id} className="pf-btn pf-btn--ghost pf-btn--sm">
+          ) : showReport ? (
+            <ReportButton targetType="post" targetId={post.id} className="pf-btn pf-btn--ghost pf-btn--sm" ariaLabel={`Report post by ${name}`}>
               ⚑ Report
             </ReportButton>
-          )}
+          ) : null}
         </div>
       )}
       <ConfirmDialog

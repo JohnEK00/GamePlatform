@@ -438,6 +438,19 @@ export { PostPage } from "./pages/PostPage";
 export { ProfilePostsTab } from "./pages/ProfileSections";
 export type { PostsLocationState } from "./pages/ProfileSections";
 
+// F031: post replies and hearts (PostReply, CreatePostReplyRequest, PostHeartResponse come from "./api/types")
+export {
+  POST_REPLY_CAP,
+  REPLY_LINES_MESSAGE,
+  postReplyPath,
+  repliesLinkText,
+  repliesLinkLabel,
+  hasPostSocial,
+  isValidPostReply,
+} from "./posts";
+export { PostThread, PostReplyItem, PostReplyForm, POST_REPLY_FORM_ID } from "./components/PostThread";
+export type { PostThreadProps, PostReplyItemProps, PostReplyFormProps } from "./components/PostThread";
+
 // Pages
 export { HomePage } from "./pages/HomePage";
 export { GamePage } from "./pages/GamePage";

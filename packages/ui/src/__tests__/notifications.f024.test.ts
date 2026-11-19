@@ -24,8 +24,8 @@ const shot = (over: Partial<Notification> = {}): Notification =>
   });
 
 describe("F024: screenshotPosted summaries (spec § 0.8)", () => {
-  it("is a known kind, listed last", () => {
-    expect(NOTIFICATION_KINDS[NOTIFICATION_KINDS.length - 1]).toBe("screenshotPosted");
+  it("is a known kind, listed after the F021 kind (F031 appends its two kinds after it)", () => {
+    expect(NOTIFICATION_KINDS.indexOf("screenshotPosted")).toBe(NOTIFICATION_KINDS.indexOf("addedToCollection") + 1);
     expect(isKnownNotification(shot())).toBe(true);
   });
 
