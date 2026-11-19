@@ -1628,3 +1628,112 @@ async fn review11_banner_race_is_a_conflict() {
     assert!(me["bannerUrl"].is_string());
     assert!(file.exists());
 }
+
+async fn banner_state(t: &TestApp, uid: &str) -> (Option<String>, i64) {
+    sqlx::query_as("SELECT banner_ext, banner_version FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_one(&t.state.db)
+        .await
+        .unwrap()
+}
+
+/// Let spawned tasks run as far as they can (they can't pass a held lock).
+async fn settle() {
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test]
+async fn review11_losing_banner_upload_never_overwrites_the_winner() {
+    use webgame_server::routes::users::store_banner;
+    let t = setup().await;
+    let (_, uid) = t.register("mia").await;
+    let file = t.state.storage.banners_dir().join(format!("{uid}.jpg"));
+    let (_, v) = banner_state(&t, &uid).await;
+    store_banner(&t.state, &uid, v, b"winner").await.unwrap();
+    let err = store_banner(&t.state, &uid, v, b"loser").await.unwrap_err();
+    assert_eq!(err.status(), StatusCode::CONFLICT);
+    assert_eq!(std::fs::read(&file).unwrap(), b"winner");
+    assert_eq!(banner_state(&t, &uid).await, (Some("jpg".into()), v + 1));
+}
+
+#[tokio::test]
+async fn review11_banner_writers_share_the_user_lock() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+    use webgame_server::routes::users::{clear_profile, store_banner};
+
+    let t = setup().await;
+    let (mia, uid) = t.register("mia").await;
+    let file = t.state.storage.banners_dir().join(format!("{uid}.jpg"));
+
+    // 1. An upload waits for the lock before writing anything.
+    let (_, v) = banner_state(&t, &uid).await;
+    let guard = t.state.banner_locks.lock(&uid).await;
+    let (state, id) = (t.state.clone(), uid.clone());
+    let upload = tokio::spawn(async move { store_banner(&state, &id, v, b"new").await });
+    settle().await;
+    assert!(!upload.is_finished());
+    assert!(
+        !file.exists(),
+        "no file is written while another writer holds the lock"
+    );
+    assert_eq!(banner_state(&t, &uid).await, (None, v));
+    drop(guard);
+    upload.await.unwrap().unwrap();
+    assert!(file.exists());
+    assert_eq!(banner_state(&t, &uid).await, (Some("jpg".into()), v + 1));
+
+    // 2. DELETE /api/users/me/banner waits too (UPDATE and file removal stay together).
+    let guard = t.state.banner_locks.lock(&uid).await;
+    let req = Request::builder()
+        .method(Method::DELETE)
+        .uri("/api/users/me/banner")
+        .header("host", "localhost:8080")
+        .header("authorization", format!("Bearer {mia}"))
+        .body(Body::empty())
+        .unwrap();
+    let router = t.router.clone();
+    let delete = tokio::spawn(async move { router.oneshot(req).await.unwrap().status() });
+    settle().await;
+    assert!(!delete.is_finished());
+    assert!(file.exists());
+    assert_eq!(banner_state(&t, &uid).await.0.as_deref(), Some("jpg"));
+    drop(guard);
+    assert_eq!(delete.await.unwrap(), StatusCode::OK);
+    assert!(!file.exists());
+    assert_eq!(banner_state(&t, &uid).await.0, None);
+
+    // 3. The admin clearProfile path as well.
+    let (_, v) = banner_state(&t, &uid).await;
+    store_banner(&t.state, &uid, v, b"again").await.unwrap();
+    let guard = t.state.banner_locks.lock(&uid).await;
+    let (state, id) = (t.state.clone(), uid.clone());
+    let clear = tokio::spawn(async move { clear_profile(&state, &id).await });
+    settle().await;
+    assert!(!clear.is_finished());
+    assert!(file.exists());
+    drop(guard);
+    clear.await.unwrap().unwrap();
+    assert!(!file.exists());
+    assert_eq!(banner_state(&t, &uid).await.0, None);
+}
+
+#[tokio::test]
+async fn admin_can_reply_whether_or_not_the_post_is_locked() {
+    // Review: the admin lookup no longer depends on the lock state read up front, so an admin
+    // reply works whether the post is locked or not (the race itself has no test hook).
+    let t = admin_app().await;
+    let (mia, _) = t.register("mia").await;
+    let (boss, _) = t.register("boss").await;
+    let pid = text_post(&t, &mia, "Post").await;
+    let r = reply_ok(&t, &boss, &pid, "admin, unlocked", None).await;
+    assert_eq!(r["canDelete"], true);
+    assert_eq!(
+        lock(&t, Some(&mia), &pid, true).await.status,
+        StatusCode::OK
+    );
+    reply_ok(&t, &boss, &pid, "admin, locked", None).await;
+}

@@ -207,9 +207,9 @@ pub async fn create_post_reply(
         }
     };
 
-    let is_author = meta.author_id == user.id;
-    // The admin lookup is only needed when the post is locked (the guarded insert re-checks).
-    let moderator = is_author || (meta.locked && is_admin(&state, Some(&user.id)).await?);
+    // Looked up even when the post is unlocked now: it may be locked before the guarded insert
+    // re-checks, and an admin must still get through then (`?8`).
+    let moderator = meta.author_id == user.id || is_admin(&state, Some(&user.id)).await?;
     if meta.locked && !moderator {
         return Err(AppError::validation(REPLIES_OFF));
     }

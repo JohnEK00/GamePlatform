@@ -93,6 +93,51 @@ impl Drop for KeyGuard {
     }
 }
 
+/// Waiting per-key mutual exclusion over a fixed set of async mutexes (a key hashes to one
+/// stripe, so unrelated keys may share one; memory stays bounded). Unlike [`KeyLocks`] a
+/// second caller waits instead of failing. Used to serialise each user's banner writes
+/// (review 11 L5 follow-up).
+#[derive(Clone)]
+pub struct StripedLocks {
+    stripes: Arc<[Arc<tokio::sync::Mutex<()>>]>,
+}
+
+/// Stripes in [`StripedLocks::default`].
+pub const STRIPES: usize = 64;
+
+impl Default for StripedLocks {
+    fn default() -> Self {
+        Self::new(STRIPES)
+    }
+}
+
+impl StripedLocks {
+    pub fn new(stripes: usize) -> Self {
+        Self {
+            stripes: (0..stripes.max(1))
+                .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+                .collect(),
+        }
+    }
+
+    fn stripe(&self, key: &str) -> &Arc<tokio::sync::Mutex<()>> {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+        // A fixed (unseeded) hasher: the stripe of a key never changes during a run.
+        let h = BuildHasherDefault::<DefaultHasher>::default().hash_one(key);
+        &self.stripes[(h % self.stripes.len() as u64) as usize]
+    }
+
+    /// Wait for and hold `key`'s stripe until the guard is dropped.
+    pub async fn lock(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.stripe(key).clone().lock_owned().await
+    }
+
+    /// `key`'s stripe if it is free right now (tests use this to check a holder).
+    pub fn try_lock(&self, key: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.stripe(key).clone().try_lock_owned().ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +150,28 @@ mod tests {
         assert!(l.try_claim("b").is_some());
         drop(g);
         assert!(l.try_claim("a").is_some());
+    }
+
+    #[tokio::test]
+    async fn striped_lock_waits_and_is_stable() {
+        let l = StripedLocks::new(4);
+        let g = l.lock("user-1").await;
+        assert!(l.try_lock("user-1").is_none());
+        let l2 = l.clone();
+        let waiter = tokio::spawn(async move {
+            let _g = l2.lock("user-1").await;
+        });
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!waiter.is_finished());
+        drop(g);
+        waiter.await.unwrap();
+        assert!(l.try_lock("user-1").is_some());
+        // One stripe minimum; every key maps to it.
+        let one = StripedLocks::new(0);
+        let _a = one.lock("a").await;
+        assert!(one.try_lock("b").is_none());
     }
 
     #[tokio::test]
