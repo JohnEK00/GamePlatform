@@ -3,18 +3,21 @@
 //!
 //! A creator is a user with at least one published game. The list is public and the same for
 //! every viewer apart from `isFollowing`; there is no rate limit (like `GET /api/games`).
+//!
+//! F032 adds `GET /api/creators/spotlight`. Review 12 M1: both endpoints read the periodic
+//! [`crate::creators_snapshot`] instead of aggregating every published game per request.
 
 use axum::Json;
 use axum::extract::State;
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 
-use crate::AppState;
 use crate::auth::MaybeAuthUser;
 use crate::error::{AppError, AppResult};
 use crate::extract::ApiQuery;
-use crate::models::{Page, UserRef, banner_url, user_ref_from_row};
+use crate::models::{GAME_SELECT, GameSummary, Page, UserRef, game_row_from_row};
 use crate::routes::games::{page_offset, parse_paging};
+use crate::{AppState, creators_snapshot};
 
 /// Default `perPage`.
 pub const CREATORS_PER_PAGE_DEFAULT: i64 = 24;
@@ -27,9 +30,6 @@ pub const BIO_EXCERPT_CHARS: i64 = 160;
 /// `(follower_id, followee_id)`. `?1` = viewer id, `?2` = JSON array of the page's user ids.
 pub const IS_FOLLOWING_SQL: &str = "SELECT followee_id FROM follows \
      WHERE follower_id = ?1 AND followee_id IN (SELECT value FROM json_each(?2))";
-
-/// Creators are counted independently of the sort.
-const COUNT_SQL: &str = "SELECT COUNT(DISTINCT owner_id) FROM games WHERE published = 1";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,19 +74,21 @@ impl CreatorSort {
             ))),
         }
     }
-
-    /// Fixed `ORDER BY` strings (never built from input); each ends with the unique
-    /// case-insensitive username so pages are stable.
-    fn order_sql(self) -> &'static str {
-        match self {
-            Self::Popular => "followers DESC, c.plays DESC, u.username_lower ASC",
-            Self::Active => "c.last_act DESC, u.username_lower ASC",
-            Self::New => "c.first_pub DESC, u.username_lower ASC",
-        }
-    }
 }
+// The three orders (popular: followers DESC, plays DESC, username_lower; active: last_act
+// DESC, username_lower; new: first_pub DESC, username_lower) are applied in memory by
+// `CreatorsSnapshot::from_rows` (review 12 M1).
 
-fn page_sql(order: &str) -> String {
+/// The creator rows (ARCHITECTURE § F035 / § F032). `{order}` is a fixed string chosen in Rust
+/// (never input); `?1` = limit (`-1` = all), `?2` = offset, and with `owner_filter` `?3` = the
+/// one owner id to compute. Review 12 M1: requests no longer run this; the
+/// [`crate::creators_snapshot`] refresh does (`creator_sql(false, "u.id ASC")`, no limit).
+pub fn creator_sql(owner_filter: bool, order: &str) -> String {
+    let owner = if owner_filter {
+        " AND owner_id = ?3"
+    } else {
+        ""
+    };
     format!(
         "WITH c AS ( \
            SELECT owner_id, \
@@ -95,10 +97,11 @@ fn page_sql(order: &str) -> String {
                   MIN(COALESCE(first_published_at, created_at)) AS first_pub, \
                   MAX(MAX(COALESCE(first_published_at, created_at), \
                           COALESCE(last_updated_at, ''))) AS last_act \
-           FROM games WHERE published = 1 GROUP BY owner_id \
+           FROM games WHERE published = 1{owner} GROUP BY owner_id \
          ) \
          SELECT u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name, \
                 u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version, \
+                u.username_lower AS u_username_lower, \
                 u.banner_ext, u.banner_version, \
                 substr(u.bio, 1, {BIO_EXCERPT_CHARS}) AS bio_excerpt, \
                 c.games, c.plays, c.first_pub, c.last_act, \
@@ -109,7 +112,37 @@ fn page_sql(order: &str) -> String {
     )
 }
 
-/// `GET /api/creators` (🔓). Order of checks: `sort`, then `page`/`perPage`.
+/// Sets `is_following` on `items` for a signed-in viewer: one [`IS_FOLLOWING_SQL`] query for
+/// the page's ids (none when anonymous or the page is empty). Never true for yourself, since
+/// a user can't follow themselves.
+async fn apply_is_following(
+    state: &AppState,
+    viewer: Option<&str>,
+    items: &mut [Creator],
+) -> AppResult<()> {
+    let Some(viewer_id) = viewer else {
+        return Ok(());
+    };
+    if items.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<&str> = items.iter().map(|c| c.user.id.as_str()).collect();
+    let ids_json =
+        serde_json::to_string(&ids).map_err(|e| AppError::Internal(format!("json: {e}")))?;
+    let followed: Vec<String> = sqlx::query_scalar(IS_FOLLOWING_SQL)
+        .bind(viewer_id)
+        .bind(ids_json)
+        .fetch_all(&state.db)
+        .await?;
+    for c in items.iter_mut() {
+        c.is_following = c.user.id != viewer_id && followed.iter().any(|f| f == &c.user.id);
+    }
+    Ok(())
+}
+
+/// `GET /api/creators` (🔓). Order of checks: `sort`, then `page`/`perPage`. Review 12 M1:
+/// served from the creators snapshot (up to `CREATORS_TTL_SECS` old); only `isFollowing` is
+/// read per request.
 pub async fn list_creators(
     State(state): State<AppState>,
     viewer: MaybeAuthUser,
@@ -124,53 +157,96 @@ pub async fn list_creators(
     let per_page = per_page.clamp(1, CREATORS_PER_PAGE_MAX);
     let offset = page_offset(page, per_page);
 
-    let total: i64 = sqlx::query_scalar(COUNT_SQL).fetch_one(&state.db).await?;
-
-    let rows = sqlx::query(&page_sql(sort.order_sql()))
-        .bind(per_page)
-        .bind(offset)
-        .fetch_all(&state.db)
-        .await?;
-    let mut items = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let user = user_ref_from_row(r, "u_")?;
-        let banner_ext: Option<String> = r.try_get("banner_ext")?;
-        let banner_version: i64 = r.try_get("banner_version")?;
-        let bio: Option<String> = r.try_get("bio_excerpt")?;
-        items.push(Creator {
-            banner_url: banner_url(&user.id, banner_ext.as_deref(), banner_version),
-            user,
-            bio_excerpt: bio.unwrap_or_default(),
-            games: r.try_get("games")?,
-            plays: r.try_get("plays")?,
-            followers: r.try_get("followers")?,
-            is_following: false,
-            first_published_at: r.try_get("first_pub")?,
-            last_active_at: r.try_get("last_act")?,
-        });
-    }
-
-    if let Some(viewer_id) = viewer.id()
-        && !items.is_empty()
-    {
-        let ids: Vec<&str> = items.iter().map(|c| c.user.id.as_str()).collect();
-        let ids_json =
-            serde_json::to_string(&ids).map_err(|e| AppError::Internal(format!("json: {e}")))?;
-        let followed: Vec<String> = sqlx::query_scalar(IS_FOLLOWING_SQL)
-            .bind(viewer_id)
-            .bind(ids_json)
-            .fetch_all(&state.db)
-            .await?;
-        for c in &mut items {
-            c.is_following = followed.iter().any(|f| f == &c.user.id);
-        }
-    }
+    let snap = creators_snapshot::snapshot(&state).await;
+    let total = snap.len() as i64;
+    let mut items = snap.page(sort, offset, per_page);
+    drop(snap);
+    apply_is_following(&state, viewer.id(), &mut items).await?;
 
     Ok(Json(Page {
         items,
         total,
         page,
         per_page,
+    }))
+}
+
+/// Largest number of games in [`CreatorSpotlight::games`].
+pub const SPOTLIGHT_GAMES_MAX: i64 = 3;
+
+/// F032 `GET /api/creators/spotlight` response.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatorSpotlight {
+    /// The UTC date the pick belongs to, `YYYY-MM-DD`.
+    pub day: String,
+    pub creator: Option<Creator>,
+    pub games: Vec<GameSummary>,
+}
+
+/// The F032 pick: `day mod n` (0-based, never negative). `n` must be positive.
+pub fn spotlight_index(day: i64, n: i64) -> i64 {
+    day.rem_euclid(n)
+}
+
+/// Whole days from 1970-01-01 to `now`'s UTC date.
+pub fn utc_day_number(now: DateTime<Utc>) -> i64 {
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).expect("valid date");
+    now.date_naive().signed_duration_since(epoch).num_days()
+}
+
+/// Spotlight games: the creator's own featured games first (featured order), then their other
+/// published games by plays. `?1` = creator id.
+fn spotlight_games_sql() -> String {
+    format!(
+        "{GAME_SELECT} LEFT JOIN profile_featured pf \
+           ON pf.game_id = g.id AND pf.user_id = g.owner_id \
+         WHERE g.owner_id = ?1 AND g.published = 1 \
+         ORDER BY (pf.position IS NULL), pf.position, g.plays DESC, g.created_at DESC, g.id \
+         LIMIT {SPOTLIGHT_GAMES_MAX}"
+    )
+}
+
+/// `GET /api/creators/spotlight` (🔓, F032). The eligible creators, `N` and the creator row
+/// come from the creators snapshot (review 12 M1), ordered by user id; the games and
+/// `isFollowing` are read live.
+pub async fn get_spotlight(
+    State(state): State<AppState>,
+    viewer: MaybeAuthUser,
+) -> AppResult<Json<CreatorSpotlight>> {
+    let now = Utc::now();
+    let day = now.format("%Y-%m-%d").to_string();
+    let snap = creators_snapshot::snapshot(&state).await;
+    let n = snap.len() as i64;
+    let creator = if n > 0 {
+        let index = spotlight_index(utc_day_number(now), n);
+        snap.by_id_index(index as usize)
+    } else {
+        None
+    };
+    drop(snap);
+    let Some(creator) = creator else {
+        return Ok(Json(CreatorSpotlight {
+            day,
+            creator: None,
+            games: Vec::new(),
+        }));
+    };
+    let rows = sqlx::query(&spotlight_games_sql())
+        .bind(&creator.user.id)
+        .fetch_all(&state.db)
+        .await?;
+    let games = rows
+        .iter()
+        .map(|r| game_row_from_row(r).map(|g| g.summary()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut one = [creator];
+    apply_is_following(&state, viewer.id(), &mut one).await?;
+    let [creator] = one;
+    Ok(Json(CreatorSpotlight {
+        day,
+        creator: Some(creator),
+        games,
     }))
 }
 
@@ -197,5 +273,27 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn spotlight_pick() {
+        assert_eq!(spotlight_index(0, 3), 0);
+        assert_eq!(spotlight_index(4, 3), 1);
+        assert_eq!(spotlight_index(-1, 3), 2);
+        let d = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+        assert_eq!(utc_day_number(d("1970-01-01T23:59:59Z")), 0);
+        assert_eq!(utc_day_number(d("1970-01-02T00:00:00Z")), 1);
+        assert_eq!(utc_day_number(d("1969-12-31T12:00:00Z")), -1);
+        assert_eq!(utc_day_number(d("2026-11-19T10:00:00+05:00")), 20_776);
+        // A local time whose UTC date is the day before.
+        assert_eq!(utc_day_number(d("2026-11-20T03:00:00+05:00")), 20_776);
+    }
+
+    #[test]
+    fn creator_sql_owner_filter() {
+        assert!(!creator_sql(false, "u.id ASC").contains("?3"));
+        let one = creator_sql(true, "u.username_lower ASC");
+        assert!(one.contains("WHERE published = 1 AND owner_id = ?3 GROUP BY owner_id"));
+        assert!(one.contains("ORDER BY u.username_lower ASC"));
     }
 }

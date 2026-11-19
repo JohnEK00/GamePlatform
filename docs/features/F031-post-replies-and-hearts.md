@@ -398,3 +398,10 @@ As listed in § 4 desktop-dev.
 4. Mia turns replies off. Leo sees "Replies are turned off for this post." and no form; Mia still has the form.
 5. Kai reports Leo's reply; the admin opens "View in context →" and deletes it. The thread count drops and Mia's notification updates.
 6. At 360 px the reply form's button is full width and reply heads wrap cleanly.
+
+## Review-fix additions (REVIEW-2026-11-19-12)
+- **L3 (amends § 0.13):** each reply's buttons are labelled "Delete reply by {name}" and "Report reply by {name}". `{name}` is the display name, or the username if there is none.
+- **L1:** if a non-moderator's reply is refused with 422 "Replies are turned off for this post" because the post was locked while they typed:
+  - focus moves to the locked notice (`#pf-post-thread-locked`, `role="status"`, `tabIndex={-1}`);
+  - the refused text stays visible, read-only, under "Your reply wasn't posted. Here is your text:".
+- **L4:** concurrent tests cover the 200-reply cap and a reply that races the lock.

@@ -82,6 +82,8 @@ pub fn api_router() -> Router<AppState> {
             get(collections::list_my_collections),
         )
         .route("/users/me/stats", get(stats::my_stats))
+        // F029/F032: featured games on the caller's profile.
+        .route("/users/me/featured", put(users::put_featured))
         .route("/users/{username}", get(users::get_user))
         .route(
             "/users/{username}/collections",
@@ -251,7 +253,11 @@ pub fn api_router() -> Router<AppState> {
         )
         .route("/games/{id}/stats", get(stats::game_stats))
         // F008 collections
-        .route("/collections", post(collections::create_collection))
+        // F032: GET is the public explore list.
+        .route(
+            "/collections",
+            get(collections::list_collections).post(collections::create_collection),
+        )
         .route(
             "/collections/{id}",
             get(collections::get_collection)
@@ -279,6 +285,8 @@ pub fn api_router() -> Router<AppState> {
         .route("/tags", get(tags::list_tags))
         // F035 explore creators (public, no rate limit)
         .route("/creators", get(creators::list_creators))
+        // F032 creator of the day (public, no rate limit)
+        .route("/creators/spotlight", get(creators::get_spotlight))
         .fallback(api_not_found)
 }
 

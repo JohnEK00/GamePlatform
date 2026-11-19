@@ -535,6 +535,12 @@ pub fn list_filter(query: &ListQuery, viewer: Option<&str>) -> AppResult<(String
         binds.push(pat.clone());
         binds.push(pat.to_lowercase());
     }
+    // F032: `sort=updated` lists only games with a bundle replace (F004). Repeating the
+    // partial index's `WHERE` term lets `idx_games_pub_updated` serve the page, and the count
+    // query shares this clause, so `total` only counts updated games.
+    if query.sort.as_deref().map(str::trim) == Some("updated") {
+        conds.push("g.last_updated_at IS NOT NULL");
+    }
     Ok((format!("WHERE {}", conds.join(" AND ")), binds))
 }
 
@@ -553,9 +559,11 @@ pub fn list_order(sort: Option<&str>) -> AppResult<&'static str> {
         "top" => "g.rating_score DESC, g.rating_count DESC, g.created_at DESC, g.id",
         // F003: snapshot score, then `plays_week` (the GAME_SELECT alias), then all-time plays.
         "trending" => TRENDING_ORDER,
+        // F032: newest bundle replace first (`list_filter` drops games never updated).
+        "updated" => "g.last_updated_at DESC, g.id",
         other => {
             return Err(AppError::BadRequest(format!(
-                "Unknown sort '{other}' (expected new, popular, top, favorites or trending)"
+                "Unknown sort '{other}' (expected new, popular, top, favorites, trending or updated)"
             )));
         }
     })

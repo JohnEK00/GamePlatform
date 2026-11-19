@@ -1,6 +1,6 @@
 # F032: Home and discover 2 (with F029 featured games on profiles)
 
-Status: **specced**. Size: **M**. One round. Areas: backend, frontend, desktop. Engine: none.
+Status: **shipped**. Size: **M**. One round. Areas: backend, frontend, desktop. Engine: none.
 
 Size breakdown:
 - **backend:** migration `0027_f032.sql` (one table, two partial indexes); `sort=updated` on `GET /api/games`; `GET /api/collections` (public explore list); `GET /api/creators/spotlight`; F029 `PUT /api/users/me/featured` and `UserProfileResponse.featured`. No new rate-limit bucket, no new crates.

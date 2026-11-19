@@ -14,7 +14,8 @@ const AVATAR = 56;
  * F035 card of the Explore creators page: banner (or the F028 empty gradient), avatar, name, `@username`, a
  * 2-line bio excerpt, stats and a Follow button (or `Your profile` on the viewer's own card).
  */
-export function CreatorCard({ creator }: { creator: Creator }) {
+export function CreatorCard({ creator, headingLevel = 2 }: { creator: Creator; /** F032: the name heading's level (3 inside a home section). */ headingLevel?: 2 | 3 }) {
+  const Heading = headingLevel === 3 ? "h3" : "h2";
   const api = useApi();
   const { user: me } = useAuth();
   const follows = useFollows();
@@ -35,9 +36,9 @@ export function CreatorCard({ creator }: { creator: Creator }) {
         <Link to={path} className="pf-creator-card__avatar" tabIndex={-1} aria-hidden="true" style={{ marginTop: -AVATAR / 2 }}>
           <Avatar user={user} size={AVATAR} />
         </Link>
-        <h2 id={nameId} className="pf-creator-card__name">
+        <Heading id={nameId} className="pf-creator-card__name">
           <Link to={path}>{name}</Link>
-        </h2>
+        </Heading>
         <p className="pf-creator-card__handle pf-muted pf-small">@{user.username}</p>
         {creator.bioExcerpt ? <p className="pf-creator-card__bio">{creator.bioExcerpt}</p> : null}
         <p className="pf-creator-card__stats pf-muted pf-small">{creatorStatsText(creator.games, creator.plays, followers)}</p>

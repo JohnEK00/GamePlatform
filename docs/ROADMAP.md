@@ -79,8 +79,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F030 | User posts: short text posts on profiles and in followers' feeds | M | shipped |
 | F031 | Post replies and hearts, with notifications | M | shipped |
 | F035 | Explore creators page | S | shipped |
-| F032 | Home and discover 2: sectioned home page, `/browse` and creator spotlight (with F029) | M | specced |
-| F029 | Featured games on profiles (folded into F032) | S | specced |
+| F032 | Home and discover 2: sectioned home page, `/browse` and creator spotlight (with F029) | M | shipped |
+| F029 | Featured games on profiles (folded into F032) | S | shipped |
 | F034 | Navigation and UI polish: header, mobile menu, footer, shared states | S | proposed |
 | F043 | Continue playing: recently played games | S | proposed |
 | F033 | Search page: games, creators and collections | M | proposed |
@@ -353,7 +353,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0024_f028.sql`, banner pipeline, link rules, stats, `user` reports), frontend (profile shell, header, sections, settings, admin), desktop (menu item, test). No engine changes.
 - **Depends on**: F002, F005, F008, F015 (all shipped). It is the foundation for F029 and F030.
 
-### F029: Featured games on profiles (S, specced inside F032 → [spec](features/F032-home-and-discover-2.md) § 0.12–0.15)
+### F029: Featured games on profiles (S, shipped inside F032 → [spec](features/F032-home-and-discover-2.md) § 0.12–0.15)
 - **Folded into F032 (2026-11-19):** the creator spotlight shows a creator's own featured games first. Final shape: `PUT /api/users/me/featured` (`gameIds`, max 4, published at write time), `UserProfileResponse.featured` (published now, saved order, same for every viewer), a Featured row first on the Overview and a `FeaturedGamesDialog` picker (own published games + favorites, ↑/↓/Remove). The original pitch is kept below.
 - **Pitch**: users feature up to 4 published games, their own or anyone's, as a "Featured" row at the top of their profile Overview, in their chosen order. A "Feature on profile" picker in the profile's Overview (own games + favorites, with Move up/down) and `PUT /api/users/me/featured` (`gameIds`, max 4, published at write time; unpublished or deleted games are hidden at read time). `UserProfileResponse.featured: GameSummary[]`.
 - **User value**: creators lead with their best work instead of their newest. Players who don't make games can show their favourites. It composes with the F028 shell.
@@ -402,7 +402,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: posts become conversations, and creators hear back from their audience.
 - **Areas**: backend (review 11 carry-over in `users.rs`, migration, `routes/post_replies.rs`, heart and lock handlers, two kinds, `Limit::PostReply`, report target, `remove_post` cascade), frontend (`HeartButton` generalised, `PostCard`, `PostThread`, `ReportButton.ariaLabel`, notification texts and switches, admin), desktop (verification test). No engine changes.
 
-### F032: Home and discover 2 (M, specced → [spec](features/F032-home-and-discover-2.md); F029 folded in)
+### F032: Home and discover 2 (M, shipped → [spec](features/F032-home-and-discover-2.md); F029 folded in)
 - **Pitch**:
   - `/` becomes a sectioned discover page: hero, Featured (top rated, unchanged), Trending this week, New releases, Creator spotlight, Recently updated, Player collections and Browse by tag. Every section hides on error or when empty; an empty platform shows one "No games yet" state.
   - The full sortable grid moves to `/browse`, with a new "Recently updated" sort. Legacy `/?q=`, `?tag=`, `?sort=` and `?page=` URLs redirect there; the header search, the `Browse` links and game tag chips point there.

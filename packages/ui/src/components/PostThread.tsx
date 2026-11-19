@@ -124,12 +124,18 @@ export function PostReplyItem({ reply, highlighted = false, canReply = false, on
             </button>
           )}
           {reply.canDelete && (
-            <button type="button" className="pf-linkbtn pf-linkbtn--danger" aria-haspopup="dialog" onClick={() => setConfirm(true)}>
+            <button
+              type="button"
+              className="pf-linkbtn pf-linkbtn--danger"
+              aria-haspopup="dialog"
+              aria-label={`Delete reply by ${name}`}
+              onClick={() => setConfirm(true)}
+            >
               Delete
             </button>
           )}
           {!isAuthor && (
-            <ReportButton targetType="postReply" targetId={reply.id} className="pf-linkbtn">
+            <ReportButton targetType="postReply" targetId={reply.id} className="pf-linkbtn" ariaLabel={`Report reply by ${name}`}>
               Report
             </ReportButton>
           )}
@@ -294,7 +300,10 @@ export type PostThreadProps = {
   replyId?: string | null;
 };
 
-type FocusRequest = { kind: "reply"; id: string } | { kind: "textarea"; scrollForm?: boolean } | { kind: "heading" };
+type FocusRequest = { kind: "reply"; id: string } | { kind: "textarea"; scrollForm?: boolean } | { kind: "heading" } | { kind: "locked" };
+
+/** The "Replies are turned off" notice (a status message; focus target after a lock race, review 12 L1). */
+const LOCKED_NOTICE_ID = "pf-post-thread-locked";
 
 /**
  * F031 § 0.12: the reply thread below a post on its permalink page. Loads the whole thread in one request (the
@@ -315,6 +324,8 @@ export function PostThread({ post, onPostChange, replyId = null }: PostThreadPro
   const [replyTarget, setReplyTarget] = useState<PostReply | null>(null);
   const [lockBusy, setLockBusy] = useState(false);
   const [, setFocusTick] = useState(0);
+  // Review 12 L1: the text of a reply refused because the post was locked meanwhile (shown read-only, so it isn't lost).
+  const [unsent, setUnsent] = useState<string | null>(null);
 
   const postRef = useRef(post);
   postRef.current = post;
@@ -398,6 +409,7 @@ export function PostThread({ post, onPostChange, replyId = null }: PostThreadPro
     let el: HTMLElement | null = null;
     if (req.kind === "reply") el = document.getElementById(`reply-${req.id}`);
     else if (req.kind === "textarea") el = textareaRef.current;
+    else if (req.kind === "locked") el = document.getElementById(LOCKED_NOTICE_ID);
     else el = document.getElementById(HEADING_ID);
     if (!el) return;
     pendingFocus.current = null;
@@ -442,7 +454,17 @@ export function PostThread({ post, onPostChange, replyId = null }: PostThreadPro
   };
 
   const onFormError = (err: unknown, req: CreatePostReplyRequest): string | void => {
-    if (errorMessage(err) === REPLIES_OFF_MESSAGE) onPostChange({ ...postRef.current, locked: true });
+    if (errorMessage(err) === REPLIES_OFF_MESSAGE) {
+      const p = postRef.current;
+      // Review 12 L1: for a non-moderator the form (which held focus, the text and the Alert) goes away with the
+      // lock. Keep the text read-only and move focus to the status notice, so nothing is lost or silent.
+      if (p.canDelete !== true) {
+        setUnsent(req.body);
+        pendingFocus.current = { kind: "locked" };
+      }
+      onPostChange({ ...p, locked: true });
+      return;
+    }
     // The reply being answered was deleted meanwhile: answer the post instead (the typed text stays), and drop the
     // stale reply so the list matches the server.
     const targetId = req.replyToId;
@@ -531,9 +553,17 @@ export function PostThread({ post, onPostChange, replyId = null }: PostThreadPro
       </div>
       {body}
       {locked && (
-        <p className="pf-post-thread__locked pf-small">
-          <span aria-hidden="true">🔒</span> Replies are turned off for this post.
+        <p id={LOCKED_NOTICE_ID} className="pf-post-thread__locked pf-small" role="status" tabIndex={-1}>
+          <span aria-hidden="true">{String.fromCodePoint(0x1f512)}</span> Replies are turned off for this post.
         </p>
+      )}
+      {locked && !showForm && unsent !== null && (
+        <div className="pf-post-thread__unsent">
+          <label className="pf-small pf-muted" htmlFor={`${LOCKED_NOTICE_ID}-unsent`}>
+            Your reply wasn't posted. Here is your text:
+          </label>
+          <textarea id={`${LOCKED_NOTICE_ID}-unsent`} className="pf-input" rows={2} readOnly value={unsent} />
+        </div>
       )}
       <div ref={formWrapRef}>
         {!user && !locked && (

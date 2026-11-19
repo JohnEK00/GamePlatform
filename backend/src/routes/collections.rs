@@ -897,6 +897,64 @@ pub async fn list_user_collections(
     }))
 }
 
+/// F032: a public collection needs at least this many published games to be listed by
+/// `GET /api/collections`.
+pub const EXPLORE_MIN_GAMES: i64 = 3;
+/// F032: `GET /api/collections` default `perPage`.
+pub const EXPLORE_PER_PAGE_DEFAULT: i64 = 12;
+/// F032: `GET /api/collections` largest `perPage`; larger values are clamped to it.
+pub const EXPLORE_PER_PAGE_MAX: i64 = 48;
+
+/// F032 explore filter (alias `c`), shared by the count and the page so `total` matches.
+/// `EXPLORE_MIN_GAMES` is a Rust constant, never input.
+fn explore_where() -> String {
+    format!(
+        "WHERE c.visibility = 'public' \
+           AND (SELECT COUNT(*) FROM collection_games cg JOIN games g ON g.id = cg.game_id \
+                WHERE cg.collection_id = c.id AND g.published = 1) >= {EXPLORE_MIN_GAMES}"
+    )
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExploreCollectionsQuery {
+    pub page: Option<String>,
+    pub per_page: Option<String>,
+}
+
+/// `GET /api/collections` (🔓, F032): public collections with at least
+/// [`EXPLORE_MIN_GAMES`] published games, most recently updated first. No rate limit.
+pub async fn list_collections(
+    State(state): State<AppState>,
+    viewer: MaybeAuthUser,
+    ApiQuery(query): ApiQuery<ExploreCollectionsQuery>,
+) -> AppResult<Json<Page<CollectionSummary>>> {
+    let (page, per_page) = parse_paging(
+        query.page.as_deref(),
+        query.per_page.as_deref(),
+        EXPLORE_PER_PAGE_DEFAULT,
+    )?;
+    let per_page = per_page.clamp(1, EXPLORE_PER_PAGE_MAX);
+    let filter = explore_where();
+    let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM collections c {filter}"))
+        .fetch_one(&state.db)
+        .await?;
+    let rows = sqlx::query(&format!(
+        "{COLLECTION_SELECT} {filter} ORDER BY c.updated_at DESC, c.id DESC LIMIT ?1 OFFSET ?2"
+    ))
+    .bind(per_page)
+    .bind(page_offset(page, per_page))
+    .fetch_all(&state.db)
+    .await?;
+    let rows = collections_from_rows(&rows)?;
+    Ok(Json(Page {
+        items: summaries_for(&state, &rows, viewer.id()).await?,
+        total,
+        page,
+        per_page,
+    }))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MyCollectionsQuery {

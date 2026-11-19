@@ -5,6 +5,7 @@ import { usePlatform } from "../context/config";
 import { Avatar, Spinner } from "./common";
 import { NotificationBell } from "./NotificationBell";
 import { useCollectionsSupported } from "./collectionsSupport";
+import { BROWSE_PATH, browsePath } from "../home";
 
 export function Logo() {
   return (
@@ -28,15 +29,14 @@ function SearchBox({ onDone }: { onDone?: () => void }) {
   const [params] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const [q, setQ] = useState(location.pathname === "/" ? params.get("q") ?? "" : "");
+  // F032: the full grid lives on /browse, so the box mirrors ?q there (and submits there).
+  const [q, setQ] = useState(location.pathname === BROWSE_PATH ? params.get("q") ?? "" : "");
   useEffect(() => {
-    if (location.pathname === "/") setQ(params.get("q") ?? "");
+    if (location.pathname === BROWSE_PATH) setQ(params.get("q") ?? "");
   }, [location.pathname, params]);
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const next = new URLSearchParams();
-    if (q.trim()) next.set("q", q.trim());
-    navigate({ pathname: "/", search: next.toString() ? `?${next}` : "" });
+    navigate(browsePath({ q }));
     onDone?.();
   };
   return (
@@ -181,9 +181,7 @@ export function Header() {
         </button>
         <div id="pf-mainnav" className={`pf-header__nav${navOpen ? " is-open" : ""}`}>
           <nav aria-label="Main">
-            <NavLink to="/" end>
-              Browse
-            </NavLink>
+            <NavLink to={BROWSE_PATH}>Browse</NavLink>
             <NavLink to="/creators">Creators</NavLink>
             <NavLink to="/studio">Studio</NavLink>
             <NavLink to="/docs">Make a game</NavLink>
@@ -231,7 +229,7 @@ export function Footer() {
           {platform.name ? ` · ${platform.name}` : ""} — forge games, play games.
         </span>
         <nav aria-label="Footer">
-          <Link to="/">Browse</Link>
+          <Link to={BROWSE_PATH}>Browse</Link>
           <Link to="/creators">Creators</Link>
           <Link to="/docs">Make a game</Link>
           <Link to="/studio">Studio</Link>

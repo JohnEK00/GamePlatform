@@ -425,7 +425,7 @@ export function CollectionPage() {
               icon="📚"
               title="No games yet"
               action={
-                <Link to="/" className="pf-btn pf-btn--primary">
+                <Link to="/browse" className="pf-btn pf-btn--primary">
                   Browse games
                 </Link>
               }

@@ -20,12 +20,13 @@ const tree = (
 
 describe("Layout: Creators links (F035)", () => {
   for (const signedIn of [false, true]) {
-    it(`header Creators comes right after the home link (${signedIn ? "signed in" : "anonymous"})`, async () => {
+    it(`header Creators comes right after the Browse link (${signedIn ? "signed in" : "anonymous"})`, async () => {
       const me = signedIn ? viewer : null;
       await renderWith(makeClient(me), tree, "/", me);
       const header = document.querySelector("header")!;
       const links = Array.from(header.querySelectorAll("nav a"));
-      const home = links.findIndex((a) => a.getAttribute("href") === "/" && a.textContent?.trim() === "Browse");
+      // F032: Browse points at /browse.
+      const home = links.findIndex((a) => a.getAttribute("href") === "/browse" && a.textContent?.trim() === "Browse");
       expect(home).toBeGreaterThanOrEqual(0);
       expect(links[home + 1].textContent).toBe("Creators");
       expect(links[home + 1].getAttribute("href")).toBe("/creators");

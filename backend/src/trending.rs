@@ -211,6 +211,8 @@ pub const OPTIMIZE_EVERY: std::time::Duration = std::time::Duration::from_secs(6
 pub struct Maintenance {
     /// Trending refresh; `None` when `TRENDING_TTL_SECS = 0`.
     pub trending: Option<tokio::task::JoinHandle<()>>,
+    /// Review 12 M1 creators snapshot refresh; `None` when `CREATORS_TTL_SECS = 0`.
+    pub creators: Option<tokio::task::JoinHandle<()>>,
     /// [`Housekeeping`]; always running.
     pub housekeeping: tokio::task::JoinHandle<()>,
 }
@@ -218,6 +220,9 @@ pub struct Maintenance {
 impl Maintenance {
     pub fn abort(&self) {
         if let Some(t) = &self.trending {
+            t.abort();
+        }
+        if let Some(t) = &self.creators {
             t.abort();
         }
         self.housekeeping.abort();
@@ -228,6 +233,8 @@ impl Maintenance {
 /// - N3 trending: every `TRENDING_TTL_SECS` refresh the snapshot (retrying after
 ///   `min(TTL, FAILURE_BACKOFF)` when it fails); the first run is one TTL after the call
 ///   (startup already refreshed in `AppState::new`). Not started when the TTL is 0.
+/// - Review 12 M1 creators snapshot: the same loop every `CREATORS_TTL_SECS`
+///   ([`crate::creators_snapshot::spawn_refresh`]). Not started when that TTL is 0.
 /// - Review 5 L9 housekeeping, every [`HOUSEKEEPING_EVERY`] whatever the TTL: see
 ///   [`Housekeeping::tick`].
 pub fn spawn_maintenance(state: &AppState) -> Maintenance {
@@ -247,6 +254,7 @@ pub fn spawn_maintenance(state: &AppState) -> Maintenance {
             }
         })
     });
+    let creators = crate::creators_snapshot::spawn_refresh(state);
     let state = state.clone();
     let housekeeping = tokio::spawn(async move {
         let mut hk = Housekeeping::new(Instant::now());
@@ -257,6 +265,7 @@ pub fn spawn_maintenance(state: &AppState) -> Maintenance {
     });
     Maintenance {
         trending,
+        creators,
         housekeeping,
     }
 }

@@ -141,17 +141,17 @@ describe("PostReplyItem (F031 § 0.13)", () => {
 
   it("Report on replies: shown for non-authors (anonymous too), heading 'Report reply'", async () => {
     await setup({ me: leoUser, replies: [reply("r1"), reply("r2", { author: kaiRef })] });
-    expect(within(document.getElementById("reply-r1")!).queryByRole("button", { name: "Report" })).toBeNull();
-    fireEvent.click(within(document.getElementById("reply-r2")!).getByRole("button", { name: "Report" }));
+    expect(within(document.getElementById("reply-r1")!).queryByRole("button", { name: /^Report/ })).toBeNull();
+    fireEvent.click(within(document.getElementById("reply-r2")!).getByRole("button", { name: "Report reply by Kai" }));
     expect(screen.getByRole("dialog", { name: "Report reply" })).toBeTruthy();
   });
 
   it("anonymous: Report shown, no Reply or Delete", async () => {
     await setup({ replies: [reply("r1")] });
     const r1 = document.getElementById("reply-r1")!;
-    expect(within(r1).getByRole("button", { name: "Report" })).toBeTruthy();
+    expect(within(r1).getByRole("button", { name: "Report reply by Leo" })).toBeTruthy();
     expect(within(r1).queryByRole("button", { name: /^Reply/ })).toBeNull();
-    expect(within(r1).queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(within(r1).queryByRole("button", { name: /^Delete/ })).toBeNull();
   });
 });
 
@@ -295,7 +295,7 @@ describe("Deleting a reply (F031 § 0.13)", () => {
   const three = () => [reply("r1", { canDelete: true }), reply("r2", { canDelete: true }), reply("r3", { canDelete: true })];
 
   async function deleteReply(id: string) {
-    fireEvent.click(within(document.getElementById(`reply-${id}`)!).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(document.getElementById(`reply-${id}`)!).getByRole("button", { name: "Delete reply by Leo" }));
     const dialog = screen.getByRole("dialog", { name: "Delete this reply?" });
     expect(within(dialog).getByText("This can't be undone.")).toBeTruthy();
     await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "Delete" })));
@@ -303,7 +303,7 @@ describe("Deleting a reply (F031 § 0.13)", () => {
 
   it("dialog texts, toast, removal, replyCount - 1, focus on the next reply", async () => {
     const { del, onChange } = await setup({ me: leoUser, replies: three() });
-    expect(within(document.getElementById("reply-r2")!).getByRole("button", { name: "Delete" }).getAttribute("aria-haspopup")).toBe("dialog");
+    expect(within(document.getElementById("reply-r2")!).getByRole("button", { name: "Delete reply by Leo" }).getAttribute("aria-haspopup")).toBe("dialog");
     await deleteReply("r2");
     expect(del).toHaveBeenCalledWith("r2");
     expect(await screen.findByText("Reply deleted")).toBeTruthy();

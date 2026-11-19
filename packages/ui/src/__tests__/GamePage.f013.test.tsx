@@ -72,6 +72,25 @@ describe("Open in Studio (F013)", () => {
   });
 });
 
+describe("Tag chips (F032)", () => {
+  it("the game's tags point at the /browse grid", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { code: "not_found", message: "nope" } }), { status: 404 }));
+    const client = new ApiClient({ baseUrl: "http://api.test", fetch: fetchMock as unknown as typeof fetch });
+    vi.spyOn(client, "getGame").mockResolvedValue(makeGame({ tags: ["arcade", "two words"] }));
+    render(
+      <WebGameProviders config={{ apiBaseUrl: "http://api.test", routerMode: "browser" }} client={client}>
+        <MemoryRouter initialEntries={["/games/g1"]}>
+          <Routes>
+            <Route path="/games/:id" element={<GamePage />} />
+          </Routes>
+        </MemoryRouter>
+      </WebGameProviders>,
+    );
+    expect((await screen.findByRole("link", { name: "#arcade" })).getAttribute("href")).toBe("/browse?tag=arcade");
+    expect(screen.getByRole("link", { name: "#two words" }).getAttribute("href")).toBe("/browse?tag=two+words");
+  });
+});
+
 describe("Download current bundle (F013)", () => {
   it("uses platform.saveFile when present", async () => {
     const saveFile = vi.fn(async () => true);

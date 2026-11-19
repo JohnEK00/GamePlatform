@@ -58,11 +58,14 @@ export function CreatorsPage() {
 
   const total = typeof list.data?.total === "number" ? list.data.total : 0;
   const ready = !list.error && !list.loading && !!list.data;
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   return (
     <div className="pf-container pf-page pf-creators">
       <header className="pf-pagehead">
-        <h1>Creators</h1>
+        <h1 ref={headingRef} tabIndex={-1}>
+          Creators
+        </h1>
         <p className="pf-muted">People who make games on Pixelforge Arcade.</p>
         <nav className="pf-tabs" aria-label="Sort creators">
           {CREATOR_SORTS.map((s) => (
@@ -110,16 +113,23 @@ export function CreatorsPage() {
           ))}
         </ul>
       )}
-      {ready && (
+      {/* Review 12 L2: stays mounted while the next page loads (useAsync keeps the old data), like the other paged pages. */}
+      {list.data && !list.error && (
         <Pagination
           page={page}
           total={total}
-          perPage={list.data?.perPage || CREATORS_PER_PAGE}
+          perPage={list.data.perPage || CREATORS_PER_PAGE}
           onPage={(p) => {
             const next = new URLSearchParams(params);
             if (p === 1) next.delete("page");
             else next.set("page", String(p));
             setParams(next);
+            // The new page starts at the top: focus the heading there (the pressed button may move or vanish).
+            const h = headingRef.current;
+            if (h) {
+              h.focus({ preventScroll: true });
+              if (typeof h.scrollIntoView === "function") h.scrollIntoView({ block: "start" });
+            }
           }}
         />
       )}

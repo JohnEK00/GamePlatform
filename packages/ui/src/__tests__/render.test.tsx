@@ -46,7 +46,8 @@ describe("render", () => {
     render(<WebGameApp config={{ apiBaseUrl: "", routerMode: "hash" }} client={client} />);
     expect(screen.getAllByText(/Pixelforge/).length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.getAllByText("Space Dodge").length).toBeGreaterThan(0));
-    expect(screen.getByRole("button", { name: "#arcade" })).toBeTruthy();
+    // F032: the home page's Browse by tag chips are links to /browse?tag=.
+    expect((await screen.findByRole("link", { name: "#arcade" })).getAttribute("href")).toBe("#/browse?tag=arcade");
     expect(screen.getByRole("link", { name: "Log in" })).toBeTruthy();
   });
 

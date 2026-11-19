@@ -270,7 +270,7 @@ async fn trending_filters_and_errors() {
     assert_eq!(r.error_code(), "bad_request");
     assert!(
         r.text()
-            .contains("expected new, popular, top, favorites or trending"),
+            .contains("expected new, popular, top, favorites, trending or updated"),
         "{}",
         r.text()
     );

@@ -1,10 +1,15 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+// F003 Trending shelf on the home page. Since F032 the grid and its sort toggles live on /browse (their cases moved
+// to BrowsePage.test.tsx), and the old `/?page=`, `/?q=` and `/?tag=` URLs redirect there.
+import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "../api/client";
 import type { GameSummary, ListGamesQuery, Page } from "../api/types";
 import { HomePage } from "../pages/HomePage";
 import { WebGameProviders } from "../WebGameApp";
+
+const SEE_ALL = `See all ${String.fromCodePoint(0x2192)}`;
+const FIRE = String.fromCodePoint(0x1f525);
 
 const game = (id: string, title: string, playsWeek: number): GameSummary => ({
   id,
@@ -30,20 +35,28 @@ function LocationProbe() {
   return <p data-testid="loc">{loc.pathname + loc.search}</p>;
 }
 
-async function setup(path: string, trendingItems: GameSummary[]) {
+function makeClient(trending: (q: ListGamesQuery) => Promise<Page<GameSummary>>) {
   const client = new ApiClient({ baseUrl: "http://api.test" });
   vi.spyOn(client, "listTags").mockResolvedValue([]);
+  vi.spyOn(client, "getCreatorSpotlight").mockResolvedValue({ day: "2026-11-19", creator: null, games: [] });
+  vi.spyOn(client, "listCollections").mockResolvedValue({ items: [], total: 0, page: 1, perPage: 3 });
   const listGames = vi.spyOn(client, "listGames").mockImplementation(async (q: ListGamesQuery = {}) => {
-    if (q.sort === "trending" && q.perPage === 8) return page(trendingItems, 8);
-    if (q.sort === "top" && q.perPage === 4) return page([]);
-    return page([game("m1", "Main Grid Game", 0)]);
+    if (q.sort === "trending") return trending(q);
+    if (q.sort === "top") return page([]);
+    if (q.sort === "updated") return page([]);
+    return page([game("m1", "New Game", 0)], 4);
   });
+  return { client, listGames };
+}
+
+async function setup(path: string, trendingItems: GameSummary[]) {
+  const { client, listGames } = makeClient(async (q) => page(q.perPage === 8 ? trendingItems : [], q.perPage ?? 24));
   const utils = render(
     <WebGameProviders config={{ apiBaseUrl: "http://api.test", routerMode: "browser" }} client={client}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route
-            path="*"
+            path="/"
             element={
               <>
                 <HomePage />
@@ -51,6 +64,7 @@ async function setup(path: string, trendingItems: GameSummary[]) {
               </>
             }
           />
+          <Route path="/browse" element={<LocationProbe />} />
         </Routes>
       </MemoryRouter>
     </WebGameProviders>,
@@ -67,18 +81,21 @@ afterEach(() => {
 });
 
 describe("HomePage F003", () => {
-  it("shows the Trending this week shelf on page 1 without filters, with weekly counts", async () => {
+  it("shows the Trending this week shelf with weekly counts; See all goes to /browse?sort=trending", async () => {
     const { container, listGames } = await setup("/", [game("t1", "Hot Game", 1200), game("t2", "Cold Game", 0)]);
     expect(shelfCalls(listGames).length).toBe(1);
     const heading = screen.getByRole("heading", { name: "Trending this week" });
+    expect(heading.id).toBe("pf-trending-title");
     const shelf = heading.closest("section")!;
+    expect(shelf.getAttribute("aria-labelledby")).toBe("pf-trending-title");
     expect(shelf.textContent).toContain("Hot Game");
     // Only items with playsWeek > 0 show.
     expect(shelf.textContent).not.toContain("Cold Game");
-    expect(shelf.querySelector(".pf-card__trending")!.textContent).toBe("🔥 1.2k plays this week");
-    const seeAll = screen.getByRole("link", { name: "See all →" });
-    expect(seeAll.getAttribute("href")).toBe("/?sort=trending");
-    // The main grid (sort=new) keeps the all-time count.
+    expect(shelf.querySelector(".pf-card__trending")!.textContent).toBe(`${FIRE} 1.2k plays this week`);
+    const seeAll = shelf.querySelector<HTMLAnchorElement>(".pf-shelf__more")!;
+    expect(seeAll.textContent).toBe(SEE_ALL);
+    expect(seeAll.getAttribute("href")).toBe("/browse?sort=trending");
+    // The other shelves keep the all-time count.
     expect(container.querySelectorAll(".pf-card__trending").length).toBe(1);
   });
 
@@ -89,12 +106,8 @@ describe("HomePage F003", () => {
   });
 
   it("hides the shelf silently when the request fails", async () => {
-    const client = new ApiClient({ baseUrl: "http://api.test" });
-    vi.spyOn(client, "listTags").mockResolvedValue([]);
-    vi.spyOn(client, "listGames").mockImplementation(async (q: ListGamesQuery = {}) => {
-      if (q.sort === "trending") throw new Error("boom");
-      if (q.sort === "top") return page([]);
-      return page([game("m1", "Main Grid Game", 0)]);
+    const { client } = makeClient(async () => {
+      throw new Error("boom");
     });
     render(
       <WebGameProviders config={{ apiBaseUrl: "http://api.test", routerMode: "browser" }} client={client}>
@@ -105,32 +118,13 @@ describe("HomePage F003", () => {
     );
     await act(async () => {});
     expect(screen.queryByRole("heading", { name: "Trending this week" })).toBeNull();
-    expect(screen.getByText("Main Grid Game")).toBeTruthy();
+    expect(screen.getByText("New Game")).toBeTruthy();
   });
 
-  it.each(["/?page=2", "/?q=dodge", "/?tag=arcade"])("does not show the shelf on %s", async (path) => {
+  it.each(["/?page=2", "/?q=dodge", "/?tag=arcade"])("%s redirects to /browse with the same query (no shelf request)", async (path) => {
     const { listGames } = await setup(path, [game("t1", "Hot Game", 50)]);
+    expect(screen.getByTestId("loc").textContent).toBe(path.replace("/?", "/browse?"));
     expect(shelfCalls(listGames).length).toBe(0);
     expect(screen.queryByRole("heading", { name: "Trending this week" })).toBeNull();
-  });
-
-  it("the Trending tab sets ?sort=trending and the main grid shows weekly counts", async () => {
-    const { listGames } = await setup("/?page=2", []);
-    // N6: the sort strip is a toggle-button group, not a tab list.
-    expect(screen.queryAllByRole("tab")).toEqual([]);
-    const group = screen.getByRole("group", { name: "Sort games" });
-    const tabs = Array.from(group.querySelectorAll("button")).map((t) => t.textContent);
-    expect(tabs.slice(0, 2)).toEqual(["New", "Trending"]);
-    expect(screen.getByRole("button", { name: "New" }).getAttribute("aria-pressed")).toBe("true");
-    listGames.mockImplementation(async (q: ListGamesQuery = {}) =>
-      q.sort === "trending" && q.perPage === 24 ? page([game("m2", "Weekly Hit", 7)]) : page([]),
-    );
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Trending" })));
-    expect(screen.getByTestId("loc").textContent).toBe("/?sort=trending");
-    expect(listGames).toHaveBeenCalledWith(expect.objectContaining({ sort: "trending", page: 1, perPage: 24 }));
-    expect(screen.getByRole("button", { name: "Trending" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "New" }).getAttribute("aria-pressed")).toBe("false");
-    const card = screen.getByText("Weekly Hit").closest("article")!;
-    expect(card.querySelector(".pf-card__trending")!.textContent).toBe("🔥 7 plays this week");
   });
 });

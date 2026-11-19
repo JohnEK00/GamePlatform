@@ -54,6 +54,112 @@ pub struct UserProfile {
     pub is_following: bool,
     /// F028: profile totals for this viewer.
     pub stats: ProfileStats,
+    /// F029/F032: the user's featured games that are published now, in their order.
+    pub featured: Vec<GameSummary>,
+}
+
+/// F029/F032: most games a user can feature on their profile.
+pub const FEATURED_GAMES_MAX: usize = 4;
+
+/// F029/F032 read rule (ARCHITECTURE § F032): the saved games that are published now, in the
+/// saved order, for every viewer. `?1` = user id.
+fn featured_sql() -> String {
+    format!(
+        "{GAME_SELECT} JOIN profile_featured pf ON pf.game_id = g.id \
+         WHERE pf.user_id = ?1 AND g.published = 1 \
+         ORDER BY pf.position, pf.game_id"
+    )
+}
+
+/// The user's featured games under the read rule.
+pub async fn load_featured(state: &AppState, user_id: &str) -> AppResult<Vec<GameSummary>> {
+    let rows = sqlx::query(&featured_sql())
+        .bind(user_id)
+        .fetch_all(&state.db)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| game_row_from_row(r).map(|g| g.summary()))
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+/// `PUT /api/users/me/featured` body (F029).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeaturedBody {
+    pub game_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeaturedGamesResponse {
+    pub featured: Vec<GameSummary>,
+}
+
+/// F029: the count and duplicate checks of API § F032, in order (first failure wins).
+pub fn validate_featured_ids(ids: &[String]) -> AppResult<()> {
+    if ids.len() > FEATURED_GAMES_MAX {
+        return Err(AppError::validation(format!(
+            "gameIds must have at most {FEATURED_GAMES_MAX} items"
+        )));
+    }
+    for (i, id) in ids.iter().enumerate() {
+        if ids[..i].contains(id) {
+            return Err(AppError::validation(format!("gameIds[{i}] is a duplicate")));
+        }
+    }
+    Ok(())
+}
+
+/// `PUT /api/users/me/featured` (🔒, F029/F032): replace the caller's featured list. The
+/// published check, the delete and the inserts run in one `BEGIN IMMEDIATE` transaction, so
+/// concurrent saves serialise and the last one wins completely; any error writes nothing.
+/// Unknown and unpublished ids get the same message, so the endpoint can't probe for
+/// unpublished games.
+pub async fn put_featured(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiJson(body): ApiJson<FeaturedBody>,
+) -> AppResult<Json<FeaturedGamesResponse>> {
+    let ids = body.game_ids;
+    validate_featured_ids(&ids)?;
+    let ids_json =
+        serde_json::to_string(&ids).map_err(|e| AppError::Internal(format!("json: {e}")))?;
+    let now = crate::models::now_rfc3339();
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    let published: Vec<String> = sqlx::query_scalar(
+        "SELECT value FROM json_each(?1) \
+         WHERE value IN (SELECT id FROM games WHERE published = 1)",
+    )
+    .bind(&ids_json)
+    .fetch_all(&mut *tx)
+    .await?;
+    if let Some(i) = ids.iter().position(|id| !published.contains(id)) {
+        // Dropping `tx` rolls back; nothing was written yet anyway.
+        return Err(AppError::validation(format!(
+            "gameIds[{i}] is not a published game"
+        )));
+    }
+    sqlx::query("DELETE FROM profile_featured WHERE user_id = ?1")
+        .bind(&user.id)
+        .execute(&mut *tx)
+        .await?;
+    for (position, id) in ids.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO profile_featured (user_id, game_id, position, created_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(&user.id)
+        .bind(id)
+        .bind(position as i64)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(Json(FeaturedGamesResponse {
+        featured: load_featured(&state, &user.id).await?,
+    }))
 }
 
 #[derive(Deserialize, Default)]
@@ -107,6 +213,7 @@ pub async fn get_user(
         _ => false,
     };
     let stats = profile_stats(&state, &id, viewer.id(), filter).await?;
+    let featured = load_featured(&state, &id).await?;
     Ok(Json(UserProfile {
         user,
         games,
@@ -115,6 +222,7 @@ pub async fn get_user(
         following,
         is_following,
         stats,
+        featured,
     }))
 }
 

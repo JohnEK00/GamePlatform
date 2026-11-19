@@ -324,7 +324,7 @@ describe("CollectionPage: owner", () => {
     await act(async () => fireEvent.click(btn("Dismiss: removed Space Dodge")));
     expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: "Games" }));
     expect(screen.getByText(/Use/).textContent).toContain("+ Collection");
-    expect(screen.getByRole("link", { name: "Browse games" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Browse games" }).getAttribute("href")).toBe("/browse");
   });
 
   it("Delete: confirm dialog, DELETE, toast and navigation to my collections", async () => {

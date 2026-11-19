@@ -1,10 +1,12 @@
 //! Native application menu. Window actions (reload, fullscreen, devtools, about, quit) run in Rust;
 //! navigation items are forwarded to the webview as a `MENU_EVENT` event whose payload is the item id
-//! (`"upload"`, `"open-folder"`, `"settings"`, `"profile"`, `"feed"`, `"notifications"`, `"collections"`, `"creators"`,
+//! (`"upload"`, `"open-folder"`, `"settings"`, `"home"`, `"browse"`, `"profile"`, `"feed"`, `"notifications"`, `"collections"`, `"creators"`,
 //! `"docs"`, `"screenshot"`, `"controls"`), handled in src/nativeMenu.ts. `"profile"` is View → My Profile (no accelerator,
 //! F028), which opens the user's own profile via `/me`. `"notifications"` is View → Notifications (`CmdOrCtrl+Shift+N`, F007);
 //! `"collections"` is View → Collections (`CmdOrCtrl+Shift+L`, F008), which opens the user's collections.
 //! `"creators"` is View → Creators (no accelerator, F035), which opens the public `/creators` page.
+//! `"home"` (View → Home) and `"browse"` (View → Browse games) open the sectioned home page `/` and the full game
+//! grid `/browse` (F032); both sit at the top of View and have no accelerator.
 //! `"screenshot"` (View → Take Screenshot, `CmdOrCtrl+Shift+S`) is a native accelerator, so it fires even while
 //! the sandboxed game iframe has focus; the webview turns it into `PLAYER_SCREENSHOT_EVENT`. Likewise
 //! `"controls"` (View → Controls, `CmdOrCtrl+Shift+K`) becomes `PLAYER_CONTROLS_EVENT` (opens the controls panel).
@@ -23,6 +25,8 @@ const FORWARDED: &[&str] = &[
     "upload",
     "open-folder",
     "settings",
+    "home",
+    "browse",
     "profile",
     "feed",
     "notifications",
@@ -111,6 +115,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .build()?;
 
     let view = SubmenuBuilder::new(app, "&View")
+        .item(&item(app, "home", "&Home")?)
+        .item(&item(app, "browse", "&Browse games")?)
         .item(&item(app, "profile", "My &Profile")?)
         .separator()
         .item(&item(app, "feed", "F&eed")?)
@@ -244,6 +250,16 @@ mod tests {
         assert!(FORWARDED.contains(&"creators"));
         assert_eq!(accelerator("creators"), None);
         assert!(ACCELERATORS.iter().all(|(id, _)| *id != "creators"));
+    }
+
+    /// F032: View → Home and View → Browse games are forwarded and have no accelerator.
+    #[test]
+    fn home_and_browse_are_forwarded_without_accelerators() {
+        for id in ["home", "browse"] {
+            assert!(FORWARDED.contains(&id), "{id} is forwarded");
+            assert_eq!(accelerator(id), None, "{id} has no accelerator");
+            assert!(ACCELERATORS.iter().all(|(item, _)| *item != id));
+        }
     }
 
     /// F023: while the on-screen keyboard is open, the only bare (unmodified) key the shell takes from the game is

@@ -347,6 +347,8 @@ export type UserProfileResponse = {
   isFollowing: boolean;
   /** F028: totals for the viewer. Older servers omit it (hide plays/achievements and section counts). */
   stats?: ProfileStats;
+  /** F029/F032: 0-4 published games, in the user's order (the read rule). Older servers omit it. */
+  featured?: GameSummary[];
 };
 export type UpdateMeRequest = {
   displayName?: string;
@@ -355,7 +357,8 @@ export type UpdateMeRequest = {
   links?: ProfileLink[] | null;
 };
 
-export type GameSort = "new" | "popular" | "top" | "favorites" | "trending";
+/** F032 `"updated"`: only games with `lastUpdatedAt` (F004), newest update first. */
+export type GameSort = "new" | "popular" | "top" | "favorites" | "trending" | "updated";
 
 export type ListGamesQuery = {
   q?: string;
@@ -698,6 +701,26 @@ export type Creator = {
 
 /** F035: `listCreators` query. Only present keys are sent, in the order sort, page, perPage. */
 export type CreatorQuery = { sort?: CreatorSort; page?: number; perPage?: number };
+
+// ---- F032: home and discover 2 (with F029 featured games) ----
+
+/** F032: `GET /api/creators/spotlight`, one creator per UTC day, the same for every viewer. */
+export type CreatorSpotlight = {
+  /** "YYYY-MM-DD", the current UTC date the pick belongs to. */
+  day: string;
+  /** F035 Creator (isFollowing per viewer); null when there are no creators. */
+  creator: Creator | null;
+  /** 0-3 of the creator's own published games: their own featured games first, then by plays. */
+  games: GameSummary[];
+};
+
+/** F032: `listCollections` query (public explore list). Only present keys are sent, in the order page, perPage. */
+export type ListCollectionsQuery = { page?: number; perPage?: number };
+
+/** F029: `PUT /api/users/me/featured` body: 0-4 game ids, in display order. */
+export type FeaturedGamesRequest = { gameIds: string[] };
+/** F029: the saved list after the read rule (published games only). */
+export type FeaturedGamesResponse = { featured: GameSummary[] };
 
 // ---- F005: screenshots ----
 

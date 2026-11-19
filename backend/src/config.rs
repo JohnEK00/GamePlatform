@@ -37,6 +37,10 @@ pub struct Config {
     /// the snapshot every TTL. 0 = no background task; every trending/related read refreshes
     /// inline instead (tests).
     pub trending_ttl: std::time::Duration,
+    /// Review 12 M1: creators snapshot refresh cadence (`CREATORS_TTL_SECS`, default 60) for
+    /// `GET /api/creators` and `/api/creators/spotlight`. 0 = no background task; every read
+    /// rebuilds inline instead (tests, development).
+    pub creators_ttl: std::time::Duration,
     /// F007: `pollAfterSecs` of `GET /api/notifications/unread-count`
     /// (`NOTIFICATION_POLL_SECS`, default 60, 15-600).
     pub notification_poll_secs: u64,
@@ -52,6 +56,19 @@ pub fn parse_trending_ttl(value: Option<&str>) -> Result<std::time::Duration, St
             .parse::<u64>()
             .map(std::time::Duration::from_secs)
             .map_err(|_| format!("TRENDING_TTL_SECS must be a non-negative integer, got {v:?}")),
+    }
+}
+
+pub const DEFAULT_CREATORS_TTL_SECS: u64 = 60;
+
+/// `CREATORS_TTL_SECS`: unset → 60, otherwise a non-negative integer number of seconds.
+pub fn parse_creators_ttl(value: Option<&str>) -> Result<std::time::Duration, String> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(std::time::Duration::from_secs(DEFAULT_CREATORS_TTL_SECS)),
+        Some(v) => v
+            .parse::<u64>()
+            .map(std::time::Duration::from_secs)
+            .map_err(|_| format!("CREATORS_TTL_SECS must be a non-negative integer, got {v:?}")),
     }
 }
 
@@ -233,6 +250,7 @@ impl Config {
             rate_limit: env_flag("RATE_LIMIT", true),
             trust_proxy: parse_trust_proxy(env_nonempty("TRUST_PROXY").as_deref())?,
             trending_ttl: parse_trending_ttl(env_nonempty("TRENDING_TTL_SECS").as_deref())?,
+            creators_ttl: parse_creators_ttl(env_nonempty("CREATORS_TTL_SECS").as_deref())?,
             notification_poll_secs: parse_notification_poll_secs(
                 env_nonempty("NOTIFICATION_POLL_SECS").as_deref(),
             )?,
@@ -261,6 +279,9 @@ impl Config {
             rate_limit: false,
             trust_proxy: 0,
             trending_ttl: std::time::Duration::from_secs(DEFAULT_TRENDING_TTL_SECS),
+            // Tests read their own writes: rebuild the creators snapshot on every read. Tests
+            // of the periodic behaviour set a TTL and call `state.creators.refresh_now`.
+            creators_ttl: std::time::Duration::ZERO,
             notification_poll_secs: DEFAULT_NOTIFICATION_POLL_SECS,
         }
     }
@@ -269,9 +290,24 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::{
-        Config, parse_notification_poll_secs, parse_public_origin, parse_trending_ttl,
-        parse_trust_proxy, random_secret,
+        Config, parse_creators_ttl, parse_notification_poll_secs, parse_public_origin,
+        parse_trending_ttl, parse_trust_proxy, random_secret,
     };
+
+    #[test]
+    fn creators_ttl_values() {
+        use std::time::Duration;
+        assert_eq!(parse_creators_ttl(None), Ok(Duration::from_secs(60)));
+        assert_eq!(parse_creators_ttl(Some("0")), Ok(Duration::ZERO));
+        assert_eq!(
+            parse_creators_ttl(Some(" 300 ")),
+            Ok(Duration::from_secs(300))
+        );
+        for bad in ["-1", "1.5", "ten"] {
+            let e = parse_creators_ttl(Some(bad)).expect_err(bad);
+            assert!(e.contains("CREATORS_TTL_SECS"), "{e}");
+        }
+    }
 
     #[test]
     fn random_secret_is_256_bit_and_unique() {

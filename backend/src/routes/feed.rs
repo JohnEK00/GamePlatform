@@ -183,7 +183,9 @@ fn json_list<T: Serialize>(v: &[T]) -> AppResult<String> {
 ///       joining nothing else (the post's FK cascade guarantees it exists). Branches (a) and
 ///       (c) never pick these rows (`game_id` and `collection_id` are NULL).
 /// `CROSS JOIN` fixes the join order and `INDEXED BY` the indices, so the plan never depends
-/// on planner statistics. The union is de-duplicated by id and the outer query only joins the
+/// on planner statistics. In (c) the unary `+` on `c.visibility` and `c.owner_id` keeps the
+/// collections probe on the primary key (F032's `idx_collections_public_updated` otherwise
+/// tipped it onto `idx_collections_owner_updated`). The union is de-duplicated by id and the outer query only joins the
 /// at most `4 · (limit + 1)` picked rows. The work grows with the activity of the creators the
 /// viewer follows and the games they favorited (before the cursor), never with total platform
 /// activity. `tests/review2.rs` asserts the plan.
@@ -229,7 +231,7 @@ pub const FEED_SQL: &str = "\
           AND e.actor_id <> ?1 \
           AND e.kind = 'collectionUpdated' \
           AND e.kind IN (SELECT value FROM json_each(?4)) \
-          AND c.id = e.collection_id AND c.visibility = 'public' AND c.owner_id = e.actor_id \
+          AND c.id = e.collection_id AND +c.visibility = 'public' AND +c.owner_id = e.actor_id \
           AND EXISTS (SELECT 1 FROM json_each(e.game_ids) j \
                       JOIN collection_games cg ON cg.collection_id = e.collection_id \
                         AND cg.game_id = j.value \

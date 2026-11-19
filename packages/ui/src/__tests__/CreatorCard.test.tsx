@@ -109,4 +109,14 @@ describe("CreatorCard (F035)", () => {
     expect(sk.getAttribute("aria-hidden")).toBe("true");
     expect(sk.querySelectorAll(".pf-skeleton").length).toBe(4);
   });
+
+  it("F032: headingLevel={3} renders the name as an h3 (still labelling the article)", async () => {
+    const client = makeClient(null);
+    await renderWith(client, <CreatorCard creator={miaCard()} headingLevel={3} />);
+    expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
+    const h3 = screen.getByRole("heading", { level: 3, name: "Mia" });
+    expect(h3.id).toBe("creator-u2-name");
+    expect(h3.className).toBe("pf-creator-card__name");
+    expect(screen.getByRole("article", { name: "Mia" })).toBeTruthy();
+  });
 });

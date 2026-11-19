@@ -2270,3 +2270,14 @@ type UserProfileResponse = {
 - Everything listed is already public: public collections (F008), creator data (F035) and published games.
 - Featured lists are public profile content chosen by their owner. Unknown and unpublished game ids get the same 422 message, so the endpoint can't be used to discover unpublished games.
 - Featuring a game sends no notification to its owner.
+
+### F032 implementation notes (backend, review 12 M1)
+- **Creators snapshot delay.** `GET /api/creators` and `GET /api/creators/spotlight` read a snapshot that is refreshed every `CREATORS_TTL_SECS` (default 60 s). Most changes show up at most one TTL late:
+  - new or removed creators
+  - games, plays, `firstPublishedAt` and `lastActiveAt`
+  - follower counts
+  - display name, avatar, banner and bio excerpt
+  - which creators are eligible for the spotlight
+
+  `isFollowing` and the spotlight's `games` (including the F029 featured order) are always live. Response shapes, orders and errors are unchanged.
+- **`sort=updated` with `owner=me`.** As with every other sort, the caller also sees their own unpublished games that have a `lastUpdatedAt`.

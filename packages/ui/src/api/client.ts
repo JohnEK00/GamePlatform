@@ -29,6 +29,10 @@ import type {
   SuggestedCreator,
   Creator,
   CreatorQuery,
+  CreatorSpotlight,
+  FeaturedGamesRequest,
+  FeaturedGamesResponse,
+  ListCollectionsQuery,
   UserRef,
   Game,
   GameAchievement,
@@ -626,6 +630,15 @@ export class ApiClient {
   listCreators(query: CreatorQuery = {}, signal?: AbortSignal): Promise<Page<Creator>> {
     return this.request("/api/creators", { query: { sort: query.sort, page: query.page, perPage: query.perPage }, signal });
   }
+  /** F032: today's creator spotlight (public; one creator per UTC day, up to 3 of their games). */
+  getCreatorSpotlight(signal?: AbortSignal): Promise<CreatorSpotlight> {
+    return this.request("/api/creators/spotlight", { signal });
+  }
+  /** F029: replaces the signed-in user's featured games (0-4 ids, in display order; `[]` clears). */
+  setFeaturedGames(gameIds: string[]): Promise<FeaturedGamesResponse> {
+    const body: FeaturedGamesRequest = { gameIds };
+    return this.request("/api/users/me/featured", { method: "PUT", json: body });
+  }
   /** Newest first. `kinds` is sent comma-separated and omitted when empty. */
   getFeed(query: FeedQuery = {}, signal?: AbortSignal): Promise<FeedPage> {
     const kinds = query.kinds && query.kinds.length > 0 ? query.kinds.join(",") : undefined;
@@ -720,6 +733,13 @@ export class ApiClient {
   }
 
   // ---------- F008: Collections ----------
+  /**
+   * F032: the public explore list (public collections with at least 3 published games, most recently updated
+   * first). Sends only present keys, in the order page, perPage.
+   */
+  listCollections(query: ListCollectionsQuery = {}, signal?: AbortSignal): Promise<Page<CollectionSummary>> {
+    return this.request("/api/collections", { query: { page: query.page, perPage: query.perPage }, signal });
+  }
   /** 201 `Collection`. With `gameId`, that game is the first item. */
   createCollection(body: CreateCollectionRequest): Promise<Collection> {
     return this.request("/api/collections", { method: "POST", json: body });

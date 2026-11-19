@@ -68,6 +68,8 @@ describe("native menu events", () => {
     await flush();
     for (const [id, route] of [
       ["upload", "/upload"],
+      ["home", "/"],
+      ["browse", "/browse"],
       ["settings", "/settings"],
       ["profile", "/me"],
       ["feed", "/feed"],
@@ -96,6 +98,23 @@ describe("native menu events", () => {
     window.location.hash = "#/play/abc";
     m.handler!({ payload: "creators" });
     expect(window.location.hash).toBe("#/creators");
+    expect(seen).toEqual([]);
+    expect(pendingFlag()).toBeUndefined();
+  });
+
+  it("home and browse (View → Home / Browse games, F032) navigate to #/ and #/browse from any route", async () => {
+    const seen = capture("webgame:player-screenshot", "webgame:player-controls", "webgame:studio-open-folder");
+    cleanup = installNativeIntegrations();
+    await flush();
+    window.location.hash = "#/play/abc";
+    m.handler!({ payload: "browse" });
+    expect(window.location.hash).toBe("#/browse");
+    window.location.hash = "#/browse?tag=arcade&page=2";
+    m.handler!({ payload: "browse" });
+    expect(window.location.hash).toBe("#/browse");
+    window.location.hash = "#/u/sam";
+    m.handler!({ payload: "home" });
+    expect(window.location.hash).toBe("#/");
     expect(seen).toEqual([]);
     expect(pendingFlag()).toBeUndefined();
   });

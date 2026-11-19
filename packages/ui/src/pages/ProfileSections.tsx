@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
-import type { Post } from "../api/types";
+import type { GameSummary, Post } from "../api/types";
+import { FeaturedGamesDialog } from "../components/FeaturedGamesDialog";
 import { useApi } from "../context/config";
 import { RecentAchievements } from "../components/Achievements";
 import { EmptyState, ErrorState, Pagination } from "../components/common";
@@ -30,7 +31,65 @@ function OwnNoGames() {
   );
 }
 
-/** `/u/:username` (index): achievements, the latest games, a screenshots shelf and collections. */
+/**
+ * F029 Featured row (first on the Overview). Visitors see it only with games; the owner also gets the picker
+ * (`Edit featured`, or the `Feature games` panel when empty). Older servers (no `featured`) show nothing.
+ */
+function ProfileFeatured({ featured, isMe, onSaved }: { featured: GameSummary[] | undefined; isMe: boolean; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  // The saved list shows at once (so the right button exists when focus returns); the next profile load wins.
+  const [saved, setSaved] = useState<{ base: GameSummary[] | undefined; list: GameSummary[] } | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  if (!Array.isArray(featured)) return null;
+  const list = saved && saved.base === featured ? saved.list : featured;
+  if (list.length === 0 && !isMe) return null;
+
+  const dialog = isMe && (
+    <FeaturedGamesDialog
+      open={open}
+      initial={list}
+      onClose={() => setOpen(false)}
+      onSaved={(next) => {
+        setSaved({ base: featured, list: next });
+        onSaved();
+      }}
+      returnFocus={() => sectionRef.current?.querySelector<HTMLElement>(".pf-profile-featured__edit")}
+    />
+  );
+
+  return (
+    <section ref={sectionRef} className="pf-shelf pf-profile-featured" aria-labelledby="profile-featured-title">
+      <div className="pf-shelf__head">
+        <h2 id="profile-featured-title" className="pf-section-title">
+          Featured
+        </h2>
+        {isMe && list.length > 0 && (
+          <button
+            type="button"
+            className="pf-btn pf-btn--ghost pf-btn--sm pf-profile-featured__edit"
+            aria-label="Edit featured games"
+            onClick={() => setOpen(true)}
+          >
+            Edit featured
+          </button>
+        )}
+      </div>
+      {list.length > 0 ? (
+        <GameGrid games={list} />
+      ) : (
+        <div className="pf-featured-empty">
+          <p>Pick up to 4 games to show first on your profile: your own or ones you love.</p>
+          <button type="button" className="pf-btn pf-btn--sm pf-profile-featured__edit" onClick={() => setOpen(true)}>
+            Feature games
+          </button>
+        </div>
+      )}
+      {dialog}
+    </section>
+  );
+}
+
+/** `/u/:username` (index): featured games, achievements, the latest games, a screenshots shelf and collections. */
 export function ProfileOverview() {
   const ctx = useProfileOutlet();
   const user = ctx?.profile.user;
@@ -51,7 +110,8 @@ export function ProfileOverview() {
     stats.achievements === 0 &&
     stats.screenshots === 0 &&
     stats.collections === 0 &&
-    (stats.posts ?? 0) === 0
+    (stats.posts ?? 0) === 0 &&
+    (Array.isArray(profile.featured) ? profile.featured.length : 0) === 0
   ) {
     return (
       <section className="pf-profile-section">
@@ -64,6 +124,8 @@ export function ProfileOverview() {
 
   return (
     <div className="pf-profile-section">
+      <ProfileFeatured key={`featured:${username}`} featured={profile.featured} isMe={isMe} onSaved={ctx.reload} />
+
       <RecentAchievements username={username} />
 
       {/* F030: hidden on servers without posts (no stats.posts). */}

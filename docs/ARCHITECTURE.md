@@ -2062,3 +2062,18 @@ Home and discover 2, with F029 featured games on profiles (spec: `docs/features/
   - backend-dev: `migrations/0027_f032.sql` (new), `routes/games.rs`, `routes/collections.rs`, `routes/creators.rs`, `routes/users.rs`, `routes/mod.rs`, `tests/f032.rs` (new), `tests/f003.rs` (one message).
   - frontend-dev: `api/types.ts`, `api/client.ts`, `home.ts` (new), `components/HomeSections.tsx` (new), `components/FeaturedGamesDialog.tsx` (new), `components/CreatorCard.tsx`, `components/Layout.tsx`, `pages/HomePage.tsx`, `pages/BrowsePage.tsx` (new), `pages/ProfileSections.tsx`, `pages/GamePage.tsx`, `pages/FavoritesPage.tsx`, `pages/CollectionPage.tsx`, `WebGameApp.tsx`, `index.ts`, `styles.css`, `packages/ui/README.md` and tests.
   - desktop-dev: `src-tauri/src/menu.rs`, `src/nativeMenu.ts`, `src/__tests__/nativeMenu.test.ts`, `src/__tests__/f032.desktop.test.tsx` (new), `apps/desktop/README.md`.
+
+### F032 implementation notes and review-12 M1 (creators snapshot)
+- **Snapshot.** `backend/src/creators_snapshot.rs` holds `CreatorsCache` in `AppState.creators`. It is in memory only (no table) and uses the same single-flight, backoff and counter machinery as `TrendingCache`.
+  - **Refresh query.** One refresh runs `creator_sql(false, "u.id ASC")`, the F035 CTE, once.
+  - **What it stores.** Rows are kept in user-id order, which is the spotlight order. Three index vectors give the F035 orders:
+    - popular: followers ↓, plays ↓, username_lower ↑
+    - active: lastActive ↓, username_lower ↑
+    - new: firstPublished ↓, username_lower ↑
+  - **Ordering check.** The vectors use the same byte order as SQLite's BINARY collation, and a test checks them against the SQL `ORDER BY`.
+- **`GET /api/creators`.** `total` is the snapshot length and a page is a slice of the vector for the chosen sort. One `IS_FOLLOWING_SQL` query then runs for the page's ids, only when the caller is signed in.
+- **`GET /api/creators/spotlight`.** The pick is the row at `spotlight_index(utc_day_number(now), N)` in id order. The games query and `isFollowing` are read live. This replaces steps 1–3 of the spotlight SQL above and its retry-at-offset-0 fallback.
+- **Interval.** The refresh interval is set by `CREATORS_TTL_SECS`, default 60 (see backend/README). It works like `TRENDING_TTL_SECS`, and `0` means the snapshot is rebuilt inline on every read. Tests use 0, or force a refresh with `refresh_now`.
+- **Cost (debug build).** About 200 ms per request before, about 0.9 ms after, plus about 340 ms per background refresh.
+- **Feed plan (F021 feed SQL).** The new partial index `idx_collections_public_updated` changed SQLite's plan for feed branch (c). `FEED_SQL` now uses unary `+` on `c.visibility` and `c.owner_id`, so the collections primary key stays the probe. That is the same pattern `list_filter` uses.
+- **`PUT /api/users/me/featured`.** Shape errors (`{}`, `gameIds` not an array, non-string items) are 422 `validation`. Malformed JSON is 400.

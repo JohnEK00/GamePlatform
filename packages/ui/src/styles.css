@@ -6840,3 +6840,160 @@ a.pf-post-attachment:focus-visible {
     justify-content: center;
   }
 }
+
+/* Review 12 L1: the locked notice takes focus after a lock race; the refused text stays readable below it. */
+.pf-post-thread__locked:focus {
+  outline: none;
+}
+.pf-post-thread__locked:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.pf-post-thread__unsent {
+  display: grid;
+  gap: 6px;
+}
+.pf-post-thread__unsent .pf-input {
+  resize: vertical;
+  color: var(--pf-text-2);
+}
+/* Review 12 L2: the Creators heading takes focus after a page change. */
+.pf-creators .pf-pagehead h1:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ---------- F032: home sections, /browse, creator spotlight; F029 featured games ---------- */
+.pf-home {
+  gap: 36px;
+}
+.pf-browse h1.pf-section-title {
+  font-size: 1.6rem !important;
+  margin: 0;
+}
+.pf-home-spotlight__lead {
+  margin: -6px 0 0;
+}
+.pf-spotlight {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 18px;
+  align-items: start;
+  min-width: 0;
+}
+.pf-spotlight > .pf-grid {
+  min-width: 0;
+}
+.pf-home-tags__all {
+  margin: 4px 0 0;
+}
+.pf-profile-featured {
+  min-width: 0;
+}
+.pf-featured-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  padding: 16px;
+  border: 1px dashed var(--pf-border);
+  border-radius: var(--pf-radius);
+  color: var(--pf-text-2);
+}
+.pf-featured-empty p {
+  margin: 0;
+  flex: 1 1 260px;
+}
+.pf-featured-dialog {
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+}
+.pf-featured-dialog h2,
+.pf-featured-dialog p {
+  margin: 0;
+}
+.pf-featured-dialog h2:focus:not(:focus-visible),
+.pf-featured-dialog__subtitle:focus:not(:focus-visible) {
+  outline: none;
+}
+.pf-featured-dialog__subtitle {
+  margin: 6px 0 0;
+  font-size: 0.95rem;
+  color: var(--pf-text-2);
+}
+.pf-featured-selected,
+.pf-featured-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.pf-featured-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: var(--pf-radius-sm);
+  background: var(--pf-surface-2);
+}
+.pf-featured-row__thumb {
+  flex: none;
+  width: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.pf-featured-row__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-featured-row__name {
+  font-weight: 600;
+}
+.pf-featured-row__actions {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+.pf-featured-candidates {
+  max-height: 40vh;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding-right: 2px;
+}
+
+@media (max-width: 860px) {
+  .pf-spotlight {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .pf-home {
+    gap: 28px;
+  }
+  /* Full width with 12 px side margins (the backdrop's padding). */
+  .pf-modal-backdrop:has(> .pf-featured-dialog) {
+    padding: 12px;
+  }
+  .pf-featured-dialog {
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    padding: 16px;
+  }
+  .pf-featured-empty {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

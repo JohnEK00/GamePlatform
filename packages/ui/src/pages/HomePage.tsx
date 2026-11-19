@@ -1,44 +1,20 @@
-import { Link, useSearchParams } from "react-router-dom";
-import type { GameSort } from "../api/types";
+import { useCallback, useState } from "react";
+import { Link, Navigate, useLocation } from "react-router-dom";
+import type { GameSummary, Page } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
-import { EmptyState, ErrorState, Pagination, Skeleton, StarsDisplay, TagChip, Thumbnail } from "../components/common";
-import { GameGrid } from "../components/GameCard";
-import { ToggleGroup, type TabItem } from "../components/Tabs";
+import { EmptyState, Skeleton, StarsDisplay, Thumbnail } from "../components/common";
+import { CollectionsShelf, CreatorSpotlightSection, GameShelf, TagsSection } from "../components/HomeSections";
+import { BROWSE_PATH, browsePath, HOME_SHELF_SIZE, legacyHomeRedirect } from "../home";
 import { formatCount, useAsync, useDocumentTitle } from "../util";
 
-const SORTS: { key: GameSort; label: string }[] = [
-  { key: "new", label: "New" },
-  { key: "trending", label: "Trending" },
-  { key: "popular", label: "Popular" },
-  { key: "top", label: "Top rated" },
-  { key: "favorites", label: "Most favorited" },
-];
-const SORT_ITEMS: TabItem<GameSort>[] = SORTS.map((s) => ({ value: s.key, label: s.label }));
-const PER_PAGE = 24;
 const TRENDING_SHELF_SIZE = 8;
+const ELLIPSIS = String.fromCodePoint(0x2026);
+const PLAY = String.fromCodePoint(0x25b6);
+const JOYSTICK = String.fromCodePoint(0x1f579);
 
-/** F003: "Trending this week" shelf. Hidden while nothing has weekly plays, and silently on errors. */
-function TrendingShelf() {
-  const api = useApi();
-  const { data, loading, error } = useAsync(() => api.listGames({ sort: "trending", perPage: TRENDING_SHELF_SIZE }), [api]);
-  // Older servers may omit playsWeek: treat it as 0 (=> no shelf).
-  const items = (data?.items ?? []).filter((g) => (g.playsWeek ?? 0) > 0);
-  if (error || (!loading && items.length === 0)) return null;
-  return (
-    <section className="pf-shelf" aria-labelledby="pf-trending-title">
-      <div className="pf-shelf__head">
-        <h2 id="pf-trending-title" className="pf-section-title">
-          Trending this week
-        </h2>
-        <Link to="/?sort=trending" className="pf-shelf__more">
-          See all →
-        </Link>
-      </div>
-      <GameGrid games={items} loading={loading} skeletons={TRENDING_SHELF_SIZE} highlight="trending" />
-    </section>
-  );
-}
+/** F003: only items with weekly plays (older servers omit playsWeek: treat it as 0). */
+const hasWeeklyPlays = (g: GameSummary) => (g.playsWeek ?? 0) > 0;
 
 function Featured() {
   const api = useApi();
@@ -66,10 +42,15 @@ function Featured() {
             <div className="pf-featured__info">
               <span className="pf-badge">#1 top rated</span>
               <h3>{hero.title}</h3>
-              <p>{hero.description.slice(0, 140)}{hero.description.length > 140 ? "…" : ""}</p>
+              <p>
+                {hero.description.slice(0, 140)}
+                {hero.description.length > 140 ? ELLIPSIS : ""}
+              </p>
               <div className="pf-featured__meta">
                 <StarsDisplay value={hero.ratingAvg} count={hero.ratingCount} />
-                <span>▶ {formatCount(hero.plays)} plays</span>
+                <span>
+                  {PLAY} {formatCount(hero.plays)} plays
+                </span>
               </div>
             </div>
           </Link>
@@ -91,153 +72,99 @@ function Featured() {
   );
 }
 
-export function HomePage() {
-  const api = useApi();
+function Hero() {
   const { user } = useAuth();
-  const [params, setParams] = useSearchParams();
-  const q = params.get("q") ?? "";
-  const tag = params.get("tag") ?? "";
-  const sortParam = params.get("sort");
-  const sort: GameSort = SORTS.some((s) => s.key === sortParam) ? (sortParam as GameSort) : "new";
-  const page = Math.max(1, Number(params.get("page")) || 1);
-  useDocumentTitle(q ? `Search: ${q}` : tag ? `#${tag}` : "");
+  return (
+    <section className="pf-hero">
+      <div className="pf-hero__text">
+        <p className="pf-eyebrow">Indie games, forged in the browser</p>
+        <h1>
+          Play something <span className="pf-gradient-text">new</span> today.
+        </h1>
+        <p className="pf-hero__lead">
+          Pixelforge Arcade hosts tiny WebGL games made by people like you. Play instantly {String.fromCodePoint(0x2014)} no
+          installs {String.fromCodePoint(0x2014)} rate your favourites, chase the leaderboards, and ship your own in minutes.
+        </p>
+        <div className="pf-hero__cta">
+          <Link className="pf-btn pf-btn--primary pf-btn--lg" to={BROWSE_PATH}>
+            Start playing
+          </Link>
+          <Link to={user ? "/upload" : "/docs"} className="pf-btn pf-btn--ghost pf-btn--lg">
+            {user ? "Upload a game" : "Make a game"}
+          </Link>
+        </div>
+      </div>
+      <div className="pf-hero__art" aria-hidden="true">
+        <div className="pf-hero__screen">
+          <span>PRESS START</span>
+        </div>
+      </div>
+    </section>
+  );
+}
 
-  const tags = useAsync(() => api.listTags(), [api]);
-  const games = useAsync(() => api.listGames({ q, tag, sort, page, perPage: PER_PAGE }), [api, q, tag, sort, page]);
+const NEW_QUERY = { sort: "new", perPage: HOME_SHELF_SIZE } as const;
+const UPDATED_QUERY = { sort: "updated", perPage: HOME_SHELF_SIZE } as const;
+const TRENDING_QUERY = { sort: "trending", perPage: TRENDING_SHELF_SIZE } as const;
 
-  const update = (patch: Record<string, string | null>) => {
-    const next = new URLSearchParams(params);
-    for (const [k, v] of Object.entries(patch)) {
-      if (v === null || v === "") next.delete(k);
-      else next.set(k, v);
-    }
-    if (!("page" in patch)) next.delete("page");
-    setParams(next);
-  };
-
-  const filtered = !!(q || tag);
-  const showHero = !filtered && page === 1;
+/** F032 `/`: the sectioned discover page (spec section 0.1). Every request starts in parallel on mount. */
+function Home() {
+  useDocumentTitle("");
+  const [empty, setEmpty] = useState(false);
+  // New releases drives the empty-platform rule: with no games at all, only the hero and an invitation remain.
+  const onNewLoaded = useCallback((p: Page<GameSummary>) => setEmpty(p.total === 0), []);
 
   return (
-    <div className="pf-container pf-page">
-      {showHero && (
-        <section className="pf-hero">
-          <div className="pf-hero__text">
-            <p className="pf-eyebrow">Indie games, forged in the browser</p>
-            <h1>
-              Play something <span className="pf-gradient-text">new</span> today.
-            </h1>
-            <p className="pf-hero__lead">
-              Pixelforge Arcade hosts tiny WebGL games made by people like you. Play instantly — no installs — rate your
-              favourites, chase the leaderboards, and ship your own in minutes.
-            </p>
-            <div className="pf-hero__cta">
-              <button
-                type="button"
-                className="pf-btn pf-btn--primary pf-btn--lg"
-                onClick={() => document.getElementById("pf-browse")?.scrollIntoView?.({ behavior: "smooth" })}
-              >
-                Start playing
-              </button>
-              <Link to={user ? "/upload" : "/docs"} className="pf-btn pf-btn--ghost pf-btn--lg">
-                {user ? "Upload a game" : "Make a game"}
-              </Link>
-            </div>
-          </div>
-          <div className="pf-hero__art" aria-hidden="true">
-            <div className="pf-hero__screen">
-              <span>PRESS START</span>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {showHero && <Featured />}
-
-      {showHero && <TrendingShelf />}
-
-      <section id="pf-browse" className="pf-browse" aria-labelledby="pf-browse-title">
-        <div className="pf-browse__head">
-          <h2 id="pf-browse-title" className="pf-section-title">
-            {q ? (
-              <>
-                Results for “{q}”
-              </>
-            ) : tag ? (
-              <>#{tag}</>
-            ) : (
-              "Browse games"
-            )}
-            {games.data && <span className="pf-muted pf-section-title__count">{games.data.total}</span>}
-          </h2>
-          {/* A sort order, not tabs: a toggle-button group (aria-pressed). */}
-          <ToggleGroup label="Sort games" items={SORT_ITEMS} value={sort} onChange={(k) => update({ sort: k === "new" ? null : k })} />
-        </div>
-
-        <div className="pf-chips" aria-label="Filter by tag">
-          {tags.loading && !tags.data
-            ? Array.from({ length: 6 }, (_, i) => <Skeleton key={i} width={70} height={28} radius={14} />)
-            : (
-              <>
-                <TagChip tag="all" active={!tag} onClick={() => update({ tag: null })} />
-                {(tags.data ?? []).map((t) => (
-                  <TagChip key={t.tag} tag={t.tag} active={t.tag === tag} onClick={() => update({ tag: t.tag === tag ? null : t.tag })} />
-                ))}
-              </>
-            )}
-        </div>
-
-        {(q || tag) && (
-          <p className="pf-filters">
-            {q && (
-              <button type="button" className="pf-chip pf-chip--removable" onClick={() => update({ q: null })}>
-                “{q}” ×
-              </button>
-            )}
-            {tag && (
-              <button type="button" className="pf-chip pf-chip--removable" onClick={() => update({ tag: null })}>
-                #{tag} ×
-              </button>
-            )}
-          </p>
-        )}
-
-        {games.error ? (
-          <ErrorState error={games.error} onRetry={games.reload} />
-        ) : !games.loading && games.data && games.data.items.length === 0 ? (
-          <EmptyState
-            icon="🕹"
-            title={filtered ? "No games match" : "No games yet"}
-            action={
-              filtered ? (
-                <button type="button" className="pf-btn" onClick={() => setParams(new URLSearchParams())}>
-                  Clear filters
-                </button>
-              ) : (
-                <Link to="/upload" className="pf-btn pf-btn--primary">
-                  Upload the first one
-                </Link>
-              )
-            }
-          >
-            {filtered ? "Try another search or tag." : "The arcade is empty. Be the first to ship a game!"}
-          </EmptyState>
-        ) : (
-          <GameGrid games={games.data?.items} loading={games.loading} highlight={sort === "trending" ? "trending" : undefined} />
-        )}
-
-        {games.data && (
-          <Pagination
-            page={page}
-            total={games.data.total}
-            perPage={games.data.perPage || PER_PAGE}
-            onPage={(p) => {
-              update({ page: p === 1 ? null : String(p) });
-              document.getElementById("pf-browse")?.scrollIntoView?.({ behavior: "smooth" });
-            }}
+    <div className="pf-container pf-page pf-home">
+      <Hero />
+      {empty ? (
+        <EmptyState
+          icon={JOYSTICK}
+          title="No games yet"
+          action={
+            <Link className="pf-btn pf-btn--primary" to="/upload">
+              Upload the first one
+            </Link>
+          }
+        >
+          The arcade is empty. Be the first to ship a game!
+        </EmptyState>
+      ) : (
+        <>
+          <Featured />
+          <GameShelf
+            id="pf-trending-title"
+            title="Trending this week"
+            seeAll={browsePath({ sort: "trending" })}
+            query={TRENDING_QUERY}
+            size={TRENDING_SHELF_SIZE}
+            highlight="trending"
+            filter={hasWeeklyPlays}
           />
-        )}
-      </section>
+          <GameShelf id="pf-home-new-title" title="New releases" seeAll={BROWSE_PATH} query={NEW_QUERY} size={HOME_SHELF_SIZE} onLoaded={onNewLoaded} />
+          <CreatorSpotlightSection />
+          <GameShelf
+            id="pf-home-updated-title"
+            title="Recently updated"
+            seeAll={browsePath({ sort: "updated" })}
+            query={UPDATED_QUERY}
+            size={HOME_SHELF_SIZE}
+          />
+          <CollectionsShelf />
+          <TagsSection />
+        </>
+      )}
     </div>
   );
+}
+
+/**
+ * `/`. Old links to the grid (`/?q=`, `?tag=`, `?sort=`, `?page=`) are sent to `/browse` with the same query,
+ * replacing the history entry so Back never returns to the redirecting URL (spec section 0.8).
+ */
+export function HomePage() {
+  const { search } = useLocation();
+  const redirect = legacyHomeRedirect(search);
+  if (redirect) return <Navigate replace to={redirect} />;
+  return <Home />;
 }

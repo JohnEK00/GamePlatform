@@ -27,6 +27,7 @@ import { StarRating } from "../components/StarRating";
 import { errorMessage, formatCount, formatDate, looksLikeZip, useAsync, useDocumentTitle, VERSIONS_SECTION, SCREENSHOTS_SECTION, isNotesError, REPLACE_CONFLICT_MESSAGE } from "../util";
 import { SCREENSHOTS_SECTION_ID } from "../components/ScreenshotDialog";
 import { NotFoundPage } from "./NotFoundPage";
+import { browsePath } from "../home";
 
 /** F004: the modal shown after a bundle is picked: file name, "What's new" notes, Upload / Cancel. */
 function ReplaceBundleDialog({
@@ -449,7 +450,7 @@ export function GamePage() {
         {game.tags.length > 0 && (
           <div className="pf-chips">
             {game.tags.map((t) => (
-              <TagChip key={t} tag={t} to={`/?tag=${encodeURIComponent(t)}`} />
+              <TagChip key={t} tag={t} to={browsePath({ tag: t })} />
             ))}
           </div>
         )}

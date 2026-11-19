@@ -6,6 +6,7 @@ pub mod bests;
 pub mod bundle;
 pub mod config;
 pub mod controls_backfill;
+pub mod creators_snapshot;
 pub mod db;
 pub mod error;
 pub mod export;
@@ -46,6 +47,8 @@ pub struct AppState {
     pub play_dedupe: ratelimit::PlayDedupe,
     /// F003 trending snapshot freshness + single flight.
     pub trending: trending::TrendingCache,
+    /// Review 12 M1: creator rows for `/api/creators` and `/api/creators/spotlight`.
+    pub creators: creators_snapshot::CreatorsCache,
     /// F013: concurrent bundle-download builds (`EXPORT_SLOTS` permits, `try_acquire`).
     pub export_slots: Arc<tokio::sync::Semaphore>,
     /// F005: concurrent screenshot decodes (`IMAGE_SLOTS` permits, `try_acquire`).
@@ -78,6 +81,7 @@ impl AppState {
             profile_image_locks: locks::StripedLocks::default(),
             play_dedupe: ratelimit::PlayDedupe::new(),
             trending: trending::TrendingCache::new(),
+            creators: creators_snapshot::CreatorsCache::new(),
             export_slots: Arc::new(tokio::sync::Semaphore::new(EXPORT_SLOTS)),
             image_slots: Arc::new(tokio::sync::Semaphore::new(IMAGE_SLOTS)),
             bests_rebuild: Arc::new(tokio::sync::Mutex::new(())),
@@ -89,6 +93,11 @@ impl AppState {
         // F003: refresh the trending snapshot once at startup (failures are logged). Later
         // refreshes run in `trending::spawn_maintenance` (started by `serve`).
         state.trending.refresh_now(&state.db).await;
+        // Review 12 M1: the creators snapshot likewise (later refreshes: `spawn_maintenance`;
+        // with `CREATORS_TTL_SECS = 0` reads rebuild it inline, so skip the startup build).
+        if !state.config.creators_ttl.is_zero() {
+            state.creators.refresh_now(&state.db).await;
+        }
         Ok(state)
     }
 

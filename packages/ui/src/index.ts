@@ -476,6 +476,27 @@ export { CreatorsPage } from "./pages/CreatorsPage";
 export { CreatorCard, CreatorCardSkeleton } from "./components/CreatorCard";
 export { CREATOR_SORTS, CREATOR_SORT_LABELS, CREATORS_PER_PAGE, parseCreatorSort, creatorsPath, creatorStatsText, isValidCreator } from "./creators";
 export type { Creator, CreatorSort, CreatorQuery } from "./api/types";
+// F032: home and discover 2 (with F029 featured games)
+export { BrowsePage, BROWSE_SORTS } from "./pages/BrowsePage";
+export { GameShelf, CreatorSpotlightSection, CollectionsShelf, TagsSection, SEE_ALL_LABEL, SEE_ALL_CREATORS_LABEL } from "./components/HomeSections";
+export type { GameShelfProps } from "./components/HomeSections";
+export { FeaturedGamesDialog } from "./components/FeaturedGamesDialog";
+export type { FeaturedGamesDialogProps } from "./components/FeaturedGamesDialog";
+export {
+  HOME_SHELF_SIZE,
+  HOME_COLLECTIONS_SIZE,
+  HOME_TAGS_MAX,
+  FEATURED_GAMES_MAX,
+  BROWSE_PATH,
+  browsePath,
+  LEGACY_HOME_KEYS,
+  legacyHomeRedirect,
+  isValidSpotlight,
+  // `moveItem` is already the F008 collections helper (from, to); the F032 one (index, delta) is aliased.
+  moveItem as moveItemBy,
+} from "./home";
+export type { BrowseParams } from "./home";
+export type { CreatorSpotlight, ListCollectionsQuery, FeaturedGamesRequest, FeaturedGamesResponse } from "./api/types";
 export { NotificationsPage, NOTIFICATIONS_PER_PAGE } from "./pages/NotificationsPage";
 export { CollectionPage, LINK_COPIED_MS, COLLECTION_CONFLICT_MESSAGE } from "./pages/CollectionPage";
 export { UserCollectionsPage, MyCollectionsRedirect, USER_COLLECTIONS_PER_PAGE } from "./pages/UserCollectionsPage";

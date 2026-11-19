@@ -4,7 +4,8 @@
  * `"collections"` (View → Collections, F008) navigates to `/collections`, which the UI redirects to the user's
  * collections page (or to login when signed out). `"profile"` (View → My Profile, F028) navigates to `/me`, which
  * the UI redirects to the user's profile (or to login when signed out). `"creators"` (View → Creators, F035)
- * navigates to the public `/creators` page.
+ * navigates to the public `/creators` page. `"home"` (View → Home, F032) navigates to the sectioned home page `/`
+ * and `"browse"` (View → Browse games, F032) to the full game grid `/browse`.
  * `"screenshot"` (View → Take Screenshot) dispatches `PLAYER_SCREENSHOT_EVENT` for the mounted player or Studio
  * preview and does not navigate; with neither mounted it does nothing. `"controls"` (View → Controls) likewise
  * dispatches `PLAYER_CONTROLS_EVENT` to open the controls panel, without navigating.
@@ -19,6 +20,8 @@ export const MENU_EVENT = "app-menu";
 const ROUTES: Record<string, string> = {
   upload: "/upload",
   settings: "/settings",
+  home: "/",
+  browse: "/browse",
   profile: "/me",
   feed: "/feed",
   notifications: "/notifications",

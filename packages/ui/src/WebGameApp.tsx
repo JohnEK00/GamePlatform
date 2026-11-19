@@ -10,6 +10,7 @@ import { Layout, RequireAuth } from "./components/Layout";
 import { FavoritesProvider } from "./components/Favorite";
 import { FollowProvider } from "./components/Follow";
 import { HomePage } from "./pages/HomePage";
+import { BrowsePage } from "./pages/BrowsePage";
 import { GamePage } from "./pages/GamePage";
 import { UploadPage } from "./pages/UploadPage";
 import { EditGamePage } from "./pages/EditGamePage";
@@ -68,6 +69,7 @@ export function WebGameRoutes({ extraRoutes }: { extraRoutes?: ReactNode }) {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<HomePage />} />
+        <Route path="browse" element={<BrowsePage />} />
         <Route path="games/:id" element={<GamePage />} />
         <Route
           path="games/:id/edit"
