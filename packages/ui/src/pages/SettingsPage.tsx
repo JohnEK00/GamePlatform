@@ -16,6 +16,7 @@ import { useToast } from "../context/toast";
 import { Alert, Avatar, ProgressBar, Spinner } from "../components/common";
 import { FileDrop } from "../components/FileDrop";
 import { NotificationSettingsSection } from "../components/NotificationSettings";
+import { validateBio, validateDisplayName } from "../profile";
 import { errorMessage, useDocumentTitle } from "../util";
 import { IMAGE_ACCEPT } from "./UploadPage";
 
@@ -39,10 +40,14 @@ export function SettingsPage() {
   const [links, setLinks] = useState<ProfileLinkRow[]>(() => linkRowsOf(user?.links));
   const [linkErrorsShown, setLinkErrorsShown] = useState(false);
   const linksEditor = useRef<ProfileLinksEditorHandle>(null);
+  const [fieldErrorsShown, setFieldErrorsShown] = useState(false);
+  const displayNameRef = useRef<HTMLInputElement>(null);
+  const bioRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setDisplayName(user?.displayName ?? "");
     setBio(user?.bio ?? "");
+    setFieldErrorsShown(false);
     setLinks(linkRowsOf(user?.links));
     setLinkErrorsShown(false);
   }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -61,8 +66,21 @@ export function SettingsPage() {
   const linkErrors = linksSupported && linkErrorsShown ? linkRowErrors(links) : undefined;
   const linkLabelErrs = linksSupported && linkErrorsShown ? linkLabelErrors(links) : undefined;
 
+  // Review 11 L1: the shared forbidden set, checked on the raw text (before trim) once a save was attempted.
+  const nameError = fieldErrorsShown ? validateDisplayName(displayName) : null;
+  const bioError = fieldErrorsShown ? validateBio(bio) : null;
+
   const save = async (e: FormEvent) => {
     e.preventDefault();
+    const nameErr = validateDisplayName(displayName);
+    const bioErr = validateBio(bio);
+    if (nameErr || bioErr) {
+      setFieldErrorsShown(true);
+      setError(null);
+      (nameErr ? displayNameRef : bioRef).current?.focus();
+      return;
+    }
+    setFieldErrorsShown(false);
     const body: UpdateMeRequest = { displayName: displayName.trim(), bio };
     if (linksSupported) {
       const urlErrs = linkRowErrors(links);
@@ -127,13 +145,44 @@ export function SettingsPage() {
           <label className="pf-label" htmlFor="pf-displayname">
             Display name
           </label>
-          <input id="pf-displayname" className="pf-input" maxLength={50} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder={user.username} />
+          <input
+            id="pf-displayname"
+            ref={displayNameRef}
+            className="pf-input"
+            maxLength={50}
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder={user.username}
+            aria-invalid={nameError ? "true" : undefined}
+            aria-describedby={nameError ? "pf-displayname-error" : undefined}
+          />
+          {nameError && (
+            <p className="pf-field__error" id="pf-displayname-error">
+              {nameError}
+            </p>
+          )}
         </div>
         <div className="pf-field">
           <label className="pf-label" htmlFor="pf-bio">
             Bio
           </label>
-          <textarea id="pf-bio" className="pf-input" rows={4} maxLength={1000} value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Tell players about yourself" />
+          <textarea
+            id="pf-bio"
+            ref={bioRef}
+            className="pf-input"
+            rows={4}
+            maxLength={1000}
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            placeholder="Tell players about yourself"
+            aria-invalid={bioError ? "true" : undefined}
+            aria-describedby={bioError ? "pf-bio-error" : undefined}
+          />
+          {bioError && (
+            <p className="pf-field__error" id="pf-bio-error">
+              {bioError}
+            </p>
+          )}
         </div>
         {linksSupported && <ProfileLinksEditor ref={linksEditor} value={links} onChange={setLinks} errors={linkErrors} labelErrors={linkLabelErrs} />}
         {error && <Alert>{error}</Alert>}

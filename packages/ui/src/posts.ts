@@ -34,7 +34,8 @@ export function postLength(raw: string): number {
  * null when the body passes the client checks; else the composer's message. In order:
  * 1. more than {@link POST_LINES_MAX} lines (counted on the normalised text);
  * 2. a forbidden character other than LF, checked on the RAW text (before any trim, as F028 does, so the client is
- *    at least as strict as the server).
+ *    at least as strict as the server). Since review 11 (L2) the set includes U+2028 and U+2029, so a body can't
+ *    bypass the line cap with LINE / PARAGRAPH SEPARATOR breaks.
  * The 1-500 length rule is enforced by the disabled Post button, not here.
  */
 export function validatePostBody(raw: string): string | null {

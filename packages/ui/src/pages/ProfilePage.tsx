@@ -8,7 +8,8 @@ import { ErrorState } from "../components/common";
 import { useCollectionsSupported } from "../components/collectionsSupport";
 import { ProfileHeader, ProfileHeaderSkeleton } from "../components/ProfileHeader";
 import { profilePath } from "../profile";
-import { formatCount, useAsync } from "../util";
+import { useToast } from "../context/toast";
+import { errorMessage, formatCount, useAsync } from "../util";
 import { NotFoundPage } from "./NotFoundPage";
 
 /** What the profile shell passes to its sections (`useProfileOutlet()`). */
@@ -101,6 +102,7 @@ export function ProfilePage() {
   const { username = "" } = useParams();
   const api = useApi();
   const { user: me } = useAuth();
+  const toast = useToast();
   const location = useLocation();
   const navigate = useNavigate();
   const atIndex = useMatch("/u/:username");
@@ -118,11 +120,18 @@ export function ProfilePage() {
     navigate({ pathname: `${profilePath(data.user.username)}${suffix}`, search: location.search, hash: location.hash }, { replace: true });
   }, [data, current, username, location.pathname, location.search, location.hash, navigate]);
 
+  // Review 11 L4: a failed background refetch (after posting or deleting) keeps the loaded profile on screen and is
+  // reported as a toast. Only a load without current data shows the error or not-found page.
+  const backgroundError = !!error && current;
+  useEffect(() => {
+    if (backgroundError) toast.error("Couldn't refresh the profile", errorMessage(error));
+  }, [backgroundError, error, toast]);
+
   const legacy = atIndex ? legacyPage(location.search) : null;
   if (legacy !== null) return <Navigate to={`${profilePath(username, "games")}?page=${legacy}`} replace />;
 
-  if (error && isApiError(error) && error.status === 404) return <NotFoundPage what="player" />;
-  if (error)
+  if (error && !current && isApiError(error) && error.status === 404) return <NotFoundPage what="player" />;
+  if (error && !current)
     return (
       <div className="pf-container pf-page">
         <ErrorState error={error} onRetry={reload} />

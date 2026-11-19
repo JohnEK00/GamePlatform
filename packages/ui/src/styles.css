@@ -2061,16 +2061,26 @@ textarea.pf-input {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  max-width: 220px;
+  max-width: 100%;
   color: var(--pf-text-2);
   text-decoration: none;
   font-weight: 500;
 }
+/* Review 11 M1: the host is never truncated (it wraps if it must); only the free-text label is. */
 .pf-profile__link-text {
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pf-profile__link-label {
+  display: inline-block;
+  max-width: 16em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  vertical-align: bottom;
+}
+.pf-profile__link-host {
+  color: var(--pf-muted);
 }
 .pf-profile__links a:hover .pf-profile__link-text,
 .pf-profile__links a:focus-visible .pf-profile__link-text {

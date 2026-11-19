@@ -47,20 +47,58 @@ export function isSafeProfileUrl(url: string): boolean {
 }
 
 /**
- * Code points a link label must not contain: C0 controls (< 0x20) and DEL (0x7F), C1 controls (0x80-0x9F),
- * zero-width and directional marks (0x200B-0x200F), bidi embeddings/overrides (0x202A-0x202E), invisible
- * operators (0x2060-0x2064), bidi isolates (0x2066-0x2069) and the BOM (0xFEFF).
+ * The shared forbidden-character set (mirrors the server's `is_forbidden_label_char`), used for link labels, the
+ * display name, the bio and post bodies: C0 controls (< 0x20) and DEL (0x7F), C1 controls (0x80-0x9F), zero-width
+ * and directional marks (0x200B-0x200F), bidi embeddings/overrides (0x202A-0x202E), invisible operators
+ * (0x2060-0x2064), bidi isolates (0x2066-0x2069) and the BOM (0xFEFF); since review 11 (L1/L2) also the Arabic
+ * letter mark (0x061C), the Hangul fillers (0x115F, 0x1160, 0x3164, 0xFFA0), the Mongolian vowel separator (0x180E)
+ * and the line and paragraph separators (0x2028, 0x2029).
  */
 export function isForbiddenLabelCodePoint(cp: number): boolean {
   return (
     cp < 0x20 ||
     (cp >= 0x7f && cp <= 0x9f) ||
+    cp === 0x061c ||
+    cp === 0x115f ||
+    cp === 0x1160 ||
+    cp === 0x180e ||
     (cp >= 0x200b && cp <= 0x200f) ||
+    cp === 0x2028 ||
+    cp === 0x2029 ||
     (cp >= 0x202a && cp <= 0x202e) ||
     (cp >= 0x2060 && cp <= 0x2064) ||
     (cp >= 0x2066 && cp <= 0x2069) ||
-    cp === 0xfeff
+    cp === 0x3164 ||
+    cp === 0xfeff ||
+    cp === 0xffa0
   );
+}
+
+/**
+ * True when the RAW text (checked before any trim) contains a forbidden code point. With `allowNewline`, LF (0x0A)
+ * is allowed (bio, post bodies); every other character of the set still is not.
+ */
+export function hasForbiddenProfileChar(text: string, allowNewline = false): boolean {
+  const s = typeof text === "string" ? text : "";
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!;
+    if (allowNewline && cp === 0x0a) continue;
+    if (isForbiddenLabelCodePoint(cp)) return true;
+  }
+  return false;
+}
+
+export const DISPLAY_NAME_CHARS_MESSAGE = "displayName must not contain control characters";
+export const BIO_CHARS_MESSAGE = "bio must not contain control characters";
+
+/** null when the display name has no forbidden character (raw text, before trim); else the server's message. */
+export function validateDisplayName(raw: string): string | null {
+  return hasForbiddenProfileChar(raw) ? DISPLAY_NAME_CHARS_MESSAGE : null;
+}
+
+/** null when the bio has no forbidden character other than LF (raw text, before trim); else the server's message. */
+export function validateBio(raw: string): string | null {
+  return hasForbiddenProfileChar(raw, true) ? BIO_CHARS_MESSAGE : null;
 }
 
 /** Unicode White_Space (what the server's trim strips). Unlike JS `trim()`, this excludes 0xFEFF. */
@@ -98,7 +136,7 @@ export function trimLinkLabel(label: string): string {
  */
 export function validateProfileLinkLabel(label: string, index: number): string | null {
   const raw = typeof label === "string" ? label : "";
-  if (Array.from(raw).some((c) => isForbiddenLabelCodePoint(c.codePointAt(0)!))) return `links[${index}].label must not contain control characters`;
+  if (hasForbiddenProfileChar(raw)) return `links[${index}].label must not contain control characters`;
   if ([...trimLinkLabel(raw)].length > PROFILE_LINK_LABEL_MAX) return `links[${index}].label must be at most ${PROFILE_LINK_LABEL_MAX} characters`;
   return null;
 }

@@ -68,7 +68,8 @@ export function ProfileOverview() {
 
       {/* F030: hidden on servers without posts (no stats.posts). */}
       {typeof stats?.posts === "number" && (
-        <ProfilePosts key={`posts:${username}`} username={username} isMe={isMe} preview={PROFILE_POSTS_PREVIEW} />
+        // Review 11 L3: a delete here reloads the shell so "Posts N" and the empty-overview rule stay current.
+        <ProfilePosts key={`posts:${username}`} username={username} isMe={isMe} preview={PROFILE_POSTS_PREVIEW} onChanged={ctx.reload} />
       )}
 
       {games.length > 0 ? (

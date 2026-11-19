@@ -129,7 +129,8 @@ describe("validateProfileLinkLabel (code-point length, forbidden characters)", (
   });
 
   it("allows neighbours of the forbidden ranges and trims surrounding White_Space", () => {
-    for (const cp of [0x7e, 0xa0, 0x200a, 0x2010, 0x2029, 0x2065, 0x206a, 0xfefe, 0xe9, 0x65e5]) {
+    // 0x2029 joined the set in review 11 (L2); 0x202f (NNBSP) is the neighbour of the 0x202A-0x202E range.
+    for (const cp of [0x7e, 0xa0, 0x200a, 0x2010, 0x202f, 0x2065, 0x206a, 0xfefe, 0xe9, 0x65e5]) {
       expect(validateProfileLinkLabel(`My${ch(cp)}site`, 0)).toBeNull();
     }
     // Plain and Unicode spaces around the label are trimmed (only the length is measured after trim).

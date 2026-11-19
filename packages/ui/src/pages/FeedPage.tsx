@@ -68,6 +68,39 @@ function appendUnique(prev: FeedItemData[], next: FeedItemData[]): FeedItemData[
   return [...prev, ...next.filter((i) => isKnownFeedItem(i) && !seen.has(i.id))];
 }
 
+/** Review 11 M2: extra pages fetched automatically per load while every item of a page is unknown or filtered out. */
+export const FEED_MAX_SKIP_FETCHES = 5;
+
+type FeedApi = ReturnType<typeof useApi>;
+
+/**
+ * One load (the first page or "Load more"): fetches the page at `cursor` and, while a page added nothing renderable
+ * (all items unknown, filtered out or already loaded) and the server says more pages exist, the next page too, at
+ * most {@link FEED_MAX_SKIP_FETCHES} extra times. Returns the new renderable items and the cursor to continue from.
+ */
+async function loadFeedPages(
+  api: FeedApi,
+  kinds: FeedItemKind[] | undefined,
+  cursor: string | undefined,
+  prev: FeedItemData[],
+  signal: AbortSignal,
+): Promise<{ items: FeedItemData[]; nextCursor: string | null }> {
+  const seen = new Set(prev.map((i) => i.id));
+  const items: FeedItemData[] = [];
+  let next: string | null = null;
+  let at = cursor;
+  for (let extra = 0; ; extra++) {
+    const p = await api.getFeed(at === undefined ? { kinds } : { cursor: at, kinds }, signal);
+    const fresh = (Array.isArray(p?.items) ? p.items : []).filter((i) => isKnownFeedItem(i) && !seen.has(i.id));
+    for (const i of fresh) seen.add(i.id);
+    items.push(...fresh);
+    next = p?.nextCursor ?? null;
+    if (fresh.length > 0 || !next || next === at || extra >= FEED_MAX_SKIP_FETCHES || signal.aborted) break;
+    at = next;
+  }
+  return { items, nextCursor: next };
+}
+
 function SuggestedCreators({ onFollowed }: { onFollowed: () => void }) {
   const api = useApi();
   const { data, loading, error, reload } = useAsync(() => api.getFeedSuggestions(), [api]);
@@ -130,10 +163,10 @@ export function FeedPage() {
     const ctrl = new AbortController();
     moreAbort.current?.abort();
     setState(INITIAL);
-    api.getFeed({ kinds: TAB_KINDS[tab] }, ctrl.signal).then(
+    loadFeedPages(api, TAB_KINDS[tab], undefined, [], ctrl.signal).then(
       (p) => {
         if (ctrl.signal.aborted) return;
-        setState({ ...INITIAL, loading: false, items: appendUnique([], p?.items ?? []), nextCursor: p?.nextCursor ?? null });
+        setState({ ...INITIAL, loading: false, items: p.items, nextCursor: p.nextCursor });
       },
       (e) => {
         if (ctrl.signal.aborted) return;
@@ -151,17 +184,17 @@ export function FeedPage() {
     const ctrl = new AbortController();
     moreAbort.current = ctrl;
     setState((s) => ({ ...s, loadingMore: true, moreError: null }));
-    api.getFeed({ cursor, kinds: TAB_KINDS[tab] }, ctrl.signal).then(
+    loadFeedPages(api, TAB_KINDS[tab], cursor, state.items, ctrl.signal).then(
       (p) => {
         if (ctrl.signal.aborted) return;
-        setState((s) => ({ ...s, loadingMore: false, items: appendUnique(s.items, p?.items ?? []), nextCursor: p?.nextCursor ?? null }));
+        setState((s) => ({ ...s, loadingMore: false, items: appendUnique(s.items, p.items), nextCursor: p.nextCursor }));
       },
       (e) => {
         if (ctrl.signal.aborted) return;
         setState((s) => ({ ...s, loadingMore: false, moreError: e }));
       },
     );
-  }, [api, tab, state.nextCursor, state.loadingMore]);
+  }, [api, tab, state.nextCursor, state.loadingMore, state.items]);
 
   const selectTab = (t: FeedTab) => {
     if (t === tab) return;
@@ -174,11 +207,11 @@ export function FeedPage() {
     setReloadKey((k) => k + 1);
   };
 
-  // Locally emptied items don't count. When every loaded item was emptied but there are more pages, the list stays
-  // (with "Load more") instead of claiming the feed is empty.
+  // Locally emptied items don't count. The feed is only "empty" when there truly are no more pages: when nothing is
+  // visible but the server has more (every loaded item was emptied, or review 11 M2: the automatic skip over pages
+  // of unknown or filtered-out items hit its cap), the list stays with "Load more".
   const visible = state.emptied.length ? state.items.filter((i) => !state.emptied.includes(i.id)) : state.items;
-  const allEmptied = visible.length === 0 && state.items.length > 0;
-  const empty = !state.loading && !state.error && visible.length === 0 && !(allEmptied && state.nextCursor);
+  const empty = !state.loading && !state.error && visible.length === 0 && !state.nextCursor;
   const markEmptied = (id: string) => setState((s) => (s.emptied.includes(id) ? s : { ...s, emptied: [...s.emptied, id] }));
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -282,6 +315,9 @@ export function FeedPage() {
               <FeedItem key={item.id} item={item} onEmptied={() => focusAfter(item.id)} onRemoved={() => markEmptied(item.id)} />
             ))}
           </div>
+          {visible.length === 0 && state.items.length === 0 && state.nextCursor && (
+            <p className="pf-muted pf-feed__skipped">Nothing to show here yet. Load more to see older activity.</p>
+          )}
           {state.moreError != null && <LoadError message={`Couldn't load more: ${errorMessage(state.moreError)}`} onRetry={loadMore} />}
           {state.nextCursor && (
             <div className="pf-feed__more">

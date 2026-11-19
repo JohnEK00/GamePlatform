@@ -89,7 +89,8 @@ describe("Profile header (F028 § 0.5)", () => {
     const list = within(header()).getByRole("list", { name: "Links" });
     const links = within(list).getAllByRole("link");
     expect(links).toHaveLength(2);
-    expect(links[0].textContent).toBe("🔗 YouTube (opens in a new tab)");
+    // Review 11 M1: the real host is always shown next to the label.
+    expect(links[0].textContent).toBe("🔗 YouTube · youtube.com (opens in a new tab)");
     expect(links[1].textContent).toContain("mia.dev");
     expect(links[1].textContent).not.toContain("www.");
     for (const a of links) {

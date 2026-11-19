@@ -29,6 +29,20 @@ function displayableLinks(links: ProfileLink[] | undefined): ProfileLink[] {
 }
 
 /**
+ * Review 11 M1: what a profile link shows. The real host (`URL.hostname` without a leading `www.`) is always shown,
+ * so a free-text label can never pose as another destination. `label` is null when there is no label or when it
+ * equals the host (case-insensitive); then only the host is shown.
+ */
+export function profileLinkDisplay(link: ProfileLink): { label: string | null; host: string } {
+  const host = linkHost(link.url);
+  const label = typeof link.label === "string" ? link.label.trim() : "";
+  // Unparseable (not expected: links pass isSafeProfileUrl first): show the URL itself, never the label alone.
+  if (!host) return { label: null, host: link.url.trim() };
+  if (!label || label.toLowerCase() === host.toLowerCase()) return { label: null, host };
+  return { label, host };
+}
+
+/**
  * F028 profile header card: banner, avatar overlapping it, name, `@username · Joined Month YYYY`, bio, links, stats
  * and actions (Edit profile / Follow, Copy link, Report). Seeds the follow cache with the profile's server truth.
  */
@@ -78,11 +92,20 @@ export function ProfileHeader({ profile, isMe }: ProfileHeaderProps) {
             {links.length > 0 && (
               <ul className="pf-profile__links" aria-label="Links">
                 {links.map((l, i) => {
-                  const text = l.label || linkHost(l.url);
+                  const href = l.url.trim();
+                  const { label, host } = profileLinkDisplay(l);
                   return (
                     <li key={`${i}:${l.url}`}>
-                      <a href={l.url.trim()} target="_blank" rel="noopener noreferrer nofollow ugc" title={text}>
-                        <span aria-hidden="true">🔗</span> <span className="pf-profile__link-text">{text}</span>
+                      <a href={href} target="_blank" rel="noopener noreferrer nofollow ugc" title={href}>
+                        <span aria-hidden="true">🔗</span>{" "}
+                        <span className="pf-profile__link-text">
+                          {label ? (
+                            <>
+                              <bdi className="pf-profile__link-label">{label}</bdi> ·{" "}
+                            </>
+                          ) : null}
+                          <span className="pf-profile__link-host">{host}</span>
+                        </span>
                         <span className="pf-sr-only"> (opens in a new tab)</span>
                       </a>
                     </li>

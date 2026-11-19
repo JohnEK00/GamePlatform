@@ -390,11 +390,18 @@ export {
   trimLinkLabel,
   linkHost,
   profilePath,
+  // Review 11 (L1/L2): the shared forbidden-character set and the display name / bio checks.
+  isForbiddenLabelCodePoint,
+  hasForbiddenProfileChar,
+  validateDisplayName,
+  validateBio,
+  DISPLAY_NAME_CHARS_MESSAGE,
+  BIO_CHARS_MESSAGE,
 } from "./profile";
 export type { ProfileSection } from "./profile";
 export { CopyLinkButton } from "./components/CopyLinkButton";
 export type { CopyLinkButtonProps } from "./components/CopyLinkButton";
-export { ProfileHeader, ProfileHeaderSkeleton, PROFILE_COMPACT_QUERY } from "./components/ProfileHeader";
+export { ProfileHeader, ProfileHeaderSkeleton, PROFILE_COMPACT_QUERY, profileLinkDisplay } from "./components/ProfileHeader";
 export type { ProfileHeaderProps } from "./components/ProfileHeader";
 export { ProfileLinksEditor, linkRowErrors, linkLabelErrors, linksForSave, isEmptyLinkRow } from "./components/ProfileLinksEditor";
 export type { ProfileLinksEditorProps, ProfileLinksEditorHandle, ProfileLinkRow } from "./components/ProfileLinksEditor";
