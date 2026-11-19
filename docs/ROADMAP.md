@@ -74,7 +74,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F024 | "Screenshot of your game" notifications for creators | S | shipped |
 | F028 | Public profiles 2: banner, links, profile sections and sharing | M | shipped |
 | F030 | User posts: short text posts on profiles and in followers' feeds | M | shipped |
-| F031 | Post replies and hearts, with notifications | M | specced |
+| F031 | Post replies and hearts, with notifications | M | shipped |
 | F035 | Explore creators page | S | shipped |
 | F029 | Featured games on profiles | S | proposed |
 | F041 | Link previews: Open Graph and Twitter cards for shared links | S | proposed |
@@ -377,7 +377,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
   - desktop: verification test only.
   - No engine changes.
 
-### F031: Post replies and hearts (M, specced → [spec](features/F031-post-replies-and-hearts.md))
+### F031: Post replies and hearts (M, shipped → [spec](features/F031-post-replies-and-hearts.md))
 - **Pitch**:
   - Hearts on posts (public count, the viewer's state, not on your own post).
   - One flat thread of replies per post (oldest first, at most 200; "Replying to @name" for answers to a reply), shown on the permalink `/p/{id}` with `?reply={rid}` deep links. Cards everywhere else get the heart and a `💬 N replies` link.

@@ -1998,6 +1998,7 @@ The server half of review 11 L1/L2, shipped with F031 (the client half shipped i
   - link labels (`links[{i}].label must not contain control characters`);
   - post bodies and F031 reply bodies (`body must be plain text`; `\n` allowed);
   - `displayName` and `bio` (below).
+- **Trim comes first.** Every field is trimmed before the character check, and the server's trim strips leading and trailing Unicode White_Space, which includes U+0085, U+2028 and U+2029. So these characters are rejected only inside the text; at either end they are silently removed (`"Leo "` is stored as `"Leo"`). Clients may reject them anywhere, as the web client does; the stored result is the same either way. U+FEFF is not White_Space and is rejected at either end.
 - **`PATCH /api/users/me`**: the order is still displayName → bio → links, and every field is validated before anything is written.
   - `displayName`: trim → `displayName must be 1-50 characters` (unchanged) → any character of the set → 422 `validation` `displayName must not contain control characters`.
   - `bio`: `\r\n` and `\r` become `\n` → trim → `bio must be at most 1000 characters` (unchanged) → any character of the set other than `\n` → 422 `validation` `bio must not contain control characters`. The stored and returned bio is the normalised value.
