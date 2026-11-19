@@ -258,6 +258,37 @@ describe("PostReplyForm (F031 § 0.14)", () => {
     expect(document.querySelector(".pf-post-reply-form__replyto")).toBeNull();
     expect(document.activeElement).toBe(textarea());
   });
+
+  it("the answered reply was deleted meanwhile: clears 'Replying to', drops it, keeps the text, and the retry goes to the post", async () => {
+    const { create, onChange } = await setup({ me: miaUser, post: socialPost("p1", { replyCount: 2, canDelete: true }), replies: [reply("r1"), reply("r2", { author: kaiRef })] });
+    await act(async () => fireEvent.click(within(document.getElementById("reply-r1")!).getByRole("button", { name: "Reply to Leo" })));
+    fireEvent.change(textarea(), { target: { value: "thanks!" } });
+    create.mockRejectedValueOnce(new ApiError("not_found", "Reply not found", 404));
+    await act(async () => fireEvent.click(submitBtn()));
+    expect(create).toHaveBeenLastCalledWith("p1", { body: "thanks!", replyToId: "r1" });
+    expect(screen.getByRole("alert").textContent).toBe("That reply was deleted. Your reply will go to the post.");
+    expect(document.querySelector(".pf-post-reply-form__replyto")).toBeNull();
+    expect(document.getElementById("reply-r1")).toBeNull();
+    expect(document.getElementById("reply-r2")).not.toBeNull();
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ replyCount: 1 }));
+    expect(heading().textContent).toBe("Replies (1)");
+    expect(textarea().value).toBe("thanks!");
+
+    create.mockResolvedValueOnce(reply("r9", { author: miaRef, byPostAuthor: true }));
+    await act(async () => fireEvent.click(submitBtn()));
+    expect(create).toHaveBeenLastCalledWith("p1", { body: "thanks!", replyToId: null });
+    expect(document.getElementById("reply-r9")).not.toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a 404 'Post not found' (no reply target involved) shows the server message unchanged", async () => {
+    const { create } = await setup({ me: leoUser, replies: [reply("r1", { author: kaiRef })] });
+    create.mockRejectedValueOnce(new ApiError("not_found", "Post not found", 404));
+    fireEvent.change(textarea(), { target: { value: "yo" } });
+    await act(async () => fireEvent.click(submitBtn()));
+    expect(screen.getByRole("alert").textContent).toBe("Post not found");
+    expect(document.getElementById("reply-r1")).not.toBeNull();
+  });
 });
 
 describe("Deleting a reply (F031 § 0.13)", () => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type Ref } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { isApiError } from "../api/client";
 import type { CreatePostReplyRequest, Post, PostReply } from "../api/types";
 import { useApi } from "../context/config";
 import { useAuth } from "../context/auth";
@@ -12,6 +13,10 @@ import { ReportButton } from "./Report";
 
 /** The server's 422 message for a reply on a locked post (API § F031). */
 const REPLIES_OFF_MESSAGE = "Replies are turned off for this post";
+/** The server's 404 message when `replyToId` names no reply (e.g. it was deleted meanwhile). */
+const REPLY_NOT_FOUND_MESSAGE = "Reply not found";
+/** Shown in the form when the reply being answered was deleted; the next submit goes to the post. */
+export const REPLY_TARGET_GONE_MESSAGE = "That reply was deleted. Your reply will go to the post.";
 /** The thread heading (also the last-resort focus target). */
 const HEADING_ID = "pf-post-replies-title";
 /** The reply form (the Reply buttons control it). */
@@ -158,7 +163,11 @@ export type PostReplyFormProps = {
   /** Called with the created reply, after the text was cleared and before the toast. */
   onPosted?: (reply: PostReply) => void;
   /** Called with a server error (after it is shown in the form's Alert). */
-  onError?: (err: unknown) => void;
+  /**
+   * Called with a server error and the request that failed. When it returns a string, the form's Alert shows that
+   * instead of the server's message.
+   */
+  onError?: (err: unknown, request: CreatePostReplyRequest) => string | void;
   /** The textarea (focus target of the thread). */
   textareaRef?: Ref<HTMLTextAreaElement>;
 };
@@ -200,8 +209,8 @@ export function PostReplyForm({ postId, replyTo = null, onClearReplyTo, notice =
       focusInput();
     } catch (err) {
       setBusy(false);
-      setError(errorMessage(err));
-      onError?.(err);
+      const override = onError?.(err, req);
+      setError(typeof override === "string" ? override : errorMessage(err));
     }
   };
 
@@ -432,8 +441,21 @@ export function PostThread({ post, onPostChange, replyId = null }: PostThreadPro
     onPostChange({ ...p, replyCount: Math.max(0, p.replyCount ?? 0) + 1 });
   };
 
-  const onFormError = (err: unknown) => {
+  const onFormError = (err: unknown, req: CreatePostReplyRequest): string | void => {
     if (errorMessage(err) === REPLIES_OFF_MESSAGE) onPostChange({ ...postRef.current, locked: true });
+    // The reply being answered was deleted meanwhile: answer the post instead (the typed text stays), and drop the
+    // stale reply so the list matches the server.
+    const targetId = req.replyToId;
+    if (targetId && isApiError(err) && err.status === 404 && err.message === REPLY_NOT_FOUND_MESSAGE) {
+      setReplyTarget((t) => (t && t.id === targetId ? null : t));
+      const list = repliesRef.current ?? [];
+      if (list.some((r) => r.id === targetId)) {
+        setReplies(list.filter((r) => r.id !== targetId));
+        const p = postRef.current;
+        onPostChange({ ...p, replyCount: Math.max(0, (p.replyCount ?? 0) - 1) });
+      }
+      return REPLY_TARGET_GONE_MESSAGE;
+    }
   };
 
   const onDeleted = (reply: PostReply) => {
