@@ -5,6 +5,7 @@ pub mod auth;
 pub mod collections;
 pub mod comments;
 pub mod controls;
+pub mod creators;
 pub mod favorites;
 pub mod feed;
 pub mod files;
@@ -258,6 +259,8 @@ pub fn api_router() -> Router<AppState> {
             post(reports::admin_resolve_report),
         )
         .route("/tags", get(tags::list_tags))
+        // F035 explore creators (public, no rate limit)
+        .route("/creators", get(creators::list_creators))
         .fallback(api_not_found)
 }
 
