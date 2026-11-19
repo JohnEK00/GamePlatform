@@ -1981,3 +1981,84 @@ Explore creators page (spec: `docs/features/F035-explore-creators.md`). There is
   - backend-dev: `routes/creators.rs` (new), `routes/mod.rs`, `tests/f035.rs`.
   - frontend-dev: `api/types.ts`, `api/client.ts`, `creators.ts` (new), `CreatorCard.tsx` (new), `CreatorsPage.tsx` (new), `WebGameApp.tsx`, `Layout.tsx`, `FeedPage.tsx` (one link), `index.ts`, `styles.css`, `packages/ui/README.md` and tests.
   - desktop-dev: `src-tauri/src/menu.rs`, `src/nativeMenu.ts`, `src/__tests__/nativeMenu.test.ts`, `src/__tests__/f035.desktop.test.tsx`, `apps/desktop/README.md`.
+
+## F032 additions
+Home and discover 2, with F029 featured games on profiles (spec: `docs/features/F032-home-and-discover-2.md`; contract: API § F032). One migration, `0027_f032.sql` (the next free number becomes `0028`), no new dependencies and no engine changes.
+
+- **Migration `0027_f032.sql`** (verbatim):
+  ```sql
+  -- F032 (+ F029): featured games on profiles, and indexes for the home page reads (docs/ARCHITECTURE.md § F032 additions).
+
+  -- 1. F029: up to 4 featured games per user (the limit is enforced in Rust), in display order.
+  CREATE TABLE profile_featured (
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      game_id    TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      position   INTEGER NOT NULL,                                      -- 0..3, display order
+      created_at TEXT NOT NULL,                                         -- RFC3339 millis Z
+      PRIMARY KEY (user_id, game_id)
+  );
+  CREATE INDEX idx_profile_featured_game ON profile_featured(game_id);   -- game-delete cascade
+
+  -- 2. GET /api/games?sort=updated (filter last_updated_at IS NOT NULL, order last_updated_at DESC, id).
+  CREATE INDEX idx_games_pub_updated ON games(published, last_updated_at DESC, id) WHERE last_updated_at IS NOT NULL;
+
+  -- 3. GET /api/collections (public, updated_at DESC, id DESC).
+  CREATE INDEX idx_collections_public_updated ON collections(updated_at DESC, id DESC) WHERE visibility = 'public';
+  ```
+- **`sort=updated`** (`routes/games.rs`): `list_order` maps it to `g.last_updated_at DESC, g.id`, and `list_filter` adds `g.last_updated_at IS NOT NULL` when the trimmed sort is `updated`. The partial index applies because the query repeats its `WHERE` term. The count query shares the `WHERE`, so `total` matches.
+- **Explore collections** (`routes/collections.rs` `list_collections`; constants `EXPLORE_MIN_GAMES = 3`, `EXPLORE_PER_PAGE_DEFAULT = 12`, `EXPLORE_PER_PAGE_MAX = 48`):
+  ```sql
+  -- {EXPLORE_WHERE}, shared by both statements ({EXPLORE_MIN_GAMES} is a Rust constant, never input):
+  WHERE c.visibility = 'public'
+    AND (SELECT COUNT(*) FROM collection_games cg JOIN games g ON g.id = cg.game_id
+         WHERE cg.collection_id = c.id AND g.published = 1) >= {EXPLORE_MIN_GAMES}
+
+  SELECT COUNT(*) FROM collections c {EXPLORE_WHERE};
+  {COLLECTION_SELECT} {EXPLORE_WHERE} ORDER BY c.updated_at DESC, c.id DESC LIMIT ?1 OFFSET ?2;
+  ```
+  Items go through the existing `summaries_for(state, rows, viewer)`, one batched query for `gameCount`/`coverUrls`.
+- **Creator spotlight** (`routes/creators.rs` `get_spotlight`):
+  - `page_sql(order)` becomes `creator_sql(owner_filter, order)`; with `owner_filter` the CTE reads `FROM games WHERE published = 1 AND owner_id = ?3 GROUP BY owner_id`. `list_creators` is unchanged in behaviour. The row → `Creator` mapping and the `IS_FOLLOWING_SQL` batch become shared helpers.
+  - Steps:
+    ```sql
+    -- 1. N (the F035 COUNT_SQL)
+    SELECT COUNT(DISTINCT owner_id) FROM games WHERE published = 1;
+    -- 2. the pick; ?1 = spotlight_index(utc_day_number(now), N). Served by idx_games_owner_pub_new.
+    SELECT owner_id FROM (SELECT DISTINCT owner_id FROM games WHERE published = 1)
+    ORDER BY owner_id LIMIT 1 OFFSET ?1;
+    -- 3. creator_sql(true, "u.username_lower ASC") with ?1 = 1, ?2 = 0, ?3 = the picked id
+    -- 4. IS_FOLLOWING_SQL when signed in (one id)
+    -- 5. games
+    {GAME_SELECT} LEFT JOIN profile_featured pf ON pf.game_id = g.id AND pf.user_id = g.owner_id
+    WHERE g.owner_id = ?1 AND g.published = 1
+    ORDER BY (pf.position IS NULL), pf.position, g.plays DESC, g.created_at DESC, g.id
+    LIMIT 3;
+    ```
+  - `N = 0` → `creator: null`, `games: []` (skip steps 2–5). If step 2 or 3 finds no row because a creator unpublished in between, retry step 2 once with offset 0; if that also fails, return `creator: null`.
+  - `spotlight_index(day, n) = day.rem_euclid(n)`; `utc_day_number(now)` = days since 1970-01-01 of `now.date_naive()`; `day` in the response is `now.format("%Y-%m-%d")`. Both helpers are `pub` for tests. No cache: the five statements are index-backed and tiny.
+- **Featured games** (`routes/users.rs`, `FEATURED_GAMES_MAX = 4`):
+  ```sql
+  -- read (get_user and the PUT response)
+  {GAME_SELECT} JOIN profile_featured pf ON pf.game_id = g.id
+  WHERE pf.user_id = ?1 AND g.published = 1
+  ORDER BY pf.position, pf.game_id;
+  ```
+  `put_featured`: validate the count and duplicates in Rust (API § F032 order), then in one `begin_with("BEGIN IMMEDIATE")` transaction:
+  1. `SELECT value FROM json_each(?1) WHERE value IN (SELECT id FROM games WHERE published = 1)` with the ids as a JSON array; the first id (in request order) missing from the result → 422 `gameIds[{i}] is not a published game` (rollback);
+  2. `DELETE FROM profile_featured WHERE user_id = ?1`;
+  3. one `INSERT INTO profile_featured (user_id, game_id, position, created_at) VALUES (?1, ?2, ?3, ?4)` per id, `position` = its index.
+
+  Commit, then run the read. `BEGIN IMMEDIATE` takes the write lock first, so concurrent saves serialise and the last one wins completely.
+- **UI** (`@webgame/ui`):
+  - `home.ts` (pure): sizes, `browsePath`, `legacyHomeRedirect`, `isValidSpotlight`, `moveItem`;
+  - `components/HomeSections.tsx`: `GameShelf`, `CreatorSpotlightSection`, `CollectionsShelf`, `TagsSection`;
+  - `pages/HomePage.tsx` (sections + legacy redirect) and `pages/BrowsePage.tsx` (route `browse`, the grid that used to be on `/`);
+  - `components/CreatorCard.tsx` gains `headingLevel`;
+  - `components/FeaturedGamesDialog.tsx` and the Featured row in `pages/ProfileSections.tsx` `ProfileOverview`;
+  - `Layout.tsx` (`Browse` and search → `/browse`), `GamePage.tsx` (tag chips), `FavoritesPage.tsx`/`CollectionPage.tsx` (empty-state links).
+  - The home page fires 7 independent requests; each section hides on error or when empty, so no single failure blanks the page.
+- **Desktop.** View → Home (`"home"` → `/`) and View → Browse games (`"browse"` → `/browse`), forwarded ids without accelerators, routed through `nativeMenu.ts` `ROUTES`.
+- **Ownership**:
+  - backend-dev: `migrations/0027_f032.sql` (new), `routes/games.rs`, `routes/collections.rs`, `routes/creators.rs`, `routes/users.rs`, `routes/mod.rs`, `tests/f032.rs` (new), `tests/f003.rs` (one message).
+  - frontend-dev: `api/types.ts`, `api/client.ts`, `home.ts` (new), `components/HomeSections.tsx` (new), `components/FeaturedGamesDialog.tsx` (new), `components/CreatorCard.tsx`, `components/Layout.tsx`, `pages/HomePage.tsx`, `pages/BrowsePage.tsx` (new), `pages/ProfileSections.tsx`, `pages/GamePage.tsx`, `pages/FavoritesPage.tsx`, `pages/CollectionPage.tsx`, `WebGameApp.tsx`, `index.ts`, `styles.css`, `packages/ui/README.md` and tests.
+  - desktop-dev: `src-tauri/src/menu.rs`, `src/nativeMenu.ts`, `src/__tests__/nativeMenu.test.ts`, `src/__tests__/f032.desktop.test.tsx` (new), `apps/desktop/README.md`.

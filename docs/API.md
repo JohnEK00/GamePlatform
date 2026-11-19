@@ -2191,3 +2191,82 @@ Orders (each ends with the case-insensitive username, ascending, so pages are st
 
 ### Privacy
 Only public data: users with a published game are already visible through `GET /api/games`, and follower counts are already on profiles. `isFollowing` is about the viewer only.
+
+## F032 additions
+Home and discover 2, with F029 featured games on profiles folded in (spec: `docs/features/F032-home-and-discover-2.md`; § 0 there settles every ambiguity). All earlier rules apply, including F003, F004, F008, F028 and F035. There are three new endpoints, two changed endpoints, no new rate-limit bucket and one migration (`0027_f032.sql`).
+
+### Types
+```ts
+type GameSort = "new" | "popular" | "top" | "favorites" | "trending"
+              | "updated";          // F032: only games with lastUpdatedAt (F004), newest update first
+
+type CreatorSpotlight = {
+  day: string;                      // "YYYY-MM-DD", the current UTC date the pick belongs to
+  creator: Creator | null;          // F035 Creator (isFollowing per viewer); null when there are no creators
+  games: GameSummary[];             // 0–3 of the creator's own published games (see the endpoint)
+}
+
+type FeaturedGamesRequest  = { gameIds: string[] }        // 0–4 game ids, in display order
+type FeaturedGamesResponse = { featured: GameSummary[] }  // the saved list after the read rule
+
+type UserProfileResponse = {
+  ...v1 + F002 + F028,
+  featured: GameSummary[];          // F029/F032: 0–4 published games, in the user's order. Older servers omit it.
+}
+```
+
+### New endpoints
+| Method | Path | Query / Body | Response |
+|---|---|---|---|
+| GET 🔓 | /api/collections | `?page=1&perPage=12` | `Page<CollectionSummary>` |
+| GET 🔓 | /api/creators/spotlight | – | `CreatorSpotlight` |
+| PUT 🔒 | /api/users/me/featured | `FeaturedGamesRequest` | 200 `FeaturedGamesResponse` |
+
+**`GET /api/collections`** (explore list; `POST /api/collections` is unchanged):
+- Lists **public** collections that contain **at least 3 published games**, ordered by `updatedAt` desc, then `id` desc.
+- `page`: default 1, clamped to 1–1,000,000; non-integer → 400 `bad_request` `page must be an integer`.
+- `perPage`: default **12**, clamped to **1–48**; non-integer → 400 `bad_request` `perPage must be an integer`.
+- Unknown query keys are ignored. `total` counts every matching collection.
+- `gameCount` and `coverUrls` follow the F008 viewer rule (published games, plus the viewer's own).
+- No rate limit, like `GET /api/games`.
+
+**`GET /api/creators/spotlight`:**
+- **Eligible creators** are the F035 creators (users with at least one published game), ordered by user `id` ascending.
+- **Pick:** with `N` eligible creators and `d` = whole days from 1970-01-01 to the current UTC date, the creator is the one at 0-based index `d mod N`. Every viewer gets the same creator on the same UTC day.
+- `creator` is that creator's F035 `Creator` object (`isFollowing` for the viewer; false when anonymous or for yourself).
+- `games`: up to **3** of the creator's **published** games: first their F029 featured games that **they own**, in featured order, then their other published games by `plays` desc, `createdAt` desc, `id`. Featured games owned by other users are never included.
+- With no eligible creators: `{ "day": "...", "creator": null, "games": [] }`.
+- No query parameters, no rate limit.
+
+**`PUT /api/users/me/featured`** (F029). Checks, in this order; the first failure wins and nothing is written on any error:
+
+| Check | Status, code, message |
+|---|---|
+| signed out | 401 `unauthorized` |
+| body is not an object with a `gameIds` array of strings | 422 `validation` (the JSON extractor's message) |
+| more than 4 items | 422 `validation` `gameIds must have at most 4 items` |
+| an id equal to an earlier one (`{i}` = the later index, 0-based) | 422 `validation` `gameIds[{i}] is a duplicate` |
+| an id that is not a currently published game (unknown and unpublished alike), in order | 422 `validation` `gameIds[{i}] is not a published game` |
+
+- Ids are compared exactly (no trimming or case folding).
+- Any owner's games are allowed, including your own.
+- On success the list **replaces** the previous one atomically; `[]` clears it.
+- The response is the saved list after the read rule below. No rate limit (like `PATCH /api/users/me`).
+
+### Changed endpoints
+- **`GET /api/games`:**
+  - `sort=updated` lists only games whose `lastUpdatedAt` is not null, ordered by `lastUpdatedAt` desc, then `id`. It combines with `q`, `tag` and `owner` like every sort; `total` counts only those games.
+  - The unknown-sort message becomes `Unknown sort '{sort}' (expected new, popular, top, favorites, trending or updated)`.
+- **`GET /api/users/{username}`:** the response gains `featured: GameSummary[]`.
+  - **Read rule:** the saved games that are published **now**, in the saved order, for every viewer, the owner included. Unpublished games are hidden but stay saved and reappear if republished. Deleting a game or a user removes its rows.
+  - `games`, `gamesTotal`, `stats` and paging are unchanged.
+
+### Web routes
+- `/`: the sectioned home page. `/` with any of the query keys `q`, `tag`, `sort` or `page` redirects (client-side, replacing the history entry) to `/browse` with the same query string.
+- `/browse?q=&tag=&sort=&page=`: the full sortable game grid (it used to be `/`). `sort` is omitted for `new` and `page` for 1; an unknown `sort` shows New. With `WEB_DIST` set it falls back to `index.html` like every SPA route.
+- Header search submits to `/browse?q=`. Game page tag chips link to `/browse?tag={tag}`.
+
+### Privacy
+- Everything listed is already public: public collections (F008), creator data (F035) and published games.
+- Featured lists are public profile content chosen by their owner. Unknown and unpublished game ids get the same 422 message, so the endpoint can't be used to discover unpublished games.
+- Featuring a game sends no notification to its owner.

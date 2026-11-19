@@ -1063,3 +1063,7 @@ None. Post replies, hearts and their notifications are platform-only: there are 
 
 ## F035 additions
 None. The Explore creators page is platform-only: there are no engine, message, game.json, bundle or player page changes.
+
+
+## F032 additions
+None. The sectioned home page, `/browse`, the creator spotlight and featured games on profiles are platform-only: there are no engine, message, game.json, bundle or player page changes.

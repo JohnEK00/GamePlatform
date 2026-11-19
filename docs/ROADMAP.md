@@ -5,11 +5,14 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 
 **Direction (2026-11-17, set by the user):** new work should improve the **platform itself**: more pages, UI improvements, public profile pages, and letting people post. Platform items (profiles, posts, home and discovery, navigation and search, new pages) come first. Engine-only and notification-plumbing items (F025, F026) move to the bottom. Creation tools (F011, F014) and the desktop library (F010) sit in between.
 
-**Cycle plan (2026-11-19):** this round ships **F031** (M) and **F035** (S) together.
-- **Why the pair works:** they touch different code. F031 is posts, notifications and reports; F035 is a new read endpoint, a new page and a menu item. They share only append-only files.
-- **Review 11 carry-over:** F031's backend task 0 also carries the backend half of review 11 (L1/L2 forbidden characters and display name/bio checks, plus L5, the banner race). That work never landed with the UI fixes in `4beec46`, and reply bodies depend on it.
-- **New ideas added:** F041–F046.
-- **Next after this cycle:** F029, F041, F042.
+**Cycle plan (2026-11-19, second update):** F031 and F035 shipped. This round ships **F032** (M) with **F029** folded in.
+- **Why F032 now:** with `/creators` live, the home page is the biggest visible gap: one Featured block, one shelf and a long grid. F032 makes `/` a discover page (trending, new, recently updated, a daily creator spotlight, player collections, tags) and gives the grid its own `/browse` page.
+- **Why F029 folds in:** the spotlight shows each creator's featured games first, so featured games are the creator's control over how the home page presents them. F029 adds one table, one endpoint and one dialog to a round that already touches the profile shell's neighbours.
+- **What moved out:** admin-curated home picks (the original F032 pitch's `PUT /api/admin/featured`) become **F047**, so F032 stays one round. The home "Featured" block keeps its top-rated source until then.
+- **Migration:** `0027_f032.sql`.
+- **Next after this cycle:** F034 (with F037 folded into its footer), F043, F033. F041 and F042 follow.
+
+**Earlier cycle (2026-11-19):** F031 (M) and F035 (S) shipped together; F031 also carried the backend half of review 11. F041–F046 were added.
 
 ### Platform audit (2026-11-17)
 - **Pages today:**
@@ -76,13 +79,14 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F030 | User posts: short text posts on profiles and in followers' feeds | M | shipped |
 | F031 | Post replies and hearts, with notifications | M | shipped |
 | F035 | Explore creators page | S | shipped |
-| F029 | Featured games on profiles | S | proposed |
+| F032 | Home and discover 2: sectioned home page, `/browse` and creator spotlight (with F029) | M | specced |
+| F029 | Featured games on profiles (folded into F032) | S | specced |
+| F034 | Navigation and UI polish: header, mobile menu, footer, shared states | S | proposed |
+| F043 | Continue playing: recently played games | S | proposed |
+| F033 | Search page: games, creators and collections | M | proposed |
 | F041 | Link previews: Open Graph and Twitter cards for shared links | S | proposed |
 | F042 | Block users | M | proposed |
-| F032 | Home and discover 2: sectioned home page and creator spotlight | M | proposed |
-| F033 | Search page: games, creators and collections | M | proposed |
-| F043 | Continue playing: recently played games | S | proposed |
-| F034 | Navigation and UI polish: header, mobile menu, footer, shared states | S | proposed |
+| F047 | Curated home picks: admin-chosen Featured games on the home page | S | proposed |
 | F036 | Tags index and tag pages | S | proposed |
 | F037 | About and Help pages | S | proposed |
 | F044 | Posts about this game, on game pages | S | proposed |
@@ -349,7 +353,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0024_f028.sql`, banner pipeline, link rules, stats, `user` reports), frontend (profile shell, header, sections, settings, admin), desktop (menu item, test). No engine changes.
 - **Depends on**: F002, F005, F008, F015 (all shipped). It is the foundation for F029 and F030.
 
-### F029: Featured games on profiles (S, proposed; after F028; recommended next after F031, kept out of F030 and F031 so each stays one round)
+### F029: Featured games on profiles (S, specced inside F032 → [spec](features/F032-home-and-discover-2.md) § 0.12–0.15)
+- **Folded into F032 (2026-11-19):** the creator spotlight shows a creator's own featured games first. Final shape: `PUT /api/users/me/featured` (`gameIds`, max 4, published at write time), `UserProfileResponse.featured` (published now, saved order, same for every viewer), a Featured row first on the Overview and a `FeaturedGamesDialog` picker (own published games + favorites, ↑/↓/Remove). The original pitch is kept below.
 - **Pitch**: users feature up to 4 published games, their own or anyone's, as a "Featured" row at the top of their profile Overview, in their chosen order. A "Feature on profile" picker in the profile's Overview (own games + favorites, with Move up/down) and `PUT /api/users/me/featured` (`gameIds`, max 4, published at write time; unpublished or deleted games are hidden at read time). `UserProfileResponse.featured: GameSummary[]`.
 - **User value**: creators lead with their best work instead of their newest. Players who don't make games can show their favourites. It composes with the F028 shell.
 - **Areas**: backend (one table `profile_featured`, one endpoint, read-time filter), frontend (Overview row, picker dialog). No engine changes.
@@ -397,12 +402,21 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: posts become conversations, and creators hear back from their audience.
 - **Areas**: backend (review 11 carry-over in `users.rs`, migration, `routes/post_replies.rs`, heart and lock handlers, two kinds, `Limit::PostReply`, report target, `remove_post` cascade), frontend (`HeartButton` generalised, `PostCard`, `PostThread`, `ReportButton.ariaLabel`, notification texts and switches, admin), desktop (verification test). No engine changes.
 
-### F032: Home and discover 2 (M, proposed)
+### F032: Home and discover 2 (M, specced → [spec](features/F032-home-and-discover-2.md); F029 folded in)
 - **Pitch**:
-  - The home page becomes a sectioned discover page: a hero carousel of 3 "Featured" picks (admin-curated via `PUT /api/admin/featured`, falling back to top rated), "New this week", "Recently updated" (F004), "Trending" (F003), "Popular collections" (most-favorited games' collections), and a "Creator spotlight" (one creator per day with their banner, bio and 3 games, from F028).
-  - The full sortable grid moves to `/browse` (with `/?sort=`/`?tag=`/`?q=` redirects).
-- **User value**: visitors see variety and people, not one grid. Creators get a chance to be spotlighted, and new and updated games get exposure.
-- **Areas**: backend (featured list table + admin endpoints, a `sort=updated` option, spotlight pick), frontend (home sections, `/browse` page, admin featured editor). No engine changes.
+  - `/` becomes a sectioned discover page: hero, Featured (top rated, unchanged), Trending this week, New releases, Creator spotlight, Recently updated, Player collections and Browse by tag. Every section hides on error or when empty; an empty platform shows one "No games yet" state.
+  - The full sortable grid moves to `/browse`, with a new "Recently updated" sort. Legacy `/?q=`, `?tag=`, `?sort=` and `?page=` URLs redirect there; the header search, the `Browse` links and game tag chips point there.
+  - Creator spotlight: one F035 creator per UTC day (`day mod N` over creators by id), with up to 3 of their own games, featured ones first.
+  - Player collections: public collections with at least 3 published games, most recently updated first.
+  - F029 featured games on profiles (see F029).
+- **Decisions (2026-11-19)**:
+  - No carousel and no motion anywhere.
+  - Admin curation moves to **F047**; the Featured block keeps its top-rated source.
+  - "Popular collections" became "Player collections" (recently updated, ≥ 3 published games): collections have no popularity signal yet.
+  - "New this week" became "New releases" (newest first, no time window), so the shelf is never empty on a quiet week.
+  - No "Home" nav link: the logo is home, and F034 regroups the header.
+- **User value**: visitors see variety and people, not one grid. Creators get a daily chance to be spotlighted and choose what leads their profile, and new and updated games get exposure.
+- **Areas**: backend (migration `0027_f032.sql`, `sort=updated`, `GET /api/collections`, `GET /api/creators/spotlight`, `PUT /api/users/me/featured`, `UserProfileResponse.featured`), frontend (home sections, `/browse`, link moves, Featured row and picker), desktop (View → Home and Browse games). No engine changes.
 
 ### F033: Search page (M, proposed)
 - **Pitch**: a `/search?q=` page with Games, Creators and Collections tabs and result counts. The header search navigates there. A new `GET /api/users?q=` (username and display-name prefix and substring, ranked by followers) and `GET /api/collections?q=` (public, non-empty). Recent searches are remembered per device, and empty and no-result states suggest trending tags.
@@ -418,6 +432,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
   - One `EmptyState`/`LoadError` usage audit, so every list page has an icon, a one-line explanation and an action.
 - **User value**: less hunting for pages, especially on phones, and a consistent feel across the app.
 - **Areas**: frontend only (Layout, styles, page headers); desktop verification.
+- **Planned next (2026-11-19):** recommended right after F032, with **F037** (About and Help) folded in, because the new footer links to `/about` and `/help`. After F032 the header already has `Browse` → `/browse` and the logo → `/`, so the regroup starts from there.
 
 ### F035: Explore creators page (S, shipped → [spec](features/F035-explore-creators.md); ships with F031)
 - **Pitch**:
@@ -521,3 +536,12 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
   - The composer suggests usernames after `@` (people you follow first).
 - **User value**: people can pull a friend or a creator into a conversation, which makes posts and threads social rather than broadcast.
 - **Areas**: backend (a mention parser shared by three write paths, `post_mentions`/`comment_mentions` tables, a notification kind and setting), frontend (linkify extension, notification text, autocomplete), desktop (verification). No engine changes.
+
+### F047: Curated home picks (S, proposed; added 2026-11-19; split out of F032)
+- **Pitch**:
+  - Admins choose up to 4 games for the home page's Featured block, in order: `GET /api/featured` (public) and `PUT /api/admin/featured` (`gameIds`, published at write time; hidden at read time when unpublished). Empty slots fill with the current top-rated games, skipping duplicates.
+  - An admin-only "Feature on home" / "Remove from home" button on game pages, and a "Home picks" list with ↑/↓/Remove on `/admin`.
+  - The block's badge reads "Staff pick" for curated games and "#1 top rated" for the fallback.
+- **User value**: the platform can promote jam winners, new creators and seasonal games instead of whatever rates highest, which keeps the top of the home page fresh.
+- **Areas**: backend (one table, two endpoints, `AdminUser`), frontend (`Featured` source, game page button, admin list), desktop (verification). No engine changes.
+- **Depends on**: F032.
