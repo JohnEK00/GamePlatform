@@ -230,19 +230,67 @@ fn normalize_link_url(url: &str) -> Option<String> {
     (host_ok && port_ok).then(|| format!("{scheme}{rest}"))
 }
 
-/// F028: characters a link label may not contain: C0 controls, DEL, C1 controls, and the bidi
-/// and invisible formatting characters that can make a label display as different text.
+/// F028 / review 11: the shared forbidden set. C0 controls, DEL, C1 controls, and the bidi,
+/// invisible, filler and line/paragraph-separator characters that can make text display as
+/// something else (or get around a line cap). Used for link labels, display names, bios, post
+/// bodies and post reply bodies (API § "Review-fix additions (REVIEW-2026-11-18-11)").
+///
+/// This mirrors `packages/ui/src/profile.ts` `isForbiddenLabelCodePoint`; the two lists must
+/// change together.
 pub(crate) fn is_forbidden_label_char(c: char) -> bool {
     matches!(
         c,
         '\u{0}'..='\u{1F}'
             | '\u{7F}'..='\u{9F}'
+            | '\u{061C}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{180E}'
             | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'
+            | '\u{2029}'
             | '\u{202A}'..='\u{202E}'
             | '\u{2060}'..='\u{2064}'
             | '\u{2066}'..='\u{2069}'
+            | '\u{3164}'
             | '\u{FEFF}'
+            | '\u{FFA0}'
     )
+}
+
+/// Review 11: `PATCH /api/users/me` `displayName`: trim → length → characters.
+pub(crate) fn validate_display_name(raw: &str) -> Result<String, AppError> {
+    let name = raw.trim();
+    let len = name.chars().count();
+    if len == 0 || len > DISPLAY_NAME_MAX {
+        return Err(AppError::validation(format!(
+            "displayName must be 1-{DISPLAY_NAME_MAX} characters"
+        )));
+    }
+    if name.chars().any(is_forbidden_label_char) {
+        return Err(AppError::validation(
+            "displayName must not contain control characters",
+        ));
+    }
+    Ok(name.to_string())
+}
+
+/// Review 11: `PATCH /api/users/me` `bio`: CRLF/CR → LF → trim → length → characters other
+/// than `\n`. Returns the value to store.
+pub(crate) fn validate_bio(raw: &str) -> Result<String, AppError> {
+    let bio = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let bio = bio.trim();
+    if bio.chars().count() > BIO_MAX {
+        return Err(AppError::validation(format!(
+            "bio must be at most {BIO_MAX} characters"
+        )));
+    }
+    if bio.chars().any(|c| c != '\n' && is_forbidden_label_char(c)) {
+        return Err(AppError::validation(
+            "bio must not contain control characters",
+        ));
+    }
+    Ok(bio.to_string())
 }
 
 /// F028: validate `PATCH /api/users/me` `links` (API § F028 "Link rules"; the first failure
@@ -292,31 +340,13 @@ pub async fn update_me(
     user: AuthUser,
     ApiJson(body): ApiJson<UpdateMeBody>,
 ) -> AppResult<Json<User>> {
-    let display_name = match body.display_name {
-        Some(name) => {
-            let name = name.trim().to_string();
-            let len = name.chars().count();
-            if len == 0 || len > DISPLAY_NAME_MAX {
-                return Err(AppError::validation(format!(
-                    "displayName must be 1-{DISPLAY_NAME_MAX} characters"
-                )));
-            }
-            Some(name)
-        }
-        None => None,
-    };
-    let bio = match body.bio {
-        Some(bio) => {
-            let bio = bio.trim().to_string();
-            if bio.chars().count() > BIO_MAX {
-                return Err(AppError::validation(format!(
-                    "bio must be at most {BIO_MAX} characters"
-                )));
-            }
-            Some(bio)
-        }
-        None => None,
-    };
+    // Review 11: still displayName → bio → links, all validated before anything is written.
+    let display_name = body
+        .display_name
+        .as_deref()
+        .map(validate_display_name)
+        .transpose()?;
+    let bio = body.bio.as_deref().map(validate_bio).transpose()?;
     let links_json = match body.links {
         Some(links) => Some(
             serde_json::to_string(&validate_links(links)?)
@@ -385,6 +415,12 @@ pub async fn upload_banner(
     }
     let bytes = banner.ok_or_else(|| AppError::validation("banner file is required"))?;
     validate_image(&bytes, "banner")?;
+    // Review 11 L5: the version this upload replaces; the final UPDATE checks it again.
+    let version: i64 = sqlx::query_scalar("SELECT banner_version FROM users WHERE id = ?")
+        .bind(&user.id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("Invalid or expired token".into()))?;
     let Ok(permit) = state.image_slots.clone().try_acquire_owned() else {
         // Not the client's fault: give the `Limit::Image` token back (as screenshots do).
         state
@@ -398,18 +434,51 @@ pub async fn upload_banner(
     })
     .await
     .map_err(|e| AppError::Internal(format!("banner task: {e}")))??;
+    store_banner(&state, &user.id, version, &jpeg).await?;
+    Ok(Json(load_user(&state, &user.id).await?).into_response())
+}
+
+/// The review 11 L5 409 message.
+pub const BANNER_CHANGED: &str = "Your banner changed while uploading; try again";
+
+/// Review 11 L5: write the processed banner and point the row at it, but only while the row's
+/// `banner_version` still equals `expected_version` (read before processing). When a concurrent
+/// clear, delete or upload won, the row is left alone, the file just written is removed if the
+/// row now has no banner, and the result is 409 `conflict`. `banner_ext` never names a missing
+/// file. Public so tests can drive the race directly.
+pub async fn store_banner(
+    state: &AppState,
+    user_id: &str,
+    expected_version: i64,
+    jpeg: &[u8],
+) -> AppResult<()> {
     let dir = state.storage.banners_dir();
     state
         .storage
-        .replace_image(&dir, &user.id, "jpg", &jpeg)
+        .replace_image(&dir, user_id, "jpg", jpeg)
         .await?;
-    sqlx::query(
-        "UPDATE users SET banner_ext = 'jpg', banner_version = banner_version + 1 WHERE id = ?",
+    let changed = sqlx::query(
+        "UPDATE users SET banner_ext = 'jpg', banner_version = banner_version + 1 \
+         WHERE id = ?1 AND banner_version = ?2",
     )
-    .bind(&user.id)
+    .bind(user_id)
+    .bind(expected_version)
     .execute(&state.db)
-    .await?;
-    Ok(Json(load_user(&state, &user.id).await?).into_response())
+    .await?
+    .rows_affected();
+    if changed == 0 {
+        let ext: Option<Option<String>> =
+            sqlx::query_scalar("SELECT banner_ext FROM users WHERE id = ?")
+                .bind(user_id)
+                .fetch_optional(&state.db)
+                .await?;
+        // No row (account deleted) or no banner: the file just written must not linger.
+        if matches!(ext, None | Some(None)) {
+            state.storage.remove_images(&dir, user_id).await;
+        }
+        return Err(AppError::Conflict(BANNER_CHANGED.into()));
+    }
+    Ok(())
 }
 
 /// F028 `DELETE /api/users/me/banner`: idempotent; the version only increases when a banner
@@ -510,7 +579,8 @@ mod tests {
         // C1 controls and bidi / invisible formatting characters, at both ends of each range.
         for c in [
             '\u{80}', '\u{85}', '\u{9F}', '\u{200B}', '\u{200F}', '\u{202A}', '\u{202E}',
-            '\u{2060}', '\u{2064}', '\u{2066}', '\u{2069}', '\u{FEFF}',
+            '\u{2060}', '\u{2064}', '\u{2066}', '\u{2069}', '\u{FEFF}', '\u{061C}', '\u{115F}',
+            '\u{1160}', '\u{180E}', '\u{2028}', '\u{2029}', '\u{3164}', '\u{FFA0}',
         ] {
             assert_eq!(
                 err(vec![link(&format!("a{c}b"), "https://x.com")]),
@@ -521,8 +591,9 @@ mod tests {
         }
         // Neighbours of those ranges stay allowed.
         for c in [
-            '\u{A0}', '\u{200A}', '\u{2010}', '\u{2029}', '\u{202F}', '\u{2065}', '\u{206A}',
-            '\u{FEFE}',
+            '\u{A0}', '\u{200A}', '\u{2010}', '\u{2027}', '\u{202F}', '\u{2065}', '\u{206A}',
+            '\u{FEFE}', '\u{061B}', '\u{061D}', '\u{115E}', '\u{1161}', '\u{180D}', '\u{180F}',
+            '\u{3163}', '\u{3165}', '\u{FF9F}', '\u{FFA1}',
         ] {
             assert!(
                 validate_links(vec![link(&format!("a{c}b"), "https://x.com")]).is_ok(),
@@ -599,5 +670,72 @@ mod tests {
         ] {
             assert!(validate_links(vec![link("", good)]).is_ok(), "{good}");
         }
+    }
+
+    /// Review 11: every new code point, plus the old set, in display names and bios.
+    const REVIEW11: [char; 8] = [
+        '\u{061C}', '\u{115F}', '\u{1160}', '\u{180E}', '\u{2028}', '\u{2029}', '\u{3164}',
+        '\u{FFA0}',
+    ];
+
+    fn msg(r: Result<String, AppError>) -> String {
+        match r.unwrap_err() {
+            AppError::Validation(m) => m,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn review11_forbidden_set() {
+        for c in REVIEW11 {
+            assert!(is_forbidden_label_char(c), "U+{:04X}", c as u32);
+        }
+    }
+
+    #[test]
+    fn review11_display_name() {
+        for c in REVIEW11
+            .into_iter()
+            .chain(['\n', '\t', '\u{200B}', '\u{FEFF}'])
+        {
+            assert_eq!(
+                msg(validate_display_name(&format!("Mi{c}a"))),
+                "displayName must not contain control characters",
+                "U+{:04X}",
+                c as u32
+            );
+        }
+        assert_eq!(validate_display_name("  Mia  ").unwrap(), "Mia");
+        // The length check comes first.
+        assert_eq!(
+            msg(validate_display_name("   ")),
+            "displayName must be 1-50 characters"
+        );
+        assert_eq!(
+            msg(validate_display_name(&format!(
+                "{}\u{2028}",
+                "a".repeat(60)
+            ))),
+            "displayName must be 1-50 characters"
+        );
+    }
+
+    #[test]
+    fn review11_bio() {
+        for c in REVIEW11.into_iter().chain(['\t', '\u{7}', '\u{202E}']) {
+            assert_eq!(
+                msg(validate_bio(&format!("a{c}b"))),
+                "bio must not contain control characters",
+                "U+{:04X}",
+                c as u32
+            );
+        }
+        assert_eq!(validate_bio(" a\r\nb\rc\n ").unwrap(), "a\nb\nc");
+        assert_eq!(validate_bio("a\nb").unwrap(), "a\nb");
+        assert_eq!(validate_bio("").unwrap(), "");
+        assert_eq!(
+            msg(validate_bio(&format!("{}\u{2028}", "a".repeat(1001)))),
+            "bio must be at most 1000 characters"
+        );
     }
 }
