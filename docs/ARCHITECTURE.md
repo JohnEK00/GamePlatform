@@ -1783,3 +1783,154 @@ There are no new dependencies, no engine changes, no desktop source changes and 
   - backend-dev: the migration, `ratelimit.rs`, `activity.rs`, `routes/posts.rs`, `routes/feed.rs`, `routes/users.rs`, `routes/collections.rs` (visibility of three items), `routes/reports.rs`, `routes/mod.rs`, `tests/f030.rs`, and the `tests/f008.rs`, `tests/f028.rs` and `tests/review2.rs` updates.
   - frontend-dev: `api/types.ts`, `api/client.ts`, `posts.ts`, `share.ts`, `profile.ts`, the new components, `ProfilePage`, `ProfileSections`, `PostPage`, `NotFoundPage`, `FeedPage`, `FeedItem`, `GamePage`, `CollectionPage`, `Report.tsx`, `AdminPage`, `WebGameApp.tsx`, `index.ts`, `styles.css` and tests.
   - desktop-dev: `src/__tests__/f030.desktop.test.tsx`.
+
+
+## F031 additions
+Post replies and hearts (spec: `docs/features/F031-post-replies-and-hearts.md`). This round adds one migration (two tables, added columns, four counter triggers and one dedupe index swap; **no table rebuild**), seven endpoints, `Limit::PostReply`, two notification kinds with settings, a `postReply` report target, and a thread UI on the permalink page. There are no new dependencies, no engine changes and no desktop source changes.
+- **Model.**
+  - Hearts and the reply count are counter columns on `posts`, maintained by triggers (the review 6 `comments.hearts` pattern), so `posts_for` needs no aggregate per row and cascades keep them right.
+  - Replies are a flat table per post. A reply stores only `reply_to_user_id`, not the answered reply's id.
+  - Notifications reuse the F007 write path. `notifications.post_id` (`ON DELETE CASCADE`) ties both kinds to the post; `notification_events.post_reply_id` (`ON DELETE CASCADE`) ties each `postReply` event to its reply, so deleting a reply removes its event and the `0014` trigger removes an emptied notification (the F024 model). Post kinds have `game_id` NULL, so F018 `MUTED` never matches and `VISIBLE` always passes.
+- **Data**: migration `backend/migrations/0026_f031.sql` runs after `0025_f030.sql`. Normative, in this order:
+  ```sql
+  -- F031: post replies and hearts (docs/ARCHITECTURE.md § F031 additions).
+
+  -- 1. Post counters and the reply lock. Counters are maintained by the triggers below; never write them directly.
+  ALTER TABLE posts ADD COLUMN hearts      INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE posts ADD COLUMN reply_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE posts ADD COLUMN locked_at   TEXT;                         -- NULL = replies on; RFC3339 millis Z
+
+  -- 2. Hearts (one per user and post). Never use INSERT OR REPLACE here: its implicit delete skips the trigger.
+  CREATE TABLE post_hearts (
+      post_id    TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,                                         -- RFC3339 millis Z
+      PRIMARY KEY (post_id, user_id)
+  );
+  CREATE INDEX idx_post_hearts_user ON post_hearts(user_id);           -- user-delete cascade
+  CREATE TRIGGER trg_post_hearts_insert AFTER INSERT ON post_hearts
+  BEGIN
+      UPDATE posts SET hearts = hearts + 1 WHERE id = NEW.post_id;
+  END;
+  CREATE TRIGGER trg_post_hearts_delete AFTER DELETE ON post_hearts
+  BEGIN
+      UPDATE posts SET hearts = hearts - 1 WHERE id = OLD.post_id;
+  END;
+
+  -- 3. Replies: one flat thread per post, oldest first (created_at, then rowid).
+  CREATE TABLE post_replies (
+      id               TEXT PRIMARY KEY,                                         -- UUID v4
+      post_id          TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      author_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      reply_to_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,             -- "Replying to @x"; NULL = answering the post
+      body             TEXT NOT NULL,                                            -- routes::posts::validate_post_body
+      created_at       TEXT NOT NULL                                             -- RFC3339 millis Z
+  );
+  CREATE INDEX idx_post_replies_post_created ON post_replies(post_id, created_at);   -- the thread (rowid tie-break), cap count
+  CREATE INDEX idx_post_replies_author       ON post_replies(author_id);              -- user-delete cascade
+  CREATE INDEX idx_post_replies_reply_to     ON post_replies(reply_to_user_id) WHERE reply_to_user_id IS NOT NULL;   -- SET NULL
+  CREATE TRIGGER trg_post_replies_insert AFTER INSERT ON post_replies
+  BEGIN
+      UPDATE posts SET reply_count = reply_count + 1 WHERE id = NEW.post_id;
+  END;
+  CREATE TRIGGER trg_post_replies_delete AFTER DELETE ON post_replies
+  BEGIN
+      UPDATE posts SET reply_count = reply_count - 1 WHERE id = OLD.post_id;
+  END;
+
+  -- 4. Notifications. ADD COLUMN with REFERENCES is allowed because the default is NULL.
+  ALTER TABLE notifications ADD COLUMN post_id TEXT REFERENCES posts(id) ON DELETE CASCADE;          -- postReply / postHeart
+  CREATE INDEX idx_notifications_post ON notifications(post_id) WHERE post_id IS NOT NULL;
+  ALTER TABLE notification_events ADD COLUMN post_reply_id TEXT REFERENCES post_replies(id) ON DELETE CASCADE;   -- postReply
+  CREATE INDEX idx_notification_events_post_reply ON notification_events(post_reply_id) WHERE post_reply_id IS NOT NULL;
+  --    One event per reply: append post_reply_id to the dedupe key (strictly finer than the 0023 key, so existing rows fit).
+  DROP INDEX idx_notification_events_dedupe;
+  CREATE UNIQUE INDEX idx_notification_events_dedupe ON notification_events(notification_id, actor_id, IFNULL(comment_id, ''), IFNULL(screenshot_id, ''), IFNULL(post_reply_id, ''));
+  ALTER TABLE notification_settings ADD COLUMN post_replies INTEGER NOT NULL DEFAULT 1 CHECK (post_replies IN (0, 1));
+  ALTER TABLE notification_settings ADD COLUMN post_hearts  INTEGER NOT NULL DEFAULT 1 CHECK (post_hearts IN (0, 1));
+
+  -- 5. Reports: the post of a post / postReply report (no FK, like target_game_id).
+  ALTER TABLE reports ADD COLUMN target_post_id TEXT;
+  UPDATE reports SET target_post_id = target_id WHERE target_type = 'post';
+  ```
+  - Existing posts have no hearts or replies, so the counters start correct at 0.
+  - `tests/f018.rs` `SCHEMA_OF` excludes `idx_notifications_post` and `idx_notification_events_post_reply`; its dedupe normalisation still holds (the definition still contains `IFNULL(screenshot_id, '')`, which `tests/f024.rs` also checks).
+- **Post assembly** (`routes/posts.rs`). `POST_SELECT` adds `p.hearts, p.reply_count, p.locked_at`. `posts_for` adds one query when the viewer is signed in and rows are non-empty:
+  ```sql
+  SELECT post_id FROM post_hearts WHERE user_id = ?1 AND post_id IN (SELECT value FROM json_each(?2))
+  ```
+  → `myHeart`; `locked` = `locked_at IS NOT NULL`. Still a fixed number of queries per call.
+- **Reply select** (`routes/post_replies.rs`):
+  ```sql
+  SELECT r.id, r.post_id, r.author_id, r.body, r.created_at, p.author_id AS post_author_id,
+         u.id AS a_id, u.username AS a_username, u.display_name AS a_display_name,
+         u.avatar_ext AS a_avatar_ext, u.avatar_version AS a_avatar_version,
+         t.id AS t_id, t.username AS t_username, t.display_name AS t_display_name,
+         t.avatar_ext AS t_avatar_ext, t.avatar_version AS t_avatar_version
+  FROM post_replies r
+  JOIN posts p ON p.id = r.post_id
+  JOIN users u ON u.id = r.author_id
+  LEFT JOIN users t ON t.id = r.reply_to_user_id
+  ```
+  - `replyTo` = `user_ref_from_row(row, "t_")` only when `t_id` is non-NULL (that helper requires an id), else `None`.
+  - `byPostAuthor` = `author_id == post_author_id`; `canDelete` = viewer is `author_id`, `post_author_id` or admin (`is_admin` once per request); `path` = `/p/{post_id}?reply={id}`.
+  - List page: `{REPLY_SELECT} WHERE r.post_id = ?1 ORDER BY r.created_at, r.rowid LIMIT ?2 OFFSET ?3`; `total` = `SELECT reply_count FROM posts WHERE id = ?1`. A test asserts the plan uses `idx_post_replies_post_created` without `USE TEMP B-TREE FOR ORDER BY`.
+- **Guarded reply insert** (`create_post_reply`, inside `BEGIN IMMEDIATE`; `?7` = 200, `?8` = 1 when the caller is the post author or an admin):
+  ```sql
+  INSERT INTO post_replies (id, post_id, author_id, reply_to_user_id, body, created_at)
+  SELECT ?1, ?2, ?3, ?4, ?5, ?6
+  WHERE EXISTS (SELECT 1 FROM posts WHERE id = ?2)
+    AND (?8 = 1 OR (SELECT locked_at FROM posts WHERE id = ?2) IS NULL)
+    AND (SELECT COUNT(*) FROM post_replies WHERE post_id = ?2) < ?7
+  ```
+  0 rows → roll back, then re-read `SELECT locked_at IS NOT NULL FROM posts WHERE id = ?`: no row → 404 `Post not found`; locked and `?8 = 0` → 422 `Replies are turned off for this post`; else 422 `This post has reached 200 replies`.
+- **Hearts.** `PUT`: `INSERT OR IGNORE INTO post_hearts (post_id, user_id, created_at) SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM posts WHERE id = ?1)`; a changed row → `notify_pool` `postHeart` with `Dedupe::Actor`. `DELETE`: `DELETE FROM post_hearts WHERE post_id = ? AND user_id = ?`; a removed row → `retract_pool(author, Kind::PostHeart, post_group(id), user)`. The response re-reads `posts.hearts`.
+- **Lock.** `UPDATE posts SET locked_at = COALESCE(locked_at, ?2) WHERE id = ?1` / `UPDATE posts SET locked_at = NULL WHERE id = ?1`.
+- **Write path** (`notifications.rs`). `Kind::PostReply` (`postReply`, column `post_replies`) and `Kind::PostHeart` (`postHeart`, column `post_hearts`); `post_group(id)` = `post:{id}`. `NewNotification` gains `post_id` and `event_post_reply_id` (every existing literal passes `None`). In `try_notify` the notifications insert becomes
+  ```sql
+  INSERT INTO notifications (recipient_id, kind, group_key, game_id, comment_id, collection_id, post_id, created_at, updated_at)
+  SELECT ?1, ?2, ?3, ?5, ?6, ?10, ?11, ?7, ?7
+  WHERE … (unchanged settings, MUTED and dedupe clauses) …
+  ON CONFLICT (recipient_id, kind, group_key) WHERE read_at IS NULL DO UPDATE SET updated_at = excluded.updated_at
+  RETURNING id
+  ```
+  and the event insert becomes `INSERT OR IGNORE INTO notification_events (notification_id, actor_id, comment_id, screenshot_id, post_reply_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`. A reply deleted between commit and notify fails its FK; the transaction rolls back and the failure is logged.
+- **Reply notifications** (`create_post_reply`, after the commit): recipients = `[post author, replyTo user]`, deduplicated, minus the poster; each gets `Kind::PostReply`, `post_group(post_id)`, `post_id`, `event_post_reply_id = reply id`, `Dedupe::None`, all game/comment/thread/collection fields `None`.
+- **Read path** (`notifications::list_page`). The base select adds `n.post_id`. Two extra batched queries, only when the page has post kinds:
+  ```sql
+  -- newest live reply per postReply notification
+  SELECT notification_id, post_reply_id FROM (
+    SELECT notification_id, post_reply_id, ROW_NUMBER() OVER (
+      PARTITION BY notification_id ORDER BY created_at DESC, id DESC) AS rn
+    FROM notification_events
+    WHERE notification_id IN (SELECT value FROM json_each(?1))
+      AND post_reply_id IS NOT NULL AND retracted_at IS NULL)
+  WHERE rn = 1;
+  -- excerpts and authors
+  SELECT id, author_id, substr(body, 1, 140) FROM posts WHERE id IN (SELECT value FROM json_each(?1));
+  SELECT id, substr(body, 1, 140) FROM post_replies WHERE id IN (SELECT value FROM json_each(?1));
+  ```
+  Per kind: `postReply` → `eventCount` = live events, `excerpt` = the newest reply's, `ownsThread` = post author == recipient, `path` = `/p/{postId}?reply={newestReplyId}` (`/p/{postId}` if none); `postHeart` → `eventCount` = `actorCount`, `excerpt` = the post's, `path` = `/p/{postId}`. `postId` = `n.post_id` for both. `VISIBLE`, `unread_count`, `mark_read`, mutes and pruning are unchanged.
+- **Settings.** `post_replies` ↔ `postReplies`, `post_hearts` ↔ `postHearts`; `update_settings` binds them as `?11` and `?12`.
+- **Delete.**
+  - `remove_post(state, id)`, in one transaction:
+    ```sql
+    UPDATE reports SET status = 'resolved', resolution = 'delete', resolved_at = ?2
+     WHERE status = 'open' AND ((target_type = 'post' AND target_id = ?1)
+       OR (target_type = 'postReply' AND target_id IN (SELECT id FROM post_replies WHERE post_id = ?1)));
+    DELETE FROM posts WHERE id = ?1;   -- cascades: post_replies, post_hearts, activity_events, notifications (post_id), notification_events (post_reply_id)
+    ```
+  - `remove_post_reply(state, id)`, in one transaction: resolve open `postReply` reports with `target_id = ?1`, then `DELETE FROM post_replies WHERE id = ?1` (its events cascade; the `0014` trigger removes an emptied notification; the counter trigger decrements `reply_count`).
+- **Reports.** `TARGET_TYPES` += `"postReply"`. `create_report` writes `target_post_id` (post → its id; postReply → `post_replies.post_id`; else NULL). `Report.target_post_id` is read in `report_from_row`. `("delete", "postReply")` calls `remove_post_reply`.
+- **UI** (`@webgame/ui`):
+  - `HeartButton` gains `subject` and `onToggle`, so posts reuse it without a second heart component.
+  - `PostCard` gains the heart and a replies link (`inThread` hides the link on `/p/{id}`).
+  - `components/PostThread.tsx`: `PostThread` (loads the whole thread with `perPage: 200`, which equals the cap, so there is no paging UI), `PostReplyItem`, `PostReplyForm`; `?reply=` highlight and focus.
+  - `PostPage` keeps a local post state updated through `onPostChange` (lock, `replyCount`).
+  - `notifications.ts`, `NotificationItem` and `NotificationSettings` add the two kinds; `muteActionFor` returns null for them.
+  - `AdminPage` adds `postReply` rows with `View in context →` (`/p/{targetPostId}?reply={targetId}`).
+- **Desktop.** No source changes. Reply links go through `external.rs`; OS notification bodies are the summaries, which hold no post or reply text. `f031.desktop.test.tsx` verifies this.
+- **Ownership**:
+  - backend-dev: the migration, `ratelimit.rs`, `notifications.rs`, `routes/notifications.rs`, `routes/posts.rs`, `routes/post_replies.rs` (new), `routes/reports.rs`, `routes/mod.rs`, the `NewNotification` literals in `routes/comments.rs`, `routes/follows.rs`, `routes/collections.rs` and `routes/screenshots.rs`, `tests/f031.rs`, and the `tests/f007.rs`, `tests/f008.rs`, `tests/f018.rs`, `tests/f028.rs`, `tests/f030.rs` and `tests/review4.rs` updates.
+  - frontend-dev: `api/types.ts`, `api/client.ts`, `posts.ts`, `notifications.ts`, `HeartButton`, `PostCard`, `PostThread` (new), `NotificationItem`, `NotificationSettings`, `Report.tsx`, `PostPage`, `AdminPage`, `index.ts`, `styles.css` and tests.
+  - desktop-dev: `src/__tests__/f031.desktop.test.tsx`.

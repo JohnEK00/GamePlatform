@@ -69,7 +69,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F028 | Public profiles 2: banner, links, profile sections and sharing | M | shipped |
 | F029 | Featured games on profiles | S | proposed |
 | F030 | User posts: short text posts on profiles and in followers' feeds | M | shipped |
-| F031 | Post replies and hearts, with notifications | M | proposed |
+| F031 | Post replies and hearts, with notifications | M | specced |
 | F032 | Home and discover 2: sectioned home page and creator spotlight | M | proposed |
 | F033 | Search page: games, creators and collections | M | proposed |
 | F034 | Navigation and UI polish: header, mobile menu, footer, shared states | S | proposed |
@@ -78,6 +78,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F037 | About and Help pages | S | proposed |
 | F038 | Images in posts | S | proposed |
 | F039 | Post composer 2: attachment picker and drafts | S | proposed |
+| F040 | Post threads 2: mute a post's notifications and hearts on replies | S | proposed |
 | F027 | Featured screenshots: owners pin up to 3 shots on the game page | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
@@ -336,7 +337,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Areas**: backend (migration `0024_f028.sql`, banner pipeline, link rules, stats, `user` reports), frontend (profile shell, header, sections, settings, admin), desktop (menu item, test). No engine changes.
 - **Depends on**: F002, F005, F008, F015 (all shipped). It is the foundation for F029 and F030.
 
-### F029: Featured games on profiles (S, proposed; after F028; recommended next, kept out of F030 so both stay one round)
+### F029: Featured games on profiles (S, proposed; after F028; recommended next after F031, kept out of F030 and F031 so each stays one round)
 - **Pitch**: users feature up to 4 published games, their own or anyone's, as a "Featured" row at the top of their profile Overview, in their chosen order. A "Feature on profile" picker in the profile's Overview (own games + favorites, with Move up/down) and `PUT /api/users/me/featured` (`gameIds`, max 4, published at write time; unpublished or deleted games are hidden at read time). `UserProfileResponse.featured: GameSummary[]`.
 - **User value**: creators lead with their best work instead of their newest. Players who don't make games can show their favourites. It composes with the F028 shell.
 - **Areas**: backend (one table `profile_featured`, one endpoint, read-time filter), frontend (Overview row, picker dialog). No engine changes.
@@ -364,11 +365,19 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
   - desktop: verification test only.
   - No engine changes.
 
-### F031: Post replies and hearts (M, proposed; after F030)
-- **Pitch**: hearts on posts, and one level of replies under each post. This reuses the F006 comment patterns (the `HeartButton`, 3-reply preview and "Show N more", permalinks `/p/{id}?reply={rid}`), F017-style author lock, and F007 notifications: `postReply` and `postHeart` for the author, coalesced like comment hearts, with settings switches and F018 thread mutes.
+### F031: Post replies and hearts (M, specced → [spec](features/F031-post-replies-and-hearts.md))
+- **Pitch**:
+  - Hearts on posts (public count, the viewer's state, not on your own post).
+  - One flat thread of replies per post (oldest first, at most 200; "Replying to @name" for answers to a reply), shown on the permalink `/p/{id}` with `?reply={rid}` deep links. Cards everywhere else get the heart and a `💬 N replies` link.
+  - "Turn off replies" for the author and admins (the F017 lock). Reply delete by its author, the post's author or an admin; `postReply` reports with "View in context".
+  - Notifications `postReply` (post author and the `replyTo` user) and `postHeart` (author, actor dedupe, retract on un-heart), with `postReplies`/`postHearts` switches.
+- **Decisions (2026-11-19)**:
+  - The thread lives on the permalink only (no inline threads in the feed or profiles); it loads in one request (`perPage` max = cap = 200), so there is no paging UI.
+  - No hearts on replies and no post mutes: both move to **F040**. Post mutes need a new mute target because `notification_mutes.game_id` is `NOT NULL`.
+  - F029 is not folded in: this round already fills one frontend round; F029 runs next.
+  - Migration `0026_f031.sql` adds tables, columns and triggers only (no rebuild), plus `reports.target_post_id` for the admin link.
 - **User value**: posts become conversations, and creators hear back from their audience.
-- **Areas**: backend (`post_replies`, `post_hearts`, notification kinds, report target for replies), frontend (thread UI on post cards and the permalink, notification texts, settings). No engine changes.
-- **Builds on F030**: `PostCard` gains the heart and the thread below its body, and `remove_post` must also cascade replies and resolve their reports. It needs no `activity_events` change, because replies don't enter the feed.
+- **Areas**: backend (migration, `routes/post_replies.rs`, heart and lock handlers, two kinds, `Limit::PostReply`, report target, `remove_post` cascade), frontend (`HeartButton` generalised, `PostCard`, `PostThread`, notification texts and switches, admin), desktop (verification test). No engine changes.
 
 ### F032: Home and discover 2 (M, proposed)
 - **Pitch**:
@@ -420,3 +429,8 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
   - The unsent text and attachment are kept as a draft per device, restored when you come back, and cleared after posting.
 - **User value**: attaching no longer requires visiting the game or collection page first, and a half-written dev log survives a page change.
 - **Areas**: frontend only (dialog, composer, local draft). No backend changes: F030's `POST /api/posts` already takes either id.
+
+### F040: Post threads 2: mute a post and hearts on replies (S, proposed; after F031)
+- **Pitch**: "Mute notifications" on a post (permalink and `/notifications` items), stored as a new post mute target and listed in Settings → Muted, suppressing `postReply`/`postHeart` for that post. Hearts on post replies (`post_reply_hearts`, a heart on each reply, a `postReplyHeart` notification or a merge into `postHeart`, decided in the spec).
+- **User value**: participants in a busy thread can step away, and replies get the same "+1" as comments.
+- **Areas**: backend (mute target: `notification_mutes` needs a nullable `game_id` or a separate table, plus `NotificationMute` gaining a post variant; reply hearts), frontend (mute buttons, Muted list rows, reply hearts). No engine changes.

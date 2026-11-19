@@ -1055,3 +1055,7 @@ These rules replace any earlier F023 or F019 text that says pad A reports `confi
 
 ## F030 additions
 None. User posts are a platform-only feature: there are no engine, message, game.json, bundle or player page changes. Games can't read or create posts, and nothing about posts reaches the game iframe.
+
+
+## F031 additions
+None. Post replies, hearts and their notifications are platform-only: there are no engine, message, game.json, bundle or player page changes, and nothing about them reaches the game iframe.

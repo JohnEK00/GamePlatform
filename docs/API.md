@@ -1983,3 +1983,137 @@ An attachment can't be changed after posting. Posts can't be edited.
 
 ### Privacy
 Posts are public to everyone, including anonymous visitors, and reach the author's followers' feeds. No reader, follower or view data is exposed. Report previews hold at most the first 140 code points of the body.
+
+
+## F031 additions
+Post replies and hearts, with notifications (spec: `docs/features/F031-post-replies-and-hearts.md`; § 0 there settles every ambiguity). All earlier rules apply, including F006 (heart and reply patterns), F007/F018/F024 (notifications), F017 (locks) and F030 (posts, body rules). There are seven new endpoints, two notification kinds, two settings, one report target and one new rate-limit bucket.
+
+### Types
+```ts
+type Post = {
+  ...F030,
+  hearts: number;        // >= 0, distinct users who hearted the post
+  myHeart: boolean;      // 🔓 the viewer hearted it; false when anonymous
+  replyCount: number;    // 0–200, replies on the post
+  locked: boolean;       // replies turned off by the author or an admin (only they can still reply)
+}
+// Every Post the API returns carries these fields (POST /api/posts, GET /api/posts/{id}, the profile list,
+// FeedItem.post, and the lock endpoints). Older servers omit them: clients hide hearts and replies.
+
+type PostReply = {
+  id: string;            // UUID v4
+  postId: string;
+  author: UserRef;
+  replyTo: UserRef | null;   // the author of the reply that was answered (see "Reply rules"); null otherwise or if that user was deleted
+  body: string;          // plain text, the F030 body rules
+  createdAt: string;     // RFC3339 millis Z
+  byPostAuthor: boolean; // the reply's author wrote the post
+  canDelete: boolean;    // 🔓 the viewer is the reply's author, the post's author or an admin; false when anonymous
+  path: string;          // "/p/{postId}?reply={id}" (in-app route)
+}
+
+type CreatePostReplyRequest = {
+  body: string;                 // required
+  replyToId?: string | null;    // a reply of the same post; null or absent = answering the post
+}
+
+type PostHeartResponse = { hearted: boolean; hearts: number }
+
+type NotificationKind = "comment" | "reply" | "heart" | "follow" | "gamePublished" | "pinned" | "addedToCollection"
+                      | "screenshotPosted"
+                      | "postReply" | "postHeart";          // F031
+
+type Notification = {
+  ...F007, F018, F021 and F024,
+  postId: string | null;         // postReply / postHeart: the post; null for every other kind
+}
+
+type NotificationSettings = {
+  ...F007, F018, F021 and F024,
+  postReplies: boolean;          // "postReply" kind; default true
+  postHearts: boolean;           // "postHeart" kind; default true
+}
+
+type ReportTargetType = "game" | "comment" | "screenshot" | "collection" | "user" | "post"
+                      | "postReply";     // F031: targetId = the reply id
+
+type Report = {
+  ...earlier,
+  targetPostId: string | null;   // F031: "post" → the post id; "postReply" → the reply's post; null for other types
+}
+// Report for targetType "postReply": targetPreview = the reply body's first 140 code points at report time;
+// targetGameId, targetImageUrl and targetImageFullUrl = null.
+```
+- Clients must still ignore notifications with an unknown `kind` (F007). Clients must treat a missing `postId` as `null`, a missing `postReplies`/`postHearts` as "not supported" (hide the switch), and a missing `targetPostId` as `null`.
+
+### Endpoints
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/posts/{id}/replies | `?page=1&perPage=50` (1–200) | `Page<PostReply>`, oldest first (`createdAt` asc, then insertion order); `total` = `replyCount` |
+| POST 🔒 | /api/posts/{id}/replies | `CreatePostReplyRequest` | 201 `PostReply` |
+| DELETE 🔒 | /api/post-replies/{id} | – | 204 |
+| PUT 🔒 | /api/posts/{id}/heart | – | `PostHeartResponse` `{ hearted: true }` (idempotent) |
+| DELETE 🔒 | /api/posts/{id}/heart | – | `PostHeartResponse` `{ hearted: false }` (idempotent; 200 even if not hearted) |
+| PUT 🔒 author/admin | /api/posts/{id}/lock | – | `Post` (idempotent) |
+| DELETE 🔒 author/admin | /api/posts/{id}/lock | – | `Post` (idempotent) |
+
+Request bodies are ignored on the heart and lock endpoints.
+
+**`GET /api/posts/{id}/replies`**: unknown post → 404 `not_found` `Post not found` (checked before paging). `page`: default 1, non-integer → 400 `page must be an integer`. `perPage`: default **50**, clamped to **1–200**, non-integer → 400 `perPage must be an integer`. No rate limit.
+
+**`POST /api/posts/{id}/replies`**, checked in this order:
+1. Auth → 401.
+2. Malformed JSON → 400 `bad_request`. Not an object, `body` missing, or a field with the wrong JSON type (for example `replyToId: 3`) → 422 `validation` (JSON extractor). Unknown fields are ignored.
+3. Unknown post → 404 `Post not found`.
+4. `Limit::PostReply` → 429 `rate_limited` with `Retry-After`.
+5. The F030 body rules → 422 (`body must be 1–500 characters`, `body must be at most 12 lines`, `body must be plain text`).
+6. `replyToId` is a string that names no reply, or a reply of another post → 404 `not_found` `Reply not found`.
+7. The post is locked and the caller is neither its author nor an admin → 422 `validation` `Replies are turned off for this post`.
+8. The post already has **200** replies → 422 `validation` `This post has reached 200 replies`. The insert is guarded (cap, lock and the post's existence), so concurrent replies can't exceed the cap or slip past a lock; a post deleted meanwhile → 404 `Post not found`.
+9. 201 with the `PostReply` as the caller sees it.
+
+**Reply rules:** with `replyToId` naming reply R, `replyTo` = R's author unless R's author is the caller (then `null`). Without it, `replyTo` = `null`. Nesting is one level: every reply belongs to the post.
+
+**`DELETE /api/post-replies/{id}`**: auth → 401; unknown → 404 `Reply not found`; not the reply's author, the post's author or an admin → 403 `forbidden`. Deletes the reply and marks every open `postReply` report on it `resolved` with resolution `delete`, in one transaction. No rate limit.
+
+**Hearts**, checked in this order: auth → 401; unknown post → 404 `Post not found`; `Limit::Heart` → 429; `PUT` on your own post → 422 `validation` `You can't heart your own post` (`DELETE` on your own post returns `{ hearted: false, hearts }`). `hearts` is the count after the change. Who hearted a post is never listed.
+
+**Lock**, checked in this order: auth → 401; unknown post → 404 `Post not found`; neither the author nor an admin → 403 `forbidden`; `Limit::ThreadTools` → 429. `PUT` turns replies off (already locked: unchanged), `DELETE` turns them on. Returns the `Post` as the caller sees it. Locking never notifies, and never hides or deletes replies; hearts, deletes and reports keep working.
+
+### Changed endpoints
+- `GET /api/posts/{id}`, `GET /api/users/{u}/posts`, `POST /api/posts` and `GET /api/feed` (`FeedItem.post`): `Post` carries the four new fields.
+- `DELETE /api/posts/{id}` and the report `delete` action on a post: also delete the post's replies and hearts and both kinds' notifications for it, and resolve open `postReply` reports on its replies with `delete`, in the same transaction.
+- `POST /api/reports`:
+  - `targetType: "postReply"` with `targetId` = a reply id; unknown → 404 `Reply not found`; your own reply → 422 `You can't report your own reply`;
+  - an unknown `targetType` → 422 `targetType must be "game", "comment", "screenshot", "collection", "user", "post" or "postReply"`;
+  - the duplicate-open rule (409) and `Limit::Report` are unchanged.
+- `POST /api/admin/reports/{id}/resolve` for `postReply` reports: `dismiss` unchanged; `delete` → the effects of `DELETE /api/post-replies/{id}` (a reply already gone is not an error); `unpublish` → 422 `unpublish is only valid for game reports`; `clearProfile` → 422 `clearProfile is only valid for user reports`.
+- `GET`/`PUT /api/notifications/settings`: `postReplies` and `postHearts`. A non-boolean → 422 `postReplies must be a boolean` / `postHearts must be a boolean`.
+- `GET /api/notifications`: the two kinds and `postId`.
+
+### Notifications: triggers and recipients
+| Kind | Written when | Recipients | Group | Joins an unread group? |
+|---|---|---|---|---|
+| `postReply` | `POST /api/posts/{id}/replies` returns 201 | the post's author, and the reply's `replyTo` user | per post | yes; each reply is one event |
+| `postHeart` | `PUT /api/posts/{id}/heart` inserts a heart | the post's author | per post | yes; one event per hearting user |
+
+- **Never the actor**, and each recipient gets at most one notification per event.
+- **Fields.** Both kinds: `game`, `commentId`, `threadId`, `collection` and `screenshot` = `null`; `creatorHeart` = `false`; `postId` = the post.
+  - `postReply`: `actors` = the 1–3 most recent distinct repliers; `eventCount` = live replies in the group; `ownsThread` = the recipient wrote the post; `excerpt` = the first 140 code points of the newest live reply's current body; `path` = `/p/{postId}?reply={newestReplyId}`.
+  - `postHeart`: `eventCount` = `actorCount`; `ownsThread` = `false`; `excerpt` = the first 140 code points of the post's body; `path` = `/p/{postId}`.
+- **Coalescing, dedupe and retraction** follow F007: replies join the unread group; hearts notify once per actor while an event of theirs is stored; `DELETE …/heart` retracts the actor's event from an **unread** notification (review 4 toggle rule applies).
+- **Deletion.** Deleting a reply (any path) removes its event, read or unread; a notification left with no events is deleted. Deleting the post deletes both kinds' notifications for it. Deleting a user deletes their events.
+- **Settings** `postReplies` / `postHearts` are checked when writing. **Mutes:** F018 game and thread mutes never apply to these kinds.
+- Best effort: a failure is logged and never changes the response. A refused request (4xx) writes nothing.
+- **Visibility:** always visible while they have a live event (they have no game).
+
+### Web routes
+- `/p/{id}?reply={replyId}`: the post permalink with that reply highlighted and focused in the thread.
+
+### Rate limits
+- `POST /api/posts/{id}/replies`: **`Limit::PostReply`, 30 per 10 min, per user**.
+- Post hearts share **`Limit::Heart`** (120 per 10 min) with comment hearts. Post locks share **`Limit::ThreadTools`** (60 per 10 min).
+- Reply reports share `Limit::Report`. `GET …/replies` and `DELETE /api/post-replies/{id}` have no limit.
+
+### Privacy
+Replies are public like posts. A post's author learns who hearted it (notification actors); nobody else does. Excerpts are read at request time, so deletes apply at once. Report previews hold at most the first 140 code points of the reply.
