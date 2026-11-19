@@ -664,6 +664,34 @@ export type SuggestedCreator = {
   games: number;
 };
 
+// ---- F035: explore creators ----
+
+/** F035: `GET /api/creators?sort=`. Absent or empty = "popular" server-side. */
+export type CreatorSort = "popular" | "active" | "new";
+
+/** F035: one card of the Explore creators page (a user with at least one published game). */
+export type Creator = {
+  user: UserRef;
+  /** F028 "/media/banners/{userId}.jpg?v={n}" (resolve against the API base); null = no banner. */
+  bannerUrl: string | null;
+  /** The first 160 code points of the bio ("" when empty); plain text, may contain "\n". Never render as HTML. */
+  bioExcerpt: string;
+  /** Published games (>= 1). */
+  games: number;
+  /** Sum of plays over those games. */
+  plays: number;
+  followers: number;
+  /** The viewer follows this creator; false when anonymous and on the viewer's own card. */
+  isFollowing: boolean;
+  /** RFC3339 millis Z */
+  firstPublishedAt: string;
+  /** RFC3339 millis Z */
+  lastActiveAt: string;
+};
+
+/** F035: `listCreators` query. Only present keys are sent, in the order sort, page, perPage. */
+export type CreatorQuery = { sort?: CreatorSort; page?: number; perPage?: number };
+
 // ---- F005: screenshots ----
 
 export type Screenshot = {

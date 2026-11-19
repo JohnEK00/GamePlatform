@@ -27,6 +27,7 @@ import { AdminPage } from "./pages/AdminPage";
 import { StudioPage } from "./pages/StudioPage";
 import { FeedPage } from "./pages/FeedPage";
 import { FollowListPage } from "./pages/FollowListPage";
+import { CreatorsPage } from "./pages/CreatorsPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { CollectionPage } from "./pages/CollectionPage";
 import { MyCollectionsRedirect, UserCollectionsPage } from "./pages/UserCollectionsPage";
@@ -160,6 +161,7 @@ export function WebGameRoutes({ extraRoutes }: { extraRoutes?: ReactNode }) {
         />
         <Route path="u/:username/followers" element={<FollowListPage mode="followers" />} />
         <Route path="u/:username/following" element={<FollowListPage mode="following" />} />
+        <Route path="creators" element={<CreatorsPage />} />
         <Route
           path="settings"
           element={

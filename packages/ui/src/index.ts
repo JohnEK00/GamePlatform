@@ -458,6 +458,11 @@ export { StudioPage, STUDIO_OPEN_FOLDER_EVENT } from "./pages/StudioPage";
 export { FeedPage, FEED_TAB_KEY } from "./pages/FeedPage";
 export type { FeedTab } from "./pages/FeedPage";
 export { FollowListPage } from "./pages/FollowListPage";
+// F035: Explore creators
+export { CreatorsPage } from "./pages/CreatorsPage";
+export { CreatorCard, CreatorCardSkeleton } from "./components/CreatorCard";
+export { CREATOR_SORTS, CREATOR_SORT_LABELS, CREATORS_PER_PAGE, parseCreatorSort, creatorsPath, creatorStatsText, isValidCreator } from "./creators";
+export type { Creator, CreatorSort, CreatorQuery } from "./api/types";
 export { NotificationsPage, NOTIFICATIONS_PER_PAGE } from "./pages/NotificationsPage";
 export { CollectionPage, LINK_COPIED_MS, COLLECTION_CONFLICT_MESSAGE } from "./pages/CollectionPage";
 export { UserCollectionsPage, MyCollectionsRedirect, USER_COLLECTIONS_PER_PAGE } from "./pages/UserCollectionsPage";

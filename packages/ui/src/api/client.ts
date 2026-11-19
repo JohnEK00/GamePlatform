@@ -27,6 +27,8 @@ import type {
   FeedQuery,
   FollowResponse,
   SuggestedCreator,
+  Creator,
+  CreatorQuery,
   UserRef,
   Game,
   GameAchievement,
@@ -616,6 +618,10 @@ export class ApiClient {
   }
   listFollowing(username: string, query: PageQuery = {}): Promise<Page<UserRef>> {
     return this.request(`/api/users/${encodeURIComponent(username)}/following`, { query: { page: query.page, perPage: query.perPage } });
+  }
+  /** F035: the Explore creators directory (public). Sends only present keys, in the order sort, page, perPage. */
+  listCreators(query: CreatorQuery = {}, signal?: AbortSignal): Promise<Page<Creator>> {
+    return this.request("/api/creators", { query: { sort: query.sort, page: query.page, perPage: query.perPage }, signal });
   }
   /** Newest first. `kinds` is sent comma-separated and omitted when empty. */
   getFeed(query: FeedQuery = {}, signal?: AbortSignal): Promise<FeedPage> {

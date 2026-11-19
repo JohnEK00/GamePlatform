@@ -3775,6 +3775,129 @@ a.pf-tab {
   gap: 2px;
   min-width: 0;
 }
+.pf-suggest__more {
+  margin: 14px 0 0 !important;
+  text-align: right;
+}
+.pf-suggest--empty .pf-suggest__more {
+  text-align: center;
+}
+
+/* ---------- F035: Explore creators ---------- */
+.pf-creators .pf-tabs {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pf-creators .pf-tab {
+  white-space: nowrap;
+}
+.pf-creator-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pf-creator-grid > li {
+  display: flex;
+  min-width: 0;
+}
+.pf-creator-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--pf-surface);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  transition: border-color 0.15s;
+}
+.pf-creator-card:not(.pf-creator-card--skeleton):hover,
+.pf-creator-card:focus-within {
+  border-color: var(--pf-surface-3);
+}
+/* Beats the .pf-profile__banner heights (incl. its media queries): cards use a 3:1 strip. */
+.pf-creator-card .pf-creator-card__banner {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 1;
+  overflow: hidden;
+}
+.pf-creator-card .pf-creator-card__banner img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pf-creator-card__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  min-width: 0;
+}
+.pf-creator-card__avatar {
+  display: inline-flex;
+  align-self: flex-start;
+  position: relative;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--pf-surface);
+  background: var(--pf-surface);
+  margin-bottom: 4px;
+}
+.pf-app .pf-creator-card__name {
+  font-size: 1.3rem;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-creator-card__name a {
+  color: var(--pf-text);
+  text-decoration: none;
+}
+.pf-creator-card__name a:hover {
+  color: var(--pf-accent);
+}
+.pf-creator-card__handle {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-creator-card__bio {
+  margin: 4px 0 0;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+}
+.pf-creator-card__stats {
+  margin: 4px 0 0;
+}
+.pf-creator-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+@media (max-width: 640px) {
+  .pf-creator-grid {
+    grid-template-columns: 1fr;
+  }
+}
 
 .pf-userlist {
   list-style: none;

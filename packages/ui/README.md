@@ -100,6 +100,7 @@ Hosts (e.g. native menus) drive the UI with `window` CustomEvents; each does not
 | `/me` | Redirects to your own profile (F028) | 🔒 |
 | `/p/:id` | Post permalink (F030); `?attach=game:{id}` or `collection:{id}` on the composer routes pre-fills an attachment | – |
 | `/u/:username/followers`, `/u/:username/following` | Follow lists (`?page=`) | – |
+| `/creators` | Explore creators (F035): `?sort=active\|new` (omitted for Popular; unknown values show Popular) and `?page=` (omitted for 1), 24 cards per page. Linked from the header, the footer and the feed's suggested creators. | – |
 | `/settings` | Profile, avatar, notification settings (`#notifications`, per-kind switches), `platform.extraSettings` | 🔒 |
 | `/login`, `/register` | Auth (`?next=/path` redirect) | – |
 | `/docs` | "Make a game" creator guide | – |
@@ -126,9 +127,10 @@ Everything is exported from the package root (`src/index.ts` is the source of tr
 - **Screenshots (F005):** `useScreenshotCapture`, `ScreenshotTray`, `ScreenshotDialog`, `ScreenshotGallery`, `launderImage`, `sniffImage`, `readImageHeader`, `fitImageForUpload`, `browserImageCodec`, `screenshotFileName`, `sanitizeScreenshotCaption`, the `SCREENSHOT_*` limits, `SCREENSHOTS_CHANGED_EVENT`, `PLAYER_SCREENSHOT_EVENT`. F015: `ScreenshotLightbox`, `ProfileScreenshots` (`PROFILE_SCREENSHOTS_PER_PAGE`), `listUserScreenshots`, `gameScreenshotsPath`, `SCREENSHOTS_SECTION`, `pagesForOffset`, and the `screenshotPosted` feed item kind.
 - **Profiles (F028):** `ProfileHeader` (`ProfileHeaderSkeleton`), `CopyLinkButton`, `ProfileLinksEditor`, `BannerSettings`, `MyProfileRedirect`, `useProfileOutlet`, and helpers from `profile.ts` and `share.ts` (`validateProfileLinkLabel`, `linkLabelErrors`, `linksForSave`, `trimLinkLabel`, `BANNER_MAX_BYTES`, `collectionShareUrl`, `formatMonthYear`).
 - **Posts (F030):** `PostCard` (`PostBody`, `PostCardSkeleton`), `PostAttachmentCard`, `PostComposer`, `ProfilePosts`, `PostAboutThisLink`, `PostPage`, `postShareUrl`, and helpers from `posts.ts` (`normalizePostBody`, `postLength`, `validatePostBody`, `linkifyPost`, `postPath`, `parseAttachParam`, `postComposePath`, `isValidPost`); the `postCreated` feed item kind.
+- **Creators (F035):** `CreatorsPage`, `CreatorCard`, `CreatorCardSkeleton`, the client method `listCreators`, the `Creator`, `CreatorSort` and `CreatorQuery` types, and helpers from `creators.ts` (`CREATOR_SORTS`, `CREATOR_SORT_LABELS`, `CREATORS_PER_PAGE`, `parseCreatorSort`, `creatorsPath`, `creatorStatsText`, `isValidCreator`).
 - **Controls (F009, F016):** `ControlsPanel`, `ControlsSummary`, `KeyCaptureButton`, `GamepadCaptureButton`, `useControlsSync`, `startGamepadCapture`, the action/override helpers from `controls.ts` (`validateActions`, `effectiveActions`, `readOverrides`, `useStoredOverrides`, `readBindings`, `writeBindings`, `useStoredBindings`, `keyLabel`, …), `PLAYER_CONTROLS_EVENT`.
 - **Studio:** `StudioPreview`, `CodeEditor`, `PublishDialog`, `OpenGameDialog`, `STUDIO_TEMPLATES`, the zip writer/reader (`createZip`, `createZipAsync`, `readZip`, `MAX_OPEN_ZIP_BYTES`) and the project helpers (`buildBundleZip`, `validateProject`, `projectFromZip`, `projectFromFileList`, …), `STUDIO_OPEN_FOLDER_EVENT`.
-- **Pages:** `HomePage`, `GamePage`, `UploadPage`, `EditGamePage`, `DashboardPage`, `GameStatsPage`, `FavoritesPage`, `FeedPage`, `StudioPage`, `AdminPage`, `ProfilePage`, `FollowListPage`, `SettingsPage`, `NotificationsPage`, `LoginPage`, `RegisterPage`, `DocsPage`, `NotFoundPage`.
+- **Pages:** `HomePage`, `GamePage`, `UploadPage`, `EditGamePage`, `DashboardPage`, `GameStatsPage`, `FavoritesPage`, `FeedPage`, `StudioPage`, `AdminPage`, `ProfilePage`, `FollowListPage`, `CreatorsPage`, `SettingsPage`, `NotificationsPage`, `LoginPage`, `RegisterPage`, `DocsPage`, `NotFoundPage`.
 - **Utils:** `formatCount`, `formatDate`, `timeAgo`, `formatScore`, `formatTimeUntil`, `errorMessage`, `looksLikeZip`, `gameVersionsPath`, …
 
 ### ApiClient
