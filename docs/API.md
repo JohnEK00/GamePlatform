@@ -2117,3 +2117,34 @@ Request bodies are ignored on the heart and lock endpoints.
 
 ### Privacy
 Replies are public like posts. A post's author learns who hearted it (notification actors); nobody else does. Excerpts are read at request time, so deletes apply at once. Report previews hold at most the first 140 code points of the reply.
+
+## Review-fix additions (REVIEW-2026-11-18-11)
+- **Shared forbidden-character set (L1, L2).** The same set is rejected in link labels, `displayName`, `bio` and post bodies:
+  - C0 controls (U+0000–001F)
+  - U+007F–009F
+  - U+061C
+  - U+115F–1160
+  - U+180E
+  - U+200B–200F
+  - U+2028–2029
+  - U+202A–202E
+  - U+2060–2064
+  - U+2066–2069
+  - U+3164
+  - U+FEFF
+  - U+FFA0
+
+  `bio` and post bodies allow `\n` only. The 422 messages are:
+
+  | Field | Message |
+  |---|---|
+  | `displayName` | `displayName must not contain control characters` |
+  | `bio` | `bio must not contain control characters` |
+  | link label | `links[{i}].label must not contain control characters` |
+  | post body | `body must be plain text` |
+
+  - **Server order:** the server trims first, so it accepts and strips line or paragraph separators at either end. Clients check the raw text, so they are at least as strict. Only fields present in a PATCH are checked, and stored values are left as they are.
+  - **Not covered:** screenshot captions, collection fields and version notes keep their own, smaller checks.
+- **Profile links (M1):** the web app always shows the real host next to a link's label (`{label} · {host}`), and `title` holds the full URL.
+- **Feed (M2):** the client keeps fetching while a page adds nothing it can render and `nextCursor` is set. It stops after 5 extra fetches per load, then shows Load more.
+- **Banner and avatar writes (L5):** these hold a per-user lock, so they can't race with `clearProfile`, a banner delete or a user delete. An upload for a user deleted in the meantime returns 404 `User not found` and leaves no file.

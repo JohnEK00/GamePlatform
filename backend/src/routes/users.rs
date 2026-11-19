@@ -230,19 +230,64 @@ fn normalize_link_url(url: &str) -> Option<String> {
     (host_ok && port_ok).then(|| format!("{scheme}{rest}"))
 }
 
-/// F028: characters a link label may not contain: C0 controls, DEL, C1 controls, and the bidi
-/// and invisible formatting characters that can make a label display as different text.
+/// The shared forbidden-character set (F028, extended in review 11 L1/L2). It is used for link
+/// labels, display names, bios (except `\n`) and post bodies (except `\n`). The set is
+/// C0 controls, DEL, C1 controls, the bidi and invisible formatting characters that can make
+/// text display as something else, the line and paragraph separators (which would bypass line
+/// rules), and the blank Hangul / Mongolian fillers. The client mirror
+/// (`isForbiddenLabelCodePoint`) must stay identical.
 pub(crate) fn is_forbidden_label_char(c: char) -> bool {
     matches!(
         c,
         '\u{0}'..='\u{1F}'
             | '\u{7F}'..='\u{9F}'
+            | '\u{61C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{180E}'
             | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{2029}'
             | '\u{202A}'..='\u{202E}'
             | '\u{2060}'..='\u{2064}'
             | '\u{2066}'..='\u{2069}'
+            | '\u{3164}'
             | '\u{FEFF}'
+            | '\u{FFA0}'
     )
+}
+
+/// Review 11 L1: `displayName` rules (trimmed; no forbidden character; 1–50 code points).
+/// Returns the value to store.
+pub(crate) fn validate_display_name(raw: &str) -> AppResult<String> {
+    let name = raw.trim();
+    if name.chars().any(is_forbidden_label_char) {
+        return Err(AppError::validation(
+            "displayName must not contain control characters",
+        ));
+    }
+    let len = name.chars().count();
+    if len == 0 || len > DISPLAY_NAME_MAX {
+        return Err(AppError::validation(format!(
+            "displayName must be 1-{DISPLAY_NAME_MAX} characters"
+        )));
+    }
+    Ok(name.to_string())
+}
+
+/// Review 11 L1: `bio` rules (trimmed; no forbidden character other than `\n`; at most 1000
+/// code points). Returns the value to store.
+pub(crate) fn validate_bio(raw: &str) -> AppResult<String> {
+    let bio = raw.trim();
+    if bio.chars().any(|c| c != '\n' && is_forbidden_label_char(c)) {
+        return Err(AppError::validation(
+            "bio must not contain control characters",
+        ));
+    }
+    if bio.chars().count() > BIO_MAX {
+        return Err(AppError::validation(format!(
+            "bio must be at most {BIO_MAX} characters"
+        )));
+    }
+    Ok(bio.to_string())
 }
 
 /// F028: validate `PATCH /api/users/me` `links` (API § F028 "Link rules"; the first failure
@@ -292,31 +337,12 @@ pub async fn update_me(
     user: AuthUser,
     ApiJson(body): ApiJson<UpdateMeBody>,
 ) -> AppResult<Json<User>> {
-    let display_name = match body.display_name {
-        Some(name) => {
-            let name = name.trim().to_string();
-            let len = name.chars().count();
-            if len == 0 || len > DISPLAY_NAME_MAX {
-                return Err(AppError::validation(format!(
-                    "displayName must be 1-{DISPLAY_NAME_MAX} characters"
-                )));
-            }
-            Some(name)
-        }
-        None => None,
-    };
-    let bio = match body.bio {
-        Some(bio) => {
-            let bio = bio.trim().to_string();
-            if bio.chars().count() > BIO_MAX {
-                return Err(AppError::validation(format!(
-                    "bio must be at most {BIO_MAX} characters"
-                )));
-            }
-            Some(bio)
-        }
-        None => None,
-    };
+    let display_name = body
+        .display_name
+        .as_deref()
+        .map(validate_display_name)
+        .transpose()?;
+    let bio = body.bio.as_deref().map(validate_bio).transpose()?;
     let links_json = match body.links {
         Some(links) => Some(
             serde_json::to_string(&validate_links(links)?)
@@ -355,17 +381,25 @@ pub async fn upload_avatar(
     let bytes = avatar.ok_or_else(|| AppError::validation("avatar file is required"))?;
     let ext = validate_image(&bytes, "avatar")?;
     let dir = state.storage.avatars_dir();
-    state
-        .storage
-        .replace_image(&dir, &user.id, ext, &bytes)
+    {
+        // L5: the file write and the row update happen together under the user's lock.
+        let _lock = state.profile_locks.lock(&user.id).await;
+        state
+            .storage
+            .replace_image(&dir, &user.id, ext, &bytes)
+            .await?;
+        let done = sqlx::query(
+            "UPDATE users SET avatar_ext = ?, avatar_version = avatar_version + 1 WHERE id = ?",
+        )
+        .bind(ext)
+        .bind(&user.id)
+        .execute(&state.db)
         .await?;
-    sqlx::query(
-        "UPDATE users SET avatar_ext = ?, avatar_version = avatar_version + 1 WHERE id = ?",
-    )
-    .bind(ext)
-    .bind(&user.id)
-    .execute(&state.db)
-    .await?;
+        if done.rows_affected() == 0 {
+            // The user was deleted meanwhile: don't leave an orphan file.
+            state.storage.remove_images(&dir, &user.id).await;
+        }
+    }
     Ok(Json(load_user(&state, &user.id).await?))
 }
 
@@ -399,39 +433,56 @@ pub async fn upload_banner(
     .await
     .map_err(|e| AppError::Internal(format!("banner task: {e}")))??;
     let dir = state.storage.banners_dir();
-    state
-        .storage
-        .replace_image(&dir, &user.id, "jpg", &jpeg)
+    {
+        // Review 11 L5: hold the user's lock across the file write and the row update, so a
+        // banner delete or `clearProfile` can't remove the file in between and leave
+        // `banner_ext` pointing at nothing. They take the same lock and run before or after.
+        let _lock = state.profile_locks.lock(&user.id).await;
+        state
+            .storage
+            .replace_image(&dir, &user.id, "jpg", &jpeg)
+            .await?;
+        state.profile_locks.checkpoint().await;
+        let done = sqlx::query(
+            "UPDATE users SET banner_ext = 'jpg', banner_version = banner_version + 1 \
+             WHERE id = ?",
+        )
+        .bind(&user.id)
+        .execute(&state.db)
         .await?;
-    sqlx::query(
-        "UPDATE users SET banner_ext = 'jpg', banner_version = banner_version + 1 WHERE id = ?",
-    )
-    .bind(&user.id)
-    .execute(&state.db)
-    .await?;
+        if done.rows_affected() == 0 {
+            // The user was deleted meanwhile: don't leave an orphan file.
+            state.storage.remove_images(&dir, &user.id).await;
+        }
+    }
     Ok(Json(load_user(&state, &user.id).await?).into_response())
 }
 
 /// F028 `DELETE /api/users/me/banner`: idempotent; the version only increases when a banner
 /// was removed.
 pub async fn delete_banner(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<User>> {
-    sqlx::query(
-        "UPDATE users SET banner_ext = NULL, banner_version = banner_version + 1 \
-         WHERE id = ? AND banner_ext IS NOT NULL",
-    )
-    .bind(&user.id)
-    .execute(&state.db)
-    .await?;
-    state
-        .storage
-        .remove_images(&state.storage.banners_dir(), &user.id)
-        .await;
+    {
+        let _lock = state.profile_locks.lock(&user.id).await;
+        sqlx::query(
+            "UPDATE users SET banner_ext = NULL, banner_version = banner_version + 1 \
+             WHERE id = ? AND banner_ext IS NOT NULL",
+        )
+        .bind(&user.id)
+        .execute(&state.db)
+        .await?;
+        state
+            .storage
+            .remove_images(&state.storage.banners_dir(), &user.id)
+            .await;
+    }
     Ok(Json(load_user(&state, &user.id).await?))
 }
 
 /// F028 admin `clearProfile`: display name ← username, bio and links emptied, avatar and banner
-/// removed (versions + 1, files deleted). Content stays. An unknown id is a no-op.
+/// removed (versions + 1, files deleted). Content stays. An unknown id is a no-op. It runs
+/// under the user's profile lock (L5), so it never interleaves with an image upload.
 pub async fn clear_profile(state: &AppState, user_id: &str) -> AppResult<()> {
+    let _lock = state.profile_locks.lock(user_id).await;
     sqlx::query(
         "UPDATE users SET display_name = username, bio = '', links_json = '[]', \
          avatar_ext = NULL, avatar_version = avatar_version + 1, \
@@ -471,6 +522,120 @@ mod tests {
 
     const URL_MSG: &str = "links[0].url must be a full http:// or https:// address";
 
+    /// Both ends of every range in the shared forbidden set, and each single character.
+    const FORBIDDEN_SAMPLES: [char; 27] = [
+        '\u{0}', '\u{9}', '\u{A}', '\u{D}', '\u{1F}', '\u{7F}', '\u{80}', '\u{85}', '\u{9F}',
+        '\u{61C}', '\u{115F}', '\u{1160}', '\u{180E}', '\u{200B}', '\u{200F}', '\u{2028}',
+        '\u{2029}', '\u{202A}', '\u{202E}', '\u{2060}', '\u{2064}', '\u{2066}', '\u{2069}',
+        '\u{3164}', '\u{FEFF}', '\u{FFA0}', '\u{1}',
+    ];
+
+    /// The characters next to each range or single character, which stay allowed.
+    const ALLOWED_NEIGHBOURS: [char; 18] = [
+        '\u{A0}', '\u{61B}', '\u{61D}', '\u{115E}', '\u{1161}', '\u{180D}', '\u{180F}', '\u{200A}',
+        '\u{2010}', '\u{2027}', '\u{202F}', '\u{2065}', '\u{206A}', '\u{3163}', '\u{3165}',
+        '\u{FEFE}', '\u{FF9F}', '\u{FFA1}',
+    ];
+
+    fn msg(r: AppResult<String>) -> String {
+        match r.unwrap_err() {
+            AppError::Validation(m) => m,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn review11_new_characters_are_in_the_shared_set() {
+        for c in [
+            '\u{61C}', '\u{115F}', '\u{1160}', '\u{180E}', '\u{2028}', '\u{2029}', '\u{3164}',
+            '\u{FFA0}',
+        ] {
+            assert!(is_forbidden_label_char(c), "U+{:04X}", c as u32);
+        }
+        for c in ALLOWED_NEIGHBOURS {
+            assert!(!is_forbidden_label_char(c), "U+{:04X}", c as u32);
+        }
+    }
+
+    #[test]
+    fn review11_display_name_rules() {
+        const M: &str = "displayName must not contain control characters";
+        for c in FORBIDDEN_SAMPLES {
+            assert_eq!(
+                msg(validate_display_name(&format!("mi{c}a"))),
+                M,
+                "U+{:04X}",
+                c as u32
+            );
+        }
+        for c in ALLOWED_NEIGHBOURS {
+            assert_eq!(
+                validate_display_name(&format!("mi{c}a")).unwrap(),
+                format!("mi{c}a"),
+                "U+{:04X}",
+                c as u32
+            );
+        }
+        // A trailing RLO or ZWSP is not whitespace, so trimming doesn't save it.
+        assert_eq!(msg(validate_display_name("mia\u{202E}")), M);
+        assert_eq!(msg(validate_display_name("mia\u{200B}")), M);
+        // Surrounding whitespace (including U+2028, which is White_Space) is trimmed first.
+        assert_eq!(validate_display_name(" \u{2028}Mia\n ").unwrap(), "Mia");
+        // The character check comes before the length check.
+        assert_eq!(
+            msg(validate_display_name(&format!("{}\u{1}", "a".repeat(60)))),
+            M
+        );
+        assert_eq!(
+            msg(validate_display_name(&"a".repeat(51))),
+            "displayName must be 1-50 characters"
+        );
+        assert_eq!(
+            msg(validate_display_name(" ")),
+            "displayName must be 1-50 characters"
+        );
+    }
+
+    #[test]
+    fn review11_bio_rules() {
+        const M: &str = "bio must not contain control characters";
+        for c in FORBIDDEN_SAMPLES.into_iter().filter(|c| *c != '\n') {
+            assert_eq!(
+                msg(validate_bio(&format!("a{c}b"))),
+                M,
+                "U+{:04X}",
+                c as u32
+            );
+        }
+        for c in ALLOWED_NEIGHBOURS {
+            assert!(
+                validate_bio(&format!("a{c}b")).is_ok(),
+                "U+{:04X}",
+                c as u32
+            );
+        }
+        // `\n` is allowed (the bio is a multi-line textarea); `\r` and tabs are not.
+        assert_eq!(
+            validate_bio("one\ntwo\n\nthree").unwrap(),
+            "one\ntwo\n\nthree"
+        );
+        assert_eq!(msg(validate_bio("one\r\ntwo")), M);
+        assert_eq!(msg(validate_bio("one\ttwo")), M);
+        // U+2028/U+2029 are not a way around that rule.
+        assert_eq!(msg(validate_bio("one\u{2028}two")), M);
+        assert_eq!(msg(validate_bio("one\u{2029}two")), M);
+        // Empty is fine; the character check comes before the length check.
+        assert_eq!(validate_bio("  ").unwrap(), "");
+        assert_eq!(
+            msg(validate_bio(&format!("{}\u{202E}", "b".repeat(1001)))),
+            M
+        );
+        assert_eq!(
+            msg(validate_bio(&"b".repeat(1001))),
+            "bio must be at most 1000 characters"
+        );
+    }
+
     #[test]
     fn f028_links_normalised() {
         let out = validate_links(vec![
@@ -508,10 +673,7 @@ mod tests {
             "links[0].label must not contain control characters"
         );
         // C1 controls and bidi / invisible formatting characters, at both ends of each range.
-        for c in [
-            '\u{80}', '\u{85}', '\u{9F}', '\u{200B}', '\u{200F}', '\u{202A}', '\u{202E}',
-            '\u{2060}', '\u{2064}', '\u{2066}', '\u{2069}', '\u{FEFF}',
-        ] {
+        for c in FORBIDDEN_SAMPLES {
             assert_eq!(
                 err(vec![link(&format!("a{c}b"), "https://x.com")]),
                 "links[0].label must not contain control characters",
@@ -520,10 +682,7 @@ mod tests {
             );
         }
         // Neighbours of those ranges stay allowed.
-        for c in [
-            '\u{A0}', '\u{200A}', '\u{2010}', '\u{2029}', '\u{202F}', '\u{2065}', '\u{206A}',
-            '\u{FEFE}',
-        ] {
+        for c in ALLOWED_NEIGHBOURS {
             assert!(
                 validate_links(vec![link(&format!("a{c}b"), "https://x.com")]).is_ok(),
                 "U+{:04X}",

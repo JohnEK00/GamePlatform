@@ -46,7 +46,8 @@ const NOT_FOUND: &str = "Post";
 // ---------------------------------------------------------------------------
 
 /// API § F030 "Body rules", in order: `\r\n`/`\r` → `\n` and trim; 1–500 code points; at most
-/// 12 lines; no F028 forbidden character other than `\n`. Returns the text to store.
+/// 12 lines; no character from the shared forbidden set other than `\n` (which includes
+/// U+2028/U+2029, so they can't bypass the line cap). Returns the text to store.
 pub fn validate_post_body(raw: &str) -> AppResult<String> {
     let normalised = raw.replace("\r\n", "\n").replace('\r', "\n");
     let text = normalised.trim();
@@ -469,6 +470,33 @@ mod tests {
             assert_eq!(msg(s), plain, "{s:?}");
         }
         assert!(validate_post_body("a\nb").is_ok());
+    }
+
+    #[test]
+    fn review11_extended_set_and_separator_bypass() {
+        let plain = "body must be plain text";
+        // Each character added to the shared set in review 11 (L2).
+        for c in [
+            '\u{61C}', '\u{115F}', '\u{1160}', '\u{180E}', '\u{2028}', '\u{2029}', '\u{3164}',
+            '\u{FFA0}',
+        ] {
+            assert_eq!(msg(&format!("a{c}b")), plain, "U+{:04X}", c as u32);
+        }
+        // 30 lines joined with LINE SEPARATOR / PARAGRAPH SEPARATOR no longer get past the
+        // 12-line cap.
+        assert_eq!(msg(&["l"; 30].join("\u{2028}")), plain);
+        assert_eq!(msg(&["l"; 30].join("\u{2029}")), plain);
+        // Their neighbours stay allowed.
+        for c in [
+            '\u{61B}', '\u{61D}', '\u{115E}', '\u{1161}', '\u{180D}', '\u{180F}', '\u{2027}',
+            '\u{3163}', '\u{3165}', '\u{FF9F}', '\u{FFA1}',
+        ] {
+            assert!(
+                validate_post_body(&format!("a{c}b")).is_ok(),
+                "U+{:04X}",
+                c as u32
+            );
+        }
     }
 
     #[test]
