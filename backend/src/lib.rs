@@ -38,9 +38,10 @@ pub struct AppState {
     pub limiter: ratelimit::RateLimiter,
     /// Per-game claims serialising bundle replaces (R1).
     pub bundle_locks: locks::KeyLocks,
-    /// Review 11 L5: per-user locks serialising avatar/banner file writes with their row
-    /// updates and with `clearProfile`.
-    pub profile_locks: locks::UserLocks,
+    /// Review 11 L5: per-user profile image writes (banner upload and delete, avatar upload,
+    /// `clearProfile`) run one at a time, so a file on disk and its `*_ext` / `*_version`
+    /// columns always change together.
+    pub profile_image_locks: locks::StripedLocks,
     /// Per-(game, viewer) play-count dedupe window (R2).
     pub play_dedupe: ratelimit::PlayDedupe,
     /// F003 trending snapshot freshness + single flight.
@@ -74,7 +75,7 @@ impl AppState {
             db,
             limiter: ratelimit::RateLimiter::new(config.rate_limit),
             bundle_locks: locks::KeyLocks::new(),
-            profile_locks: locks::UserLocks::new(),
+            profile_image_locks: locks::StripedLocks::default(),
             play_dedupe: ratelimit::PlayDedupe::new(),
             trending: trending::TrendingCache::new(),
             export_slots: Arc::new(tokio::sync::Semaphore::new(EXPORT_SLOTS)),

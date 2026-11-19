@@ -1305,7 +1305,7 @@ async fn post_reports() {
     );
     assert_422(
         &report(&t, &pat, "bogus", &id).await,
-        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\" or \"post\"",
+        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\", \"post\" or \"postReply\"",
     );
     let r = report(&t, &quinn, "post", &id).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text());

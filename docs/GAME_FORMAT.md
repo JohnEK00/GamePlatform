@@ -1059,3 +1059,7 @@ None. User posts are a platform-only feature: there are no engine, message, game
 
 ## F031 additions
 None. Post replies, hearts and their notifications are platform-only: there are no engine, message, game.json, bundle or player page changes, and nothing about them reaches the game iframe.
+
+
+## F035 additions
+None. The Explore creators page is platform-only: there are no engine, message, game.json, bundle or player page changes.

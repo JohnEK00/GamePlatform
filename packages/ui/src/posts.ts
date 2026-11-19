@@ -2,7 +2,7 @@
 // No React, no I/O.
 // Note: this file is kept ASCII-only on purpose (non-ASCII code points are written as numbers).
 
-import type { Post, PostAttachmentType } from "./api/types";
+import type { Post, PostAttachmentType, PostReply } from "./api/types";
 import { isForbiddenLabelCodePoint, isSafeProfileUrl } from "./profile";
 
 /** Code points per post (server: 1-500). */
@@ -36,12 +36,13 @@ export function postLength(raw: string): number {
  * 2. a forbidden character other than LF, checked on the RAW text (before any trim, as F028 does, so the client is
  *    at least as strict as the server). Since review 11 (L2) the set includes U+2028 and U+2029, so a body can't
  *    bypass the line cap with LINE / PARAGRAPH SEPARATOR breaks.
- * The 1-500 length rule is enforced by the disabled Post button, not here.
+ * The 1-500 length rule is enforced by the disabled Post button, not here. F031: replies pass
+ * {@link REPLY_LINES_MESSAGE} as `linesMessage`.
  */
-export function validatePostBody(raw: string): string | null {
+export function validatePostBody(raw: string, linesMessage: string = POST_LINES_MESSAGE): string | null {
   const s = typeof raw === "string" ? raw : "";
   const body = normalizePostBody(s);
-  if (body.split("\n").length > POST_LINES_MAX) return POST_LINES_MESSAGE;
+  if (body.split("\n").length > POST_LINES_MAX) return linesMessage;
   for (const ch of s) {
     const cp = ch.codePointAt(0)!;
     if (cp !== LF && isForbiddenLabelCodePoint(cp)) return POST_CHARS_MESSAGE;
@@ -143,5 +144,42 @@ export function isValidPost(x: unknown): x is Post {
   const p = x as Record<string, unknown>;
   if (typeof p.id !== "string" || typeof p.body !== "string" || typeof p.createdAt !== "string") return false;
   const a = p.author as Record<string, unknown> | null | undefined;
+  return !!a && typeof a === "object" && typeof a.username === "string";
+}
+
+// ---------- F031: replies and hearts ----------
+
+/** Replies per post (server cap; also the page maximum, so the whole thread loads in one request). */
+export const POST_REPLY_CAP = 200;
+export const REPLY_LINES_MESSAGE = "Replies can have at most 12 lines.";
+
+/** `/p/{postId}?reply={replyId}`: the permalink with that reply highlighted. */
+export function postReplyPath(postId: string, replyId: string): string {
+  return `${postPath(postId)}?reply=${encodeURIComponent(replyId)}`;
+}
+
+/** The replies link text on a post card: `Reply`, `1 reply`, `{n} replies`. */
+export function repliesLinkText(n: number): string {
+  const k = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  if (k === 0) return "Reply";
+  return k === 1 ? "1 reply" : `${k} replies`;
+}
+
+/** The replies link's accessible name: `Reply to the post by {name}`, `1 reply to ...`, `{n} replies to ...`. */
+export function repliesLinkLabel(n: number, name: string): string {
+  return `${repliesLinkText(n)} to the post by ${name}`;
+}
+
+/** The server sends the F031 fields (hearts and replyCount): show hearts and replies. */
+export function hasPostSocial(post: Pick<Post, "hearts" | "replyCount"> | null | undefined): boolean {
+  return !!post && typeof post.hearts === "number" && typeof post.replyCount === "number";
+}
+
+/** A reply is usable when it has string `id`, `postId`, `body`, `createdAt` and `path` and an author with a username. */
+export function isValidPostReply(x: unknown): x is PostReply {
+  if (!x || typeof x !== "object") return false;
+  const r = x as Record<string, unknown>;
+  for (const k of ["id", "postId", "body", "createdAt", "path"]) if (typeof r[k] !== "string") return false;
+  const a = r.author as Record<string, unknown> | null | undefined;
   return !!a && typeof a === "object" && typeof a.username === "string";
 }

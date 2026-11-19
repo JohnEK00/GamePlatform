@@ -5,6 +5,7 @@ pub mod auth;
 pub mod collections;
 pub mod comments;
 pub mod controls;
+pub mod creators;
 pub mod favorites;
 pub mod feed;
 pub mod files;
@@ -12,6 +13,7 @@ pub mod follows;
 pub mod games;
 pub mod notifications;
 pub mod play;
+pub mod post_replies;
 pub mod posts;
 pub mod related;
 pub mod reports;
@@ -100,6 +102,23 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/posts/{id}",
             get(posts::get_post).delete(posts::delete_post),
+        )
+        // F031 post replies, hearts and lock
+        .route(
+            "/posts/{id}/replies",
+            get(post_replies::list_post_replies).post(post_replies::create_post_reply),
+        )
+        .route(
+            "/post-replies/{id}",
+            delete(post_replies::delete_post_reply),
+        )
+        .route(
+            "/posts/{id}/heart",
+            put(posts::heart_post).delete(posts::unheart_post),
+        )
+        .route(
+            "/posts/{id}/lock",
+            put(posts::lock_post).delete(posts::unlock_post),
         )
         // F002 follows + feed
         .route(
@@ -258,6 +277,8 @@ pub fn api_router() -> Router<AppState> {
             post(reports::admin_resolve_report),
         )
         .route("/tags", get(tags::list_tags))
+        // F035 explore creators (public, no rate limit)
+        .route("/creators", get(creators::list_creators))
         .fallback(api_not_found)
 }
 

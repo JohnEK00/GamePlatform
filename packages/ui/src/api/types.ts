@@ -476,7 +476,9 @@ export type ReportTargetType =
   /** F028: targetId = the user's id; targetPreview = "@{username}"; targetGameId = null. */
   | "user"
   /** F030: targetId = the post id; targetPreview = the body's first 140 code points; targetGameId = null. */
-  | "post";
+  | "post"
+  /** F031: targetId = the reply id; targetPreview = the reply body's first 140 code points; targetGameId = null. */
+  | "postReply";
 export type ReportStatus = "open" | "resolved";
 export type ReportAction =
   | "dismiss"
@@ -513,6 +515,11 @@ export type Report = {
    * types and deleted screenshots. Older servers omit it; fall back to `targetImageUrl`.
    */
   targetImageFullUrl: string | null;
+  /**
+   * F031: "post" → the post id; "postReply" → the reply's post; null for other types. Older servers omit it (treat
+   * as null).
+   */
+  targetPostId?: string | null;
 };
 
 export type CreateReportRequest = {
@@ -664,6 +671,34 @@ export type SuggestedCreator = {
   games: number;
 };
 
+// ---- F035: explore creators ----
+
+/** F035: `GET /api/creators?sort=`. Absent or empty = "popular" server-side. */
+export type CreatorSort = "popular" | "active" | "new";
+
+/** F035: one card of the Explore creators page (a user with at least one published game). */
+export type Creator = {
+  user: UserRef;
+  /** F028 "/media/banners/{userId}.jpg?v={n}" (resolve against the API base); null = no banner. */
+  bannerUrl: string | null;
+  /** The first 160 code points of the bio ("" when empty); plain text, may contain "\n". Never render as HTML. */
+  bioExcerpt: string;
+  /** Published games (>= 1). */
+  games: number;
+  /** Sum of plays over those games. */
+  plays: number;
+  followers: number;
+  /** The viewer follows this creator; false when anonymous and on the viewer's own card. */
+  isFollowing: boolean;
+  /** RFC3339 millis Z */
+  firstPublishedAt: string;
+  /** RFC3339 millis Z */
+  lastActiveAt: string;
+};
+
+/** F035: `listCreators` query. Only present keys are sent, in the order sort, page, perPage. */
+export type CreatorQuery = { sort?: CreatorSort; page?: number; perPage?: number };
+
 // ---- F005: screenshots ----
 
 export type Screenshot = {
@@ -705,7 +740,10 @@ export type NotificationKind =
   | "gamePublished"
   | "pinned"
   | "addedToCollection"
-  | "screenshotPosted";
+  | "screenshotPosted"
+  /** F031 */
+  | "postReply"
+  | "postHeart";
 
 /** F024: the newest remaining screenshot of a `screenshotPosted` notification. */
 export type NotificationScreenshot = {
@@ -763,6 +801,8 @@ export type Notification = {
   collection?: NotificationCollection | null;
   /** F024: screenshotPosted only; null for every other kind. Older servers omit it (treat as null). */
   screenshot?: NotificationScreenshot | null;
+  /** F031: postReply / postHeart: the post; null for every other kind. Older servers omit it (treat as null). */
+  postId?: string | null;
 };
 
 export type NotificationPage = {
@@ -801,6 +841,10 @@ export type NotificationSettings = {
   collections?: boolean;
   /** F024: "screenshotPosted" kind. Older servers omit it: hide the switch. */
   screenshots?: boolean;
+  /** F031: "postReply" kind. Older servers omit it: hide the switch. */
+  postReplies?: boolean;
+  /** F031: "postHeart" kind. Older servers omit it: hide the switch. */
+  postHearts?: boolean;
 };
 
 // ---- F018: notification mutes ----
@@ -972,7 +1016,46 @@ export type Post = {
   canDelete: boolean;
   /** "/p/{id}" (in-app route) */
   path: string;
+  /** F031. Older servers omit them: hide hearts and replies. Distinct users who hearted the post (>= 0). */
+  hearts?: number;
+  /** F031. The viewer hearted the post; false when anonymous. */
+  myHeart?: boolean;
+  /** F031. Replies on the post (0–200). */
+  replyCount?: number;
+  /** F031. Replies turned off by the author or an admin (only they can still reply). */
+  locked?: boolean;
 };
+
+/** F031: one reply on a post (a flat thread, oldest first). */
+export type PostReply = {
+  /** UUID v4 */
+  id: string;
+  postId: string;
+  author: UserRef;
+  /** The author of the reply that was answered; null otherwise or if that user was deleted. */
+  replyTo: UserRef | null;
+  /** Plain text, the F030 body rules. Never render as HTML. */
+  body: string;
+  /** RFC3339 millis Z */
+  createdAt: string;
+  /** The reply's author wrote the post. */
+  byPostAuthor: boolean;
+  /** The viewer is the reply's author, the post's author or an admin; false when anonymous. */
+  canDelete: boolean;
+  /** "/p/{postId}?reply={id}" (in-app route) */
+  path: string;
+};
+
+/** F031: `POST /api/posts/{id}/replies`. */
+export type CreatePostReplyRequest = {
+  /** Required. */
+  body: string;
+  /** A reply of the same post; null or absent = answering the post. */
+  replyToId?: string | null;
+};
+
+/** F031: `PUT` / `DELETE /api/posts/{id}/heart`. `hearts` is the count after the change. */
+export type PostHeartResponse = { hearted: boolean; hearts: number };
 
 /** F030: `POST /api/posts`. At most one of `gameId` / `collectionId` may be a string. */
 export type CreatePostRequest = {

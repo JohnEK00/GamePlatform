@@ -184,6 +184,7 @@ export function Header() {
             <NavLink to="/" end>
               Browse
             </NavLink>
+            <NavLink to="/creators">Creators</NavLink>
             <NavLink to="/studio">Studio</NavLink>
             <NavLink to="/docs">Make a game</NavLink>
             {user && <NavLink to="/dashboard">My games</NavLink>}
@@ -231,6 +232,7 @@ export function Footer() {
         </span>
         <nav aria-label="Footer">
           <Link to="/">Browse</Link>
+          <Link to="/creators">Creators</Link>
           <Link to="/docs">Make a game</Link>
           <Link to="/studio">Studio</Link>
           <Link to="/upload">Upload</Link>

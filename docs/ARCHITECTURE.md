@@ -1931,6 +1931,53 @@ Post replies and hearts (spec: `docs/features/F031-post-replies-and-hearts.md`).
   - `AdminPage` adds `postReply` rows with `View in context →` (`/p/{targetPostId}?reply={targetId}`).
 - **Desktop.** No source changes. Reply links go through `external.rs`; OS notification bodies are the summaries, which hold no post or reply text. `f031.desktop.test.tsx` verifies this.
 - **Ownership**:
-  - backend-dev: the migration, `ratelimit.rs`, `notifications.rs`, `routes/notifications.rs`, `routes/posts.rs`, `routes/post_replies.rs` (new), `routes/reports.rs`, `routes/mod.rs`, the `NewNotification` literals in `routes/comments.rs`, `routes/follows.rs`, `routes/collections.rs` and `routes/screenshots.rs`, `tests/f031.rs`, and the `tests/f007.rs`, `tests/f008.rs`, `tests/f018.rs`, `tests/f028.rs`, `tests/f030.rs` and `tests/review4.rs` updates.
-  - frontend-dev: `api/types.ts`, `api/client.ts`, `posts.ts`, `notifications.ts`, `HeartButton`, `PostCard`, `PostThread` (new), `NotificationItem`, `NotificationSettings`, `Report.tsx`, `PostPage`, `AdminPage`, `index.ts`, `styles.css` and tests.
+  - backend-dev: the review 11 carry-over in `routes/users.rs` (shared forbidden set = the client's `isForbiddenLabelCodePoint`; `displayName`/`bio` character checks; the conditional banner `UPDATE`, see API § "Review-fix additions (REVIEW-2026-11-18-11)"), the migration, `ratelimit.rs`, `notifications.rs`, `routes/notifications.rs`, `routes/posts.rs`, `routes/post_replies.rs` (new), `routes/reports.rs`, `routes/mod.rs`, the `NewNotification` literals in `routes/comments.rs`, `routes/follows.rs`, `routes/collections.rs` and `routes/screenshots.rs`, `tests/f031.rs`, and the `tests/f007.rs`, `tests/f008.rs`, `tests/f018.rs`, `tests/f028.rs`, `tests/f030.rs` and `tests/review4.rs` updates.
+  - frontend-dev: `api/types.ts`, `api/client.ts`, `posts.ts`, `notifications.ts`, `HeartButton`, `PostCard` (plus the `Delete post by {name}` / `Report post by {name}` names), `PostThread` (new), `NotificationItem`, `NotificationSettings`, `Report.tsx` (`ReportButton.ariaLabel`), `PostPage`, `AdminPage`, `index.ts`, `styles.css` and tests.
   - desktop-dev: `src/__tests__/f031.desktop.test.tsx`.
+
+
+## F035 additions
+Explore creators page (spec: `docs/features/F035-explore-creators.md`). There is one read endpoint and one page, with no migration (the next free number stays `0027` after F031's `0026`), no new dependencies and no engine changes.
+- **Backend** (`routes/creators.rs`, new). `list_creators` (🔓 `MaybeAuthUser`) parses `sort` first, then paging (`parse_paging(…, 24)` and a 1–48 clamp), and runs 2 or 3 statements:
+  ```sql
+  -- total (independent of sort)
+  SELECT COUNT(DISTINCT owner_id) FROM games WHERE published = 1;
+
+  -- the page; {ORDER} is one of three fixed strings chosen in Rust (never interpolated from input):
+  --   popular: followers DESC, plays DESC, u.username_lower ASC
+  --   active:  last_act DESC, u.username_lower ASC
+  --   new:     first_pub DESC, u.username_lower ASC
+  WITH c AS (
+    SELECT owner_id,
+           COUNT(*)   AS games,
+           SUM(plays) AS plays,
+           MIN(COALESCE(first_published_at, created_at)) AS first_pub,
+           MAX(MAX(COALESCE(first_published_at, created_at), COALESCE(last_updated_at, ''))) AS last_act
+    FROM games WHERE published = 1 GROUP BY owner_id
+  )
+  SELECT u.id AS u_id, u.username AS u_username, u.display_name AS u_display_name,
+         u.avatar_ext AS u_avatar_ext, u.avatar_version AS u_avatar_version,
+         u.banner_ext, u.banner_version, substr(u.bio, 1, 160) AS bio_excerpt,
+         c.games, c.plays, c.first_pub, c.last_act,
+         (SELECT COUNT(*) FROM follows f WHERE f.followee_id = u.id) AS followers
+  FROM c JOIN users u ON u.id = c.owner_id
+  ORDER BY {ORDER}
+  LIMIT ?1 OFFSET ?2;
+
+  -- isFollowing, only when signed in and the page is non-empty
+  SELECT followee_id FROM follows WHERE follower_id = ?1 AND followee_id IN (SELECT value FROM json_each(?2));
+  ```
+  - `substr` on TEXT counts characters, so `bioExcerpt` is exactly the first 160 code points.
+  - `bannerUrl` comes from `models::banner_url`.
+  - The scalar two-argument `MAX` inside the aggregate is SQLite's multi-argument `max()`.
+  - The cost is one pass over published games plus a follower count per creator (`idx_follows_followee_created`). If the catalogue grows, a periodic snapshot like F003's `trending.rs` can replace the CTE without a contract change.
+- **UI** (`@webgame/ui`):
+  - `creators.ts` (pure helpers);
+  - `components/CreatorCard.tsx` (`CreatorCard`, `CreatorCardSkeleton`);
+  - `pages/CreatorsPage.tsx` (route `creators`, public). It seeds the F002 follow store from the page, so `FollowButton`s and counts agree app-wide;
+  - a `Creators` link in the header nav and footer, and `Explore all creators →` under the feed's suggestions.
+- **Desktop.** View → Creators (forwarded menu id `"creators"`, no accelerator) → `/creators` through `nativeMenu.ts` `ROUTES`. Banners load from the configured server, which the F028 CSP `img-src` already allows.
+- **Ownership**:
+  - backend-dev: `routes/creators.rs` (new), `routes/mod.rs`, `tests/f035.rs`.
+  - frontend-dev: `api/types.ts`, `api/client.ts`, `creators.ts` (new), `CreatorCard.tsx` (new), `CreatorsPage.tsx` (new), `WebGameApp.tsx`, `Layout.tsx`, `FeedPage.tsx` (one link), `index.ts`, `styles.css`, `packages/ui/README.md` and tests.
+  - desktop-dev: `src-tauri/src/menu.rs`, `src/nativeMenu.ts`, `src/__tests__/nativeMenu.test.ts`, `src/__tests__/f035.desktop.test.tsx`, `apps/desktop/README.md`.

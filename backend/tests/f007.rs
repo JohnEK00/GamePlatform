@@ -482,7 +482,7 @@ async fn follow_dedupe_and_retraction() {
 async fn settings_defaults_partial_updates_and_validation() {
     let t = setup().await;
     let (ava, _) = t.register("ava").await;
-    let all_on = json!({ "comments": true, "replies": true, "hearts": true, "follows": true, "newGames": true, "pins": true, "collections": true, "screenshots": true });
+    let all_on = json!({ "comments": true, "replies": true, "hearts": true, "follows": true, "newGames": true, "pins": true, "collections": true, "screenshots": true, "postReplies": true, "postHearts": true });
     let r = t.get("/api/notifications/settings", Some(&ava)).await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.json(), all_on);
@@ -499,7 +499,7 @@ async fn settings_defaults_partial_updates_and_validation() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert_eq!(
         r.json(),
-        json!({ "comments": true, "replies": true, "hearts": false, "follows": true, "newGames": true, "pins": true, "collections": true, "screenshots": true })
+        json!({ "comments": true, "replies": true, "hearts": false, "follows": true, "newGames": true, "pins": true, "collections": true, "screenshots": true, "postReplies": true, "postHearts": true })
     );
     let r = put(json!({ "newGames": false, "unknown": 5 })).await;
     assert_eq!(r.status, StatusCode::OK);

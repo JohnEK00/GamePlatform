@@ -2,7 +2,7 @@
 import type { Notification, NotificationKind, UserRef } from "./api/types";
 
 /** Kinds this client knows how to render. Others are ignored (API § F007). */
-export const NOTIFICATION_KINDS: readonly NotificationKind[] = ["comment", "reply", "heart", "follow", "gamePublished", "pinned", "addedToCollection", "screenshotPosted"];
+export const NOTIFICATION_KINDS: readonly NotificationKind[] = ["comment", "reply", "heart", "follow", "gamePublished", "pinned", "addedToCollection", "screenshotPosted", "postReply", "postHeart"];
 
 export function isKnownNotification(n: unknown): n is Notification {
   if (!n || typeof n !== "object") return false;
@@ -75,6 +75,14 @@ export function notificationParts(n: Notification): NotificationPart[] {
     case "screenshotPosted":
       // F024 § 0.8: captions never appear; one verb form per screenshot count.
       return [...who, t(eventCount === 1 ? " posted a screenshot of " : ` posted ${eventCount} screenshots of `), title];
+    case "postReply": {
+      // F031 § 0.9: no title parts; never any post or reply text.
+      const target = n.ownsThread ? " to your post" : " to you on a post";
+      const verb = actorCount === 1 && eventCount > 1 ? ` replied ${eventCount} times` : " replied";
+      return [...who, t(verb + target)];
+    }
+    case "postHeart":
+      return [...who, t(" hearted your post")];
     default:
       return [];
   }
@@ -111,6 +119,10 @@ export function muteActionFor(n: Notification): MuteAction | null {
     case "screenshotPosted":
       if (!n.game || typeof n.game.id !== "string" || !n.game.id) return null;
       return { target: "game", id: n.game.id, label: `Mute game: ${title}` };
+    case "postReply":
+    case "postHeart":
+      // F031 § 0.9: no game and no thread, so nothing to mute (post mutes are F040).
+      return null;
     default:
       return null;
   }

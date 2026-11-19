@@ -1400,7 +1400,7 @@ async fn collection_reports() {
         &r,
         StatusCode::UNPROCESSABLE_ENTITY,
         "validation",
-        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\" or \"post\"",
+        "targetType must be \"game\", \"comment\", \"screenshot\", \"collection\", \"user\", \"post\" or \"postReply\"",
     );
 
     // Admin list shows the collection rows with a null game id.
@@ -1509,10 +1509,12 @@ async fn migration_upgrade_from_0015() {
                     FROM reports ORDER BY rowid";
     let idx_sql = "SELECT name, sql FROM sqlite_master WHERE type = 'index' \
                    AND tbl_name = 'reports' AND sql IS NOT NULL ORDER BY name";
-    // Later migrations may add triggers of their own (0018: the `comment_hearts` counters);
-    // this test checks that the 0016 rebuild keeps the existing ones.
+    // Later migrations may add triggers of their own (0018: the `comment_hearts` counters;
+    // 0026: the `post_hearts` / `post_replies` counters); this test checks that the 0016
+    // rebuild keeps the existing ones.
     let trig_sql = "SELECT name, tbl_name FROM sqlite_master WHERE type = 'trigger' \
-                    AND tbl_name <> 'comment_hearts' ORDER BY name";
+                    AND tbl_name NOT IN ('comment_hearts', 'post_hearts', 'post_replies') \
+                    ORDER BY name";
 
     let dir = common::test_dir();
     let data = dir.path().join("data");

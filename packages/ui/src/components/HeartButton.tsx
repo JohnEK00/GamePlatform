@@ -12,6 +12,13 @@ export type HeartButtonProps = {
   interactive: boolean;
   /** Called with the optimistic state, then the server's, or the previous state when the request fails. */
   onChange?: (next: HeartState) => void;
+  /** F031: what is hearted, used in the aria-label ("Heart comment by …" / "Heart post by …"). Default "comment". */
+  subject?: "comment" | "post";
+  /**
+   * F031: performs the toggle instead of `api.setCommentHeart` (e.g. `api.setPostHeart`) and resolves with the
+   * server's state. Same optimistic update and rollback.
+   */
+  onToggle?: (on: boolean) => Promise<HeartState>;
 };
 
 function plural(n: number, one: string, many: string): string {
@@ -23,7 +30,7 @@ function plural(n: number, one: string, many: string): string {
  * the response; clicks while a request is in flight are ignored (the button stays enabled so focus stays put).
  * Also renders the "♥ Creator" mark when the game's owner hearted the comment.
  */
-export function HeartButton({ comment, interactive, onChange }: HeartButtonProps) {
+export function HeartButton({ comment, interactive, onChange, subject = "comment", onToggle }: HeartButtonProps) {
   const api = useApi();
   const toast = useToast();
   const fromProps: HeartState = { hearts: comment.hearts, myHeart: comment.myHeart, creatorHeart: comment.creatorHeart };
@@ -57,8 +64,13 @@ export function HeartButton({ comment, interactive, onChange }: HeartButtonProps
     apply({ ...before, myHeart: on, hearts: Math.max(0, before.hearts + (on ? 1 : -1)) });
     setPop(on);
     try {
-      const r = await api.setCommentHeart(comment.id, on);
-      apply({ myHeart: r.hearted, hearts: Math.max(0, r.hearts), creatorHeart: r.creatorHeart });
+      if (onToggle) {
+        const r = await onToggle(on);
+        apply({ myHeart: r.myHeart, hearts: Math.max(0, r.hearts), creatorHeart: r.creatorHeart });
+      } else {
+        const r = await api.setCommentHeart(comment.id, on);
+        apply({ myHeart: r.hearted, hearts: Math.max(0, r.hearts), creatorHeart: r.creatorHeart });
+      }
     } catch (e) {
       apply(before);
       setPop(false);
@@ -93,7 +105,7 @@ export function HeartButton({ comment, interactive, onChange }: HeartButtonProps
         type="button"
         className={`pf-heart${pop ? " pf-heart--pop" : ""}`}
         aria-pressed={view.myHeart}
-        aria-label={`Heart comment by ${name}${view.hearts > 0 ? `, ${plural(view.hearts, "heart", "hearts")}` : ""}`}
+        aria-label={`Heart ${subject} by ${name}${view.hearts > 0 ? `, ${plural(view.hearts, "heart", "hearts")}` : ""}`}
         onClick={() => void toggle()}
         onAnimationEnd={() => setPop(false)}
       >

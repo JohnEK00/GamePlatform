@@ -135,6 +135,8 @@ async fn m1_notify_survives_a_concurrent_commit() {
         dedupe: notifications::Dedupe::Actor,
         thread_id: None,
         collection_id: None,
+        post_id: None,
+        event_post_reply_id: None,
         now: Utc::now(),
     };
     let task = tokio::spawn(async move {

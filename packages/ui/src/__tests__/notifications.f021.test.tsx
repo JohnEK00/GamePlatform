@@ -73,7 +73,8 @@ describe("F021: addedToCollection notifications", () => {
       notif({ id: "7", kind: "screenshotPosted", commentId: null, eventCount: 2, screenshot: { id: "s1", thumbUrl: "/media/screenshots/s1_t.jpg" } }),
     ];
     const kinds = new Set(others.map((n) => n.kind));
-    for (const k of NOTIFICATION_KINDS) if (k !== "addedToCollection") expect(kinds.has(k)).toBe(true);
+    // F031 kinds have their own suite (notifications.f031.test.ts).
+    for (const k of NOTIFICATION_KINDS) if (k !== "addedToCollection" && k !== "postReply" && k !== "postHeart") expect(kinds.has(k)).toBe(true);
     for (const n of others) {
       expect(osNotificationText(n)).toBe(notificationText(n));
       expect(osNotificationText(n)).not.toBe("");

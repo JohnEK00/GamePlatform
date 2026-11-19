@@ -4,7 +4,11 @@
 //! Posts are public plain text (1–500 code points, at most 12 lines) with an optional
 //! attachment of one published game or one public collection. Creating a post writes a
 //! `postCreated` activity event in the same transaction; deleting it cascades the event. The
-//! attachment is resolved for each viewer at read time ([`posts_for`]). No notifications.
+//! attachment is resolved for each viewer at read time ([`posts_for`]).
+//!
+//! F031 (docs/API.md § F031 additions): every `Post` carries `hearts`, `myHeart`, `replyCount`
+//! and `locked`; this module also has the heart (`PUT`/`DELETE /api/posts/{id}/heart`) and
+//! lock (`PUT`/`DELETE /api/posts/{id}/lock`) handlers. Replies live in `post_replies.rs`.
 
 use std::collections::HashMap;
 
@@ -25,6 +29,7 @@ use crate::models::{
     CollectionSummary, GAME_SELECT, GameSummary, Page, UserRef, game_row_from_row, now_rfc3339,
     user_ref_from_row,
 };
+use crate::notifications::{self as notif, Dedupe, Kind, NewNotification, post_group};
 use crate::ratelimit::Limit;
 use crate::routes::collections::{
     COLLECTION_SELECT, collections_from_rows, load_collection, summaries_for,
@@ -95,6 +100,22 @@ pub struct Post {
     pub can_delete: bool,
     /// `/p/{id}` (in-app route).
     pub path: String,
+    /// F031: distinct users who hearted the post (>= 0).
+    pub hearts: i64,
+    /// F031: the viewer hearted it; false when anonymous.
+    pub my_heart: bool,
+    /// F031: replies on the post (0–200).
+    pub reply_count: i64,
+    /// F031: replies turned off by the author or an admin (only they can still reply).
+    pub locked: bool,
+}
+
+/// `PostHeartResponse` (API § F031).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostHeartResponse {
+    pub hearted: bool,
+    pub hearts: i64,
 }
 
 /// `CreatePostRequest`. `null` and absent attachment ids both mean "none".
@@ -108,12 +129,16 @@ pub struct CreatePostBody {
     pub collection_id: Option<String>,
 }
 
-/// Post columns + author (`a_` prefix). Append `WHERE …`.
+/// Post columns + author (`a_` prefix). Append `WHERE …` (always a filter on `p`).
+///
+/// `CROSS JOIN` pins `posts` as the outer loop (SQLite never reorders it). With the F031
+/// columns the planner otherwise may scan `users` first and sort the profile page in a temp
+/// B-tree instead of walking `idx_posts_author_created`.
 pub const POST_SELECT: &str = "SELECT p.id, p.author_id, p.body, p.attachment_type, p.game_id, \
-     p.collection_id, p.created_at, \
+     p.collection_id, p.created_at, p.hearts, p.reply_count, p.locked_at, \
      u.id AS a_id, u.username AS a_username, u.display_name AS a_display_name, \
      u.avatar_ext AS a_avatar_ext, u.avatar_version AS a_avatar_version \
-     FROM posts p JOIN users u ON u.id = p.author_id";
+     FROM posts p CROSS JOIN users u ON u.id = p.author_id";
 
 /// F030 profile list page (`?1` author id, `?2` limit, `?3` offset). A test asserts the plan
 /// walks `idx_posts_author_created` without a temp B-tree sort.
@@ -144,7 +169,8 @@ fn push_unique(list: &mut Vec<String>, v: Option<String>) {
 
 /// Posts for `rows` (selected with [`POST_SELECT`]) as `viewer` sees them, in row order. A
 /// fixed number of queries per call (ARCHITECTURE § F030 "Read assembly"): `is_admin` once,
-/// one game query, one collection query plus [`summaries_for`].
+/// one game query, one collection query plus [`summaries_for`], and (F031) one `myHeart`
+/// query when the viewer is signed in.
 pub(crate) async fn posts_for(
     state: &AppState,
     rows: &[SqliteRow],
@@ -195,6 +221,25 @@ pub(crate) async fn posts_for(
         }
     }
 
+    // F031: which of these posts the viewer hearted.
+    let mut hearted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(v) = viewer {
+        let ids: Vec<String> = rows
+            .iter()
+            .map(|r| r.try_get::<String, _>("id"))
+            .collect::<Result<_, _>>()?;
+        hearted = sqlx::query_scalar::<_, String>(
+            "SELECT post_id FROM post_hearts WHERE user_id = ?1 \
+             AND post_id IN (SELECT value FROM json_each(?2))",
+        )
+        .bind(v)
+        .bind(json_list(&ids)?)
+        .fetch_all(&state.db)
+        .await?
+        .into_iter()
+        .collect();
+    }
+
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
         let id: String = r.try_get("id")?;
@@ -232,13 +277,17 @@ pub(crate) async fn posts_for(
             attachment,
             created_at: r.try_get("created_at")?,
             can_delete,
+            hearts: r.try_get("hearts")?,
+            my_heart: hearted.contains(&id),
+            reply_count: r.try_get("reply_count")?,
+            locked: r.try_get::<Option<String>, _>("locked_at")?.is_some(),
             id,
         });
     }
     Ok(out)
 }
 
-async fn load_post(state: &AppState, id: &str, viewer: Option<&str>) -> AppResult<Post> {
+pub(crate) async fn load_post(state: &AppState, id: &str, viewer: Option<&str>) -> AppResult<Post> {
     let row = sqlx::query(&format!("{POST_SELECT} WHERE p.id = ?"))
         .bind(id)
         .fetch_optional(&state.db)
@@ -374,13 +423,16 @@ pub async fn list_user_posts(
 }
 
 /// Delete a post (`DELETE /api/posts/{id}` and the report `delete` action), in one
-/// transaction: open `post` reports on it are resolved with `delete`, then the row is deleted
-/// (its `postCreated` event cascades). An unknown id is a no-op.
+/// transaction: open `post` reports on it and (F031) open `postReply` reports on its replies
+/// are resolved with `delete`, then the row is deleted. Cascades: its `postCreated` event, its
+/// replies, hearts and both post kinds' notifications. An unknown id is a no-op.
 pub async fn remove_post(state: &AppState, id: &str) -> AppResult<()> {
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "UPDATE reports SET status = 'resolved', resolution = 'delete', resolved_at = ?2 \
-         WHERE target_type = 'post' AND target_id = ?1 AND status = 'open'",
+         WHERE status = 'open' AND ((target_type = 'post' AND target_id = ?1) \
+           OR (target_type = 'postReply' AND target_id IN \
+             (SELECT id FROM post_replies WHERE post_id = ?1)))",
     )
     .bind(id)
     .bind(now_rfc3339())
@@ -410,6 +462,162 @@ pub async fn delete_post(
     }
     remove_post(&state, &id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// F031 hearts and lock
+// ---------------------------------------------------------------------------
+
+/// The parts of a post the F031 handlers check.
+#[derive(Debug, Clone)]
+pub(crate) struct PostMeta {
+    pub author_id: String,
+    pub locked: bool,
+}
+
+/// F031: the post's author and lock state; 404 `Post not found` for an unknown id.
+pub(crate) async fn post_meta(state: &AppState, id: &str) -> AppResult<PostMeta> {
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT author_id, locked_at FROM posts WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (author_id, locked_at) = row.ok_or_else(|| AppError::not_found(NOT_FOUND))?;
+    Ok(PostMeta {
+        author_id,
+        locked: locked_at.is_some(),
+    })
+}
+
+/// The post's current heart count; 404 when it vanished meanwhile.
+async fn post_hearts(state: &AppState, id: &str) -> AppResult<i64> {
+    sqlx::query_scalar("SELECT hearts FROM posts WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::not_found(NOT_FOUND))
+}
+
+/// `PUT /api/posts/{id}/heart` (🔒, idempotent): auth → 404 → `Limit::Heart` (429) → own post
+/// (422) → insert (a new heart notifies the author, actor dedupe) → `{ hearted: true, hearts }`.
+pub async fn heart_post(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Json<PostHeartResponse>> {
+    let meta = post_meta(&state, &id).await?;
+    limit_user(&state, Limit::Heart, &user.id)?;
+    if meta.author_id == user.id {
+        return Err(AppError::validation("You can't heart your own post"));
+    }
+    // Never INSERT OR REPLACE: its implicit delete would skip the counter trigger.
+    let inserted = sqlx::query(
+        "INSERT OR IGNORE INTO post_hearts (post_id, user_id, created_at) \
+         SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM posts WHERE id = ?1)",
+    )
+    .bind(&id)
+    .bind(&user.id)
+    .bind(now_rfc3339())
+    .execute(&state.db)
+    .await?
+    .rows_affected();
+    if inserted > 0 {
+        notif::notify_pool(
+            &state.db,
+            &NewNotification {
+                recipient_id: meta.author_id.clone(),
+                kind: Kind::PostHeart,
+                group_key: post_group(&id),
+                game_id: None,
+                comment_id: None,
+                actor_id: user.id.clone(),
+                event_comment_id: None,
+                event_screenshot_id: None,
+                dedupe: Dedupe::Actor,
+                thread_id: None,
+                collection_id: None,
+                post_id: Some(id.clone()),
+                event_post_reply_id: None,
+                now: Utc::now(),
+            },
+        )
+        .await;
+    }
+    Ok(Json(PostHeartResponse {
+        hearted: true,
+        hearts: post_hearts(&state, &id).await?,
+    }))
+}
+
+/// `DELETE /api/posts/{id}/heart` (🔒, idempotent): auth → 404 → `Limit::Heart` (429) → delete
+/// (a removed heart retracts the author's unread event) → `{ hearted: false, hearts }`.
+pub async fn unheart_post(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Json<PostHeartResponse>> {
+    let meta = post_meta(&state, &id).await?;
+    limit_user(&state, Limit::Heart, &user.id)?;
+    let removed = sqlx::query("DELETE FROM post_hearts WHERE post_id = ? AND user_id = ?")
+        .bind(&id)
+        .bind(&user.id)
+        .execute(&state.db)
+        .await?
+        .rows_affected();
+    if removed > 0 {
+        notif::retract_pool(
+            &state.db,
+            &meta.author_id,
+            Kind::PostHeart,
+            &post_group(&id),
+            &user.id,
+        )
+        .await;
+    }
+    Ok(Json(PostHeartResponse {
+        hearted: false,
+        hearts: post_hearts(&state, &id).await?,
+    }))
+}
+
+/// Shared by lock / unlock: auth → 404 → author or admin (403) → `Limit::ThreadTools` (429).
+async fn check_lock_rights(state: &AppState, user: &AuthUser, id: &str) -> AppResult<()> {
+    let meta = post_meta(state, id).await?;
+    if meta.author_id != user.id && !is_admin(state, Some(&user.id)).await? {
+        return Err(AppError::forbidden());
+    }
+    limit_user(state, Limit::ThreadTools, &user.id)?;
+    Ok(())
+}
+
+/// `PUT /api/posts/{id}/lock` (🔒 author/admin, idempotent): turn replies off. Keeps the first
+/// `locked_at`. No notifications.
+pub async fn lock_post(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Json<Post>> {
+    check_lock_rights(&state, &user, &id).await?;
+    sqlx::query("UPDATE posts SET locked_at = COALESCE(locked_at, ?2) WHERE id = ?1")
+        .bind(&id)
+        .bind(now_rfc3339())
+        .execute(&state.db)
+        .await?;
+    Ok(Json(load_post(&state, &id, Some(&user.id)).await?))
+}
+
+/// `DELETE /api/posts/{id}/lock` (🔒 author/admin, idempotent): turn replies back on.
+pub async fn unlock_post(
+    State(state): State<AppState>,
+    user: AuthUser,
+    ApiPath(id): ApiPath<String>,
+) -> AppResult<Json<Post>> {
+    check_lock_rights(&state, &user, &id).await?;
+    sqlx::query("UPDATE posts SET locked_at = NULL WHERE id = ?1")
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
+    Ok(Json(load_post(&state, &id, Some(&user.id)).await?))
 }
 
 #[cfg(test)]
@@ -466,10 +674,21 @@ mod tests {
             "a\u{2060}b",
             "a\u{2066}b",
             "a\u{FEFF}b",
+            "a\u{061C}b",
+            "a\u{115F}b",
+            "a\u{1160}b",
+            "a\u{180E}b",
+            "a\u{2028}b",
+            "a\u{2029}b",
+            "a\u{3164}b",
+            "a\u{FFA0}b",
         ] {
             assert_eq!(msg(s), plain, "{s:?}");
         }
         assert!(validate_post_body("a\nb").is_ok());
+        // Review 11: U+2028 can't be used to get around the 12-line cap.
+        let sep = ["l"; 13].join("\u{2028}");
+        assert_eq!(msg(&sep), plain);
     }
 
     #[test]

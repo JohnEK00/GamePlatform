@@ -103,7 +103,7 @@ describe("PostPage /p/:id (F030 section 0.15)", () => {
 
   it("deleting navigates to the author's Posts section with replace and focuses its heading", async () => {
     const { del } = await setup(async () => post("p1", { canDelete: true }), miaUser);
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delete post by / }));
     await act(async () => {
       fireEvent.click(within(screen.getByRole("dialog", { name: "Delete this post?" })).getByRole("button", { name: "Delete" }));
     });
@@ -118,7 +118,7 @@ describe("PostPage /p/:id (F030 section 0.15)", () => {
 
   it("another viewer sees Report, not Delete", async () => {
     await setup(async () => post("p1", { attachment: { type: "game", game: game("g1", "Space Dodge"), collection: null } }), leoUser);
-    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
-    expect(screen.getByRole("button", { name: "⚑ Report" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Delete post by / })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Report post by / })).toBeTruthy();
   });
 });

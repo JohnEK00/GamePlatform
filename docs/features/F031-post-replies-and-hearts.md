@@ -13,6 +13,11 @@ Depends on: F006 (heart and reply patterns), F007/F018/F024 (notification write 
 
 No new Rust or JS dependencies. No engine or example changes.
 
+**Revision 2026-11-19 (drift check after F030 and the review 11 fixes in `4beec46`).** Every file, function, line anchor and test anchor below was re-checked against `main` and still holds: `Kind::ALL` is `[Kind; 8]`, there are 8 `NewNotification` literals, the `targetType` message is at `tests/f008.rs:1403`, `tests/f028.rs:863` and `tests/f030.rs:1308`, `HeartButton` has no `subject`/`onToggle`, `PostPage` uses `useAsync` without local state, and `postFixtures.ts` posts have no F031 fields. Three things changed:
+1. **Forbidden characters (review 11 L1/L2).** The client's shared set (`isForbiddenLabelCodePoint`, `hasForbiddenProfileChar`) gained U+061C, U+115F, U+1160, U+180E, U+2028, U+2029, U+3164 and U+FFA0, and the client now checks display names and bios. The **server half was never done**: `is_forbidden_label_char` (`routes/users.rs:235`) still has the F028 set, so a reply could bypass the 12-line cap with U+2028 exactly as a post can today. This round therefore includes the server half (§ 0.20, backend task 0, API § "Review-fix additions (REVIEW-2026-11-18-11)").
+2. **Review 11 L5** (banner upload racing a clear or delete) is also still open on the server. It is small and in the same file, so it rides along as backend task 0.4. It has no contract change.
+3. **Post action names (review 11 note).** The `Delete` and `⚑ Report` buttons on a card get per-post accessible names (§ 0.11 item 3), since F031 adds named controls to the same row.
+
 ## 0. Decisions on ambiguities (read first)
 API § F031 is normative. Tests assert the texts below verbatim. `{name}` means display name, falling back to username.
 
@@ -28,7 +33,7 @@ API § F031 is normative. Tests assert the texts below verbatim. `{name}` means 
    **Not in this round** (follow-up **F040**): muting a post's notifications and hearts on replies. Post mutes need a new mute target, because `notification_mutes.game_id` is `NOT NULL` and `NotificationMute.game` is non-null, and that would change the F018 Muted list. Coalescing (one unread notification per post and kind), the two switches and "Turn off replies" cover the noisy cases for now.
 
    **F029 is not folded in.** This round already fills one frontend round (a thread UI, a generalised heart, notifications, settings and admin). F029 stays a clean S and runs next.
-2. **Reply body rules.** Exactly the F030 post body rules and messages (`validate_post_body`): CRLF/CR → LF, trim, 1–500 code points, at most 12 lines, no F028 forbidden character except `\n`. The 422 messages are the F030 ones (`body must be 1–500 characters`, `body must be at most 12 lines`, `body must be plain text`). The client's line message for replies is `Replies can have at most 12 lines.`; the character message is the F030 one.
+2. **Reply body rules.** Exactly the F030 post body rules and messages (`validate_post_body`): CRLF/CR → LF, trim, 1–500 code points, at most 12 lines, no character of the **shared forbidden set** except `\n`. The shared set is the F028 set plus the review 11 additions (API § "Review-fix additions (REVIEW-2026-11-18-11)"), so U+2028 and U+2029 can't be used to get around the line cap. The 422 messages are the F030 ones (`body must be 1–500 characters`, `body must be at most 12 lines`, `body must be plain text`). The client's line message for replies is `Replies can have at most 12 lines.`; the character message is the F030 one.
 3. **Rendering.** Reply bodies render with the F030 `PostBody` (plain text, `linkifyPost`, the same anchor attributes and sr-only text).
 4. **Reply targets.** `POST /api/posts/{id}/replies` takes `{ body, replyToId?: string | null }`.
    - `replyToId` absent or `null`: the reply answers the post. `replyTo` is `null`.
@@ -71,9 +76,11 @@ API § F031 is normative. Tests assert the texts below verbatim. `{name}` means 
        - n replies: `{n} replies`, aria-label `{n} replies to the post by {name}`.
 
        It is omitted when `post.locked && post.replyCount === 0`.
-    3. **Delete** or **Report** as in F030.
+    3. **Delete** or **Report** as in F030 (same classes, texts and dialogs), with per-post accessible names (review 11 note) in every context, with or without the F031 fields:
+       - Delete: `aria-label="Delete post by {name}"`;
+       - Report: `aria-label="Report post by {name}"`, through a new optional `ariaLabel?: string` prop on `ReportButton` (rendered as `aria-label` on its button; absent = no attribute, so existing report buttons are unchanged).
 
-    Without the F031 fields (older server), the card is exactly the F030 card.
+    Without the F031 fields (older server), the card is the F030 card plus these two labels.
 
     New prop: `inThread?: boolean` (default false). `PostPage` passes `true`, which hides the replies link (the thread is right below).
 12. **Thread** (`PostThread({ post, onPostChange })`, below the card on `/p/{id}`, only when `typeof post.replyCount === "number"`):
@@ -141,6 +148,12 @@ API § F031 is normative. Tests assert the texts below verbatim. `{name}` means 
     - The post card's actions row wraps at narrow widths (`flex-wrap: wrap; gap: 8px`).
 19. **Desktop.** No menu item. `/p/{id}?reply=…` works under the hash router. Links in replies use `target="_blank"`, so `external.rs` opens them in the system browser. OS notifications for both kinds use the § 0.9 texts and never contain post or reply text.
 
+20. **Review 11 carry-over (server only).** The server catches up with the client, which already shipped this in `4beec46`:
+    - `is_forbidden_label_char` gains U+061C, U+115F, U+1160, U+180E, U+2028, U+2029, U+3164 and U+FFA0, so it equals the client's `isForbiddenLabelCodePoint`. This one change applies to link labels, post bodies and reply bodies.
+    - `PATCH /api/users/me` rejects a forbidden character in `displayName` (422 `displayName must not contain control characters`) and in `bio` other than `\n` (422 `bio must not contain control characters`). These are the messages the client's `validateDisplayName`/`validateBio` already show. The bio first has CRLF/CR turned into LF.
+    - Stored names, bios, labels and posts are **not** rewritten. Admins can use `clearProfile` on offending profiles.
+    - No client change is needed. The client's raw-text checks are already at least as strict.
+
 Non-goals (later items): muting a post's notifications and hearts on replies (F040); inline threads in the feed or on profiles; editing replies; live updates of an open thread; reply notifications for other participants; `@mentions`; images in replies (F038 covers posts only).
 
 ## 1. Goal and user stories
@@ -171,10 +184,17 @@ See § 0 items 9–18 for texts, order, focus and layout. Additional notes:
   - **Web routes:** `/p/{id}?reply={replyId}`.
 - **ARCHITECTURE.md § F031 additions**: migration `0026_f031.sql` (normative SQL), the reply select and guarded insert, `posts_for` changes, notification write and read changes, `remove_post` / `remove_post_reply`, reports, UI files and ownership.
 - **GAME_FORMAT.md § F031 additions**: none.
+- **API.md § Review-fix additions (REVIEW-2026-11-18-11)** (added 2026-11-19): the shared forbidden set, and the `displayName`/`bio` character rules on `PATCH /api/users/me`.
 
 ## 4. Per-area tasks
 
 ### backend-dev (`backend/**`)
+0. **Review 11 carry-over** (§ 0.20; API § "Review-fix additions (REVIEW-2026-11-18-11)"). Do this first, because reply bodies depend on it:
+   1. `src/routes/users.rs` `is_forbidden_label_char`: add `'\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{180E}' | '\u{2028}' | '\u{2029}' | '\u{3164}' | '\u{FFA0}'`. Update its doc comment to say it mirrors `packages/ui/src/profile.ts` `isForbiddenLabelCodePoint`, and that the two lists must change together.
+   2. `update_me`, **displayName**: trim → the existing length check → `chars().any(is_forbidden_label_char)` → 422 `displayName must not contain control characters`.
+   3. `update_me`, **bio**: `\r\n`/`\r` → `\n` → trim → the existing length check → any forbidden char other than `\n` → 422 `bio must not contain control characters`. The F028 order displayName → bio → links and "validate everything before writing" are unchanged.
+   4. **Review 11 L5** (banner race), in `upload_banner`: read `banner_version` before writing the file. After `replace_image`, run `UPDATE users SET banner_ext = 'jpg', banner_version = banner_version + 1 WHERE id = ?1 AND banner_version = ?2`. If 0 rows change (a concurrent clear, delete or upload won), remove the file just written only when the row now has `banner_ext IS NULL`, and return 409 `conflict` `Your banner changed while uploading; try again`. That last branch is an edge race with no UI copy beyond `errorMessage`. Never leave `banner_ext` pointing at a missing file.
+   5. **Unit tests** in `users.rs` for every new code point (label, displayName, bio). **`tests/f031.rs`** "review 11" cases (§ 6).
 1. **Migration** `backend/migrations/0026_f031.sql`: copy ARCHITECTURE § F031 "Data" **verbatim**. Never edit `0001`–`0025`.
 2. **`src/ratelimit.rs`**: `Limit::PostReply` with the doc `/// F031 post replies (`POST /api/posts/{id}/replies`): 30 per 10 min, per user` and the quota `(30, Duration::from_secs(600))`. Extend the `Heart` doc ("and (F031) `…/posts/{id}/heart`") and the `ThreadTools` doc ("and (F031) `…/posts/{id}/lock`").
 3. **`src/notifications.rs`**:
@@ -247,7 +267,8 @@ See § 0 items 9–18 for texts, order, focus and layout. Additional notes:
 4. **`src/notifications.ts`**: `NOTIFICATION_KINDS` += both kinds; `notificationParts` for both (§ 0.9 table); `muteActionFor` returns null for them (explicit cases); `osNotificationText` unchanged.
 5. **Components**:
    - **`HeartButton`**: new optional props `subject?: "comment" | "post"` (default `"comment"`, used in the aria-label) and `onToggle?: (on: boolean) => Promise<HeartState>` (replaces `api.setCommentHeart` when given). Existing behaviour and tests unchanged.
-   - **`PostCard`**: § 0.11, including `inThread`. The heart uses `onToggle = (on) => api.setPostHeart(post.id, on).then(r => ({ hearts: r.hearts, myHeart: r.hearted, creatorHeart: false }))`.
+   - **`ReportButton`** (`Report.tsx`): optional `ariaLabel?: string`, rendered as `aria-label` on the button (§ 0.11 item 3).
+   - **`PostCard`**: § 0.11, including `inThread` and the Delete/Report accessible names. The heart uses `onToggle = (on) => api.setPostHeart(post.id, on).then(r => ({ hearts: r.hearts, myHeart: r.hearted, creatorHeart: false }))`.
    - **`components/PostThread.tsx`** (new): `PostThread`, `PostReplyItem`, `PostReplyForm` (§ 0.12–0.15).
    - **`NotificationItem`**: the two glyphs.
    - **`NotificationSettings`**: the two fields (§ 0.10).
@@ -310,7 +331,7 @@ backend-dev and frontend-dev work in parallel against API § F031 (the frontend 
   - Deleting Leo's account → the count drops (trigger).
 - **Replies.**
   - Leo replies `{ body: "  hi\r\nthere " }` → 201: `body == "hi\nthere"`, `replyTo: null`, `byPostAuthor: false`, `canDelete: true`, `path == "/p/{postId}?reply={id}"`; the post's `replyCount` is 1.
-  - Every F030 body message, via the reply endpoint.
+  - Every F030 body message, via the reply endpoint. A reply of 13 lines joined by U+2028 → 422 `body must be plain text` (review 11).
   - `replyToId` = Leo's reply, by Mia → `replyTo` = Leo, `byPostAuthor: true`. Leo answering his own reply → `replyTo: null`. A reply of another post → 404 `Reply not found`. `replyToId: 3` → 422. Unknown post → 404 `Post not found`. Anonymous → 401.
   - List: oldest first (`createdAt`, then insertion order), `total` = `replyCount`, `perPage` default 50, clamp 1–200, `page=x` → 400, unknown post → 404 even with a bad `page`. The page plan uses `idx_post_replies_post_created` without `USE TEMP B-TREE`.
   - `canDelete`: true for the reply author, the post author and an admin; false for others and anonymous.
@@ -337,12 +358,21 @@ backend-dev and frontend-dev work in parallel against API § F031 (the frontend 
   - Again → 409. Own reply → 422 `You can't report your own reply`. Unknown → 404 `Reply not found`.
   - Admin `delete` → the reply is gone and a second open report on it is resolved. `unpublish` → 422 `unpublish is only valid for game reports`. `clearProfile` → 422 `clearProfile is only valid for user reports`.
   - An unknown `targetType` → the new message.
+- **Review 11 carry-over.**
+  - Each of U+061C, U+115F, U+1160, U+180E, U+2028, U+2029, U+3164 and U+FFA0:
+    - in a post body → 422 `body must be plain text`;
+    - in a link label → 422 `links[0].label must not contain control characters`;
+    - in `displayName` → 422 `displayName must not contain control characters`;
+    - in `bio` → 422 `bio must not contain control characters`.
+  - In each of those 422 cases the user row is unchanged (validate-before-write).
+  - A bio of `"a\r\nb"` is stored and returned as `"a\nb"`. A bio with `\n` is accepted. A display name containing `\n` → 422 (chars).
+  - Banner race: an upload whose conditional `UPDATE` matches 0 rows (simulated by bumping `banner_version` between the read and the update through a test hook, or by calling the helper directly) → 409. After it, `bannerUrl` is null or points at an existing file, and never at a missing one.
 
 ### Frontend (vitest)
 - **`posts.f031.test.ts`**: `postReplyPath` encodes; `repliesLinkText(0/1/5)` = `Reply` / `1 reply` / `5 replies`; `repliesLinkLabel`; `validatePostBody(x, REPLY_LINES_MESSAGE)` on 13 lines; `hasPostSocial`; `isValidPostReply`.
 - **`notifications.f031.test.ts`**: every row of the § 0.9 table (including `A and B`, `A and 2 others`, `replied 3 times`); `muteActionFor` → null for both; `osNotificationText` equals `notificationText` for both; `isKnownNotification` accepts both.
 - **`HeartButton.f031.test.tsx`**: `subject="post"` → `Heart post by Mia, 2 hearts`; `onToggle` is called instead of `setCommentHeart`, with optimistic update and rollback on failure.
-- **`PostCard.f031.test.tsx`**: the heart (interactive for others, static for the author and anonymous), the replies link texts, labels and `href`, the link hidden when `locked && replyCount === 0` and when `inThread`; an F030 fixture without the fields renders no heart and no link.
+- **`PostCard.f031.test.tsx`**: Delete has the accessible name `Delete post by Mia` and Report has `Report post by Mia`, on both F030 and F031 fixtures; a `ReportButton` without `ariaLabel` renders no `aria-label`. Then the heart (interactive for others, static for the author and anonymous), the replies link texts, labels and `href`, the link hidden when `locked && replyCount === 0` and when `inThread`; an F030 fixture without the fields renders no heart and no link.
 - **`PostThread.test.tsx`**:
   - loads with `{ page: 1, perPage: 200 }`; heading `Replies` / `Replies (2)`; loading, error (`Couldn't load replies.` + Retry) and `No replies yet.`;
   - reply item: author link, `Author` badge, `Replying to @leo`, time link to `reply.path`, linkified body;

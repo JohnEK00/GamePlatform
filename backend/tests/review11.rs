@@ -1,18 +1,14 @@
 //! Review 11 backend fixes:
 //! - L1: `displayName` and `bio` use the shared forbidden-character set (bio allows `\n`);
 //! - L2: the set gains U+061C, U+115F, U+1160, U+180E, U+2028, U+2029, U+3164 and U+FFA0,
-//!   and post bodies use it (so U+2028/U+2029 can't bypass the 12-line cap);
-//! - L5: a banner upload can't interleave with `clearProfile`, a banner delete or a user
-//!   delete and leave `bannerUrl` pointing at a missing file.
+//!   and post bodies use it (so U+2028/U+2029 can't bypass the 12-line cap).
+//!
+//! The L5 banner-race tests live in tests/f031.rs, which uses `profile_image_locks`.
 
 mod common;
 
-use std::io::Cursor;
-use std::time::Duration;
-
 use axum::http::{Method, StatusCode};
 use common::*;
-use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use serde_json::{Value, json};
 
 const NAME_MSG: &str = "displayName must not contain control characters";
@@ -92,11 +88,15 @@ async fn bio_rejects_every_forbidden_character_but_keeps_newlines() {
         let r = patch_me(&t, &tok, json!({ "bio": format!("hello{c}world") })).await;
         assert_422(&r, BIO_MSG);
     }
-    // `\r` is a C0 control too; U+2028/U+2029 are not a way to add lines.
-    for bio in ["a\r\nb", "a\rb", "a\u{2028}b", "a\u{2029}b"] {
+    // U+2028/U+2029 are not a way to add lines.
+    for bio in ["a\u{2028}b", "a\u{2029}b"] {
         assert_422(&patch_me(&t, &tok, json!({ "bio": bio })).await, BIO_MSG);
     }
     assert_eq!(me(&t, &tok).await["bio"], "");
+    // `\r\n` and `\r` are normalised to `\n` (API § review 11), not rejected.
+    let r = patch_me(&t, &tok, json!({ "bio": "a\r\nb\rc" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["bio"], "a\nb\nc");
 
     let r = patch_me(
         &t,
@@ -215,151 +215,4 @@ async fn post_body_rejects_the_new_characters_and_separator_lines() {
         &post(["line"; 13].join("\n")).await,
         "body must be at most 12 lines",
     );
-}
-
-// ---------------------------------------------------------------------------
-// L5: banner upload vs clearProfile / delete banner / user delete
-// ---------------------------------------------------------------------------
-
-fn banner_png() -> Vec<u8> {
-    let img = DynamicImage::ImageRgb8(RgbImage::from_fn(600, 200, |x, y| {
-        Rgb([(x % 256) as u8, (y % 256) as u8, 128])
-    }));
-    let mut out = Vec::new();
-    img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
-        .unwrap();
-    out
-}
-
-async fn put_banner(t: &TestApp, tok: &str) -> Resp {
-    t.multipart(
-        Method::PUT,
-        "/api/users/me/banner",
-        Some(tok),
-        &[Part::File("banner", "b.png", "image/png", &banner_png())],
-    )
-    .await
-}
-
-fn banner_file(t: &TestApp, uid: &str) -> std::path::PathBuf {
-    t.state.storage.banners_dir().join(format!("{uid}.jpg"))
-}
-
-async fn banner_row(t: &TestApp, uid: &str) -> (Option<String>, i64) {
-    sqlx::query_as("SELECT banner_ext, banner_version FROM users WHERE id = ?")
-        .bind(uid)
-        .fetch_one(&t.state.db)
-        .await
-        .unwrap()
-}
-
-/// Run `other` while a banner upload is paused between its file write and its row update.
-/// `other` must not finish until the upload goes on. Returns both responses.
-async fn race_with_upload<F, Fut>(t: &TestApp, tok: &str, uid: &str, other: F) -> (Resp, Resp)
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Resp>,
-{
-    let gate = t.state.profile_locks.install_gate();
-    tokio::join!(put_banner(t, tok), async {
-        gate.entered().await;
-        // The upload has written its file and holds the user's lock.
-        assert!(banner_file(t, uid).exists());
-        let mut fut = std::pin::pin!(other());
-        assert!(
-            tokio::time::timeout(Duration::from_millis(200), &mut fut)
-                .await
-                .is_err(),
-            "the competing operation must wait for the upload"
-        );
-        gate.release();
-        fut.await
-    })
-}
-
-#[tokio::test]
-async fn clear_profile_during_banner_upload_leaves_no_dangling_url() {
-    let t = setup_with(|c| c.admin_usernames = vec!["boss".into()]).await;
-    let (admin, _) = t.register("boss").await;
-    let (tok, uid) = t.register("uma").await;
-    let (p_tok, _) = t.register("pat").await;
-    let r = t
-        .json(
-            Method::POST,
-            "/api/reports",
-            Some(&p_tok),
-            json!({ "targetType": "user", "targetId": uid, "reason": "offensive" }),
-        )
-        .await;
-    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text());
-    let rid = r.json()["id"].as_str().unwrap().to_string();
-
-    let resolve_uri = format!("/api/admin/reports/{rid}/resolve");
-    let (up, cleared) = race_with_upload(&t, &tok, &uid, || {
-        t.json(
-            Method::POST,
-            &resolve_uri,
-            Some(&admin),
-            json!({ "action": "clearProfile" }),
-        )
-    })
-    .await;
-    assert_eq!(up.status, StatusCode::OK, "{}", up.text());
-    assert_eq!(cleared.status, StatusCode::OK, "{}", cleared.text());
-
-    // The clear ran after the upload: no banner, and no file.
-    assert_eq!(me(&t, &tok).await["bannerUrl"], Value::Null);
-    assert!(!banner_file(&t, &uid).exists());
-    assert_eq!(banner_row(&t, &uid).await, (None, 2));
-
-    // A later upload works normally.
-    let r = put_banner(&t, &tok).await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
-    assert_eq!(
-        r.json()["bannerUrl"],
-        format!("/media/banners/{uid}.jpg?v=3")
-    );
-    assert!(banner_file(&t, &uid).exists());
-}
-
-#[tokio::test]
-async fn delete_banner_during_upload_leaves_no_dangling_url() {
-    let t = setup().await;
-    let (tok, uid) = t.register("uma").await;
-    let (up, del) = race_with_upload(&t, &tok, &uid, || {
-        t.send(
-            Method::DELETE,
-            "/api/users/me/banner",
-            Some(&tok),
-            None,
-            vec![],
-            &[],
-        )
-    })
-    .await;
-    assert_eq!(up.status, StatusCode::OK, "{}", up.text());
-    assert_eq!(del.status, StatusCode::OK, "{}", del.text());
-    assert_eq!(del.json()["bannerUrl"], Value::Null);
-    assert!(!banner_file(&t, &uid).exists());
-    assert_eq!(banner_row(&t, &uid).await, (None, 2));
-}
-
-#[tokio::test]
-async fn user_deleted_during_banner_upload_leaves_no_file() {
-    let t = setup().await;
-    let (tok, uid) = t.register("uma").await;
-    let gate = t.state.profile_locks.install_gate();
-    let (up, ()) = tokio::join!(put_banner(&t, &tok), async {
-        gate.entered().await;
-        assert!(banner_file(&t, &uid).exists());
-        sqlx::query("DELETE FROM users WHERE id = ?")
-            .bind(&uid)
-            .execute(&t.state.db)
-            .await
-            .unwrap();
-        gate.release();
-    });
-    // The row is gone, so the upload removes its own file and reports the missing user.
-    assert_eq!(up.status, StatusCode::NOT_FOUND, "{}", up.text());
-    assert!(!banner_file(&t, &uid).exists());
 }

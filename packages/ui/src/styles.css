@@ -3775,6 +3775,129 @@ a.pf-tab {
   gap: 2px;
   min-width: 0;
 }
+.pf-suggest__more {
+  margin: 14px 0 0 !important;
+  text-align: right;
+}
+.pf-suggest--empty .pf-suggest__more {
+  text-align: center;
+}
+
+/* ---------- F035: Explore creators ---------- */
+.pf-creators .pf-tabs {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pf-creators .pf-tab {
+  white-space: nowrap;
+}
+.pf-creator-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pf-creator-grid > li {
+  display: flex;
+  min-width: 0;
+}
+.pf-creator-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--pf-surface);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  transition: border-color 0.15s;
+}
+.pf-creator-card:not(.pf-creator-card--skeleton):hover,
+.pf-creator-card:focus-within {
+  border-color: var(--pf-surface-3);
+}
+/* Beats the .pf-profile__banner heights (incl. its media queries): cards use a 3:1 strip. */
+.pf-creator-card .pf-creator-card__banner {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 1;
+  overflow: hidden;
+}
+.pf-creator-card .pf-creator-card__banner img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pf-creator-card__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  min-width: 0;
+}
+.pf-creator-card__avatar {
+  display: inline-flex;
+  align-self: flex-start;
+  position: relative;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--pf-surface);
+  background: var(--pf-surface);
+  margin-bottom: 4px;
+}
+.pf-app .pf-creator-card__name {
+  font-size: 1.3rem;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-creator-card__name a {
+  color: var(--pf-text);
+  text-decoration: none;
+}
+.pf-creator-card__name a:hover {
+  color: var(--pf-accent);
+}
+.pf-creator-card__handle {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pf-creator-card__bio {
+  margin: 4px 0 0;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+}
+.pf-creator-card__stats {
+  margin: 4px 0 0;
+}
+.pf-creator-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+@media (max-width: 640px) {
+  .pf-creator-grid {
+    grid-template-columns: 1fr;
+  }
+}
 
 .pf-userlist {
   list-style: none;
@@ -6498,6 +6621,221 @@ a.pf-post-attachment:focus-visible {
     align-items: stretch;
   }
   .pf-post-composer__foot .pf-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* ---------- F031: post hearts, replies link, reply thread ---------- */
+.pf-post__actions--social {
+  justify-content: flex-start;
+  align-items: center;
+}
+.pf-post__actions--social > .pf-btn:last-child {
+  margin-left: auto;
+}
+.pf-post__replies {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 6px;
+  border-radius: var(--pf-radius-sm);
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--pf-text-2);
+}
+.pf-post__replies:hover,
+.pf-post__replies:focus-visible {
+  color: var(--pf-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pf-post-thread {
+  margin-top: 24px;
+}
+.pf-post-thread__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.pf-post-thread__head .pf-section-title {
+  margin: 0;
+}
+.pf-post-thread__head .pf-section-title:focus {
+  outline: none;
+}
+.pf-post-thread__head .pf-section-title:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 2px;
+}
+.pf-post-thread__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pf-post-thread__list > li {
+  padding: 12px 0;
+  border-top: 1px solid var(--pf-border);
+}
+.pf-post-thread__list > li:last-child {
+  border-bottom: 1px solid var(--pf-border);
+}
+.pf-post-thread__empty {
+  margin: 8px 0;
+}
+.pf-post-thread__gone {
+  margin: 4px 0 8px;
+}
+.pf-post-thread__locked,
+.pf-post-thread__login {
+  margin: 12px 0 0;
+  color: var(--pf-muted);
+}
+.pf-post-thread__login a {
+  color: var(--pf-accent);
+  font-weight: 600;
+}
+
+.pf-post-reply {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  border-radius: var(--pf-radius-sm);
+  scroll-margin: calc(var(--pf-header-h) + 16px) 0 16px;
+}
+.pf-post-reply:focus {
+  outline: none;
+}
+.pf-post-reply:focus-visible {
+  outline: 2px solid var(--pf-focus);
+  outline-offset: 4px;
+}
+.pf-post-reply__avatar {
+  line-height: 0;
+}
+.pf-post-reply__main {
+  min-width: 0;
+}
+.pf-post-reply__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pf-post-reply__author {
+  font-weight: 700;
+  text-decoration: none;
+}
+.pf-post-reply__author:hover {
+  text-decoration: underline;
+}
+.pf-post-reply__time {
+  text-decoration: none;
+}
+.pf-post-reply__time:hover,
+.pf-post-reply__time:focus-visible {
+  color: var(--pf-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.pf-post-reply__replyto a {
+  color: var(--pf-text-2);
+  font-weight: 600;
+  text-decoration: none;
+}
+.pf-post-reply__replyto a:hover {
+  text-decoration: underline;
+}
+.pf-post-reply .pf-post__body {
+  margin: 4px 0 0;
+}
+.pf-post-reply__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 6px;
+  min-height: 26px;
+}
+.pf-post-reply__actions .pf-linkbtn {
+  text-decoration: none;
+  font-weight: 600;
+}
+.pf-post-reply__actions .pf-linkbtn:hover,
+.pf-post-reply__actions .pf-linkbtn:focus-visible {
+  text-decoration: underline;
+}
+.pf-post-reply--highlight {
+  outline: 2px solid transparent;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pf-post-reply--highlight {
+    animation: pf-comment-highlight 2s ease-out;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pf-post-reply--highlight {
+    outline: 2px solid var(--pf-accent-2);
+    outline-offset: 4px;
+  }
+}
+
+.pf-post-reply-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  scroll-margin: calc(var(--pf-header-h) + 16px) 0 16px;
+}
+.pf-post-reply-form__replyto,
+.pf-post-reply-form__notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.pf-post-reply-form__clear {
+  padding: 0 4px;
+  line-height: 1;
+  text-decoration: none;
+}
+.pf-post-reply-form__input {
+  width: 100%;
+  min-height: 60px;
+  resize: vertical;
+}
+.pf-post-reply-form__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.pf-notif__kind--post-reply {
+  color: var(--pf-text-2);
+}
+.pf-notif__kind--post-heart {
+  color: #ff8fb4;
+}
+.pf-badge--postReply {
+  background: rgba(255, 209, 102, 0.14);
+  color: var(--pf-warning);
+}
+
+@media (max-width: 640px) {
+  .pf-post-reply__replyto {
+    flex-basis: 100%;
+  }
+  .pf-post-reply-form__foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pf-post-reply-form__foot .pf-btn {
     width: 100%;
     justify-content: center;
   }

@@ -5,6 +5,12 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 
 **Direction (2026-11-17, set by the user):** new work should improve the **platform itself**: more pages, UI improvements, public profile pages, and letting people post. Platform items (profiles, posts, home and discovery, navigation and search, new pages) come first. Engine-only and notification-plumbing items (F025, F026) move to the bottom. Creation tools (F011, F014) and the desktop library (F010) sit in between.
 
+**Cycle plan (2026-11-19):** this round ships **F031** (M) and **F035** (S) together.
+- **Why the pair works:** they touch different code. F031 is posts, notifications and reports; F035 is a new read endpoint, a new page and a menu item. They share only append-only files.
+- **Review 11 carry-over:** F031's backend task 0 also carries the backend half of review 11 (L1/L2 forbidden characters and display name/bio checks, plus L5, the banner race). That work never landed with the UI fixes in `4beec46`, and reply bodies depend on it.
+- **New ideas added:** F041–F046.
+- **Next after this cycle:** F029, F041, F042.
+
 ### Platform audit (2026-11-17)
 - **Pages today:**
   - Home/browse `/` (hero, "Featured" top 4, Trending shelf, a sorted and tag-filtered grid; search reuses `/?q=`);
@@ -67,18 +73,24 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 | F023 | Engine on-screen keyboard for `ui.textField` (touch and gamepad) | S | shipped |
 | F024 | "Screenshot of your game" notifications for creators | S | shipped |
 | F028 | Public profiles 2: banner, links, profile sections and sharing | M | shipped |
-| F029 | Featured games on profiles | S | proposed |
 | F030 | User posts: short text posts on profiles and in followers' feeds | M | shipped |
-| F031 | Post replies and hearts, with notifications | M | specced |
+| F031 | Post replies and hearts, with notifications | M | shipped |
+| F035 | Explore creators page | S | shipped |
+| F029 | Featured games on profiles | S | proposed |
+| F041 | Link previews: Open Graph and Twitter cards for shared links | S | proposed |
+| F042 | Block users | M | proposed |
 | F032 | Home and discover 2: sectioned home page and creator spotlight | M | proposed |
 | F033 | Search page: games, creators and collections | M | proposed |
+| F043 | Continue playing: recently played games | S | proposed |
 | F034 | Navigation and UI polish: header, mobile menu, footer, shared states | S | proposed |
-| F035 | Explore creators page | S | proposed |
 | F036 | Tags index and tag pages | S | proposed |
 | F037 | About and Help pages | S | proposed |
+| F044 | Posts about this game, on game pages | S | proposed |
 | F038 | Images in posts | S | proposed |
 | F039 | Post composer 2: attachment picker and drafts | S | proposed |
 | F040 | Post threads 2: mute a post's notifications and hearts on replies | S | proposed |
+| F045 | Pin a post to your profile | S | proposed |
+| F046 | @mentions in posts, replies and comments | M | proposed |
 | F027 | Featured screenshots: owners pin up to 3 shots on the game page | S | proposed |
 | F011 | Studio sprite tools (sheet slicer and pixel editor) | M | proposed |
 | F014 | Desktop Studio: save to local folder and watch for changes | S | proposed |
@@ -365,7 +377,7 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
   - desktop: verification test only.
   - No engine changes.
 
-### F031: Post replies and hearts (M, specced → [spec](features/F031-post-replies-and-hearts.md))
+### F031: Post replies and hearts (M, shipped → [spec](features/F031-post-replies-and-hearts.md))
 - **Pitch**:
   - Hearts on posts (public count, the viewer's state, not on your own post).
   - One flat thread of replies per post (oldest first, at most 200; "Replying to @name" for answers to a reply), shown on the permalink `/p/{id}` with `?reply={rid}` deep links. Cards everywhere else get the heart and a `💬 N replies` link.
@@ -376,8 +388,14 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
   - No hearts on replies and no post mutes: both move to **F040**. Post mutes need a new mute target because `notification_mutes.game_id` is `NOT NULL`.
   - F029 is not folded in: this round already fills one frontend round; F029 runs next.
   - Migration `0026_f031.sql` adds tables, columns and triggers only (no rebuild), plus `reports.target_post_id` for the admin link.
+- **Drift check (2026-11-19)**, after F030 and the review 11 fixes. Every code anchor in the spec still holds. Three additions:
+  - **The server half of review 11 L1/L2** (spec § 0.20, API § "Review-fix additions (REVIEW-2026-11-18-11)"):
+    - the shared forbidden set gains U+061C, U+115F, U+1160, U+180E, U+2028, U+2029, U+3164 and U+FFA0, so replies can't bypass the line cap;
+    - `displayName` and `bio` get character checks.
+  - **Review 11 L5**, the banner upload race (409 `conflict`).
+  - **Per-post accessible names** on post Delete/Report.
 - **User value**: posts become conversations, and creators hear back from their audience.
-- **Areas**: backend (migration, `routes/post_replies.rs`, heart and lock handlers, two kinds, `Limit::PostReply`, report target, `remove_post` cascade), frontend (`HeartButton` generalised, `PostCard`, `PostThread`, notification texts and switches, admin), desktop (verification test). No engine changes.
+- **Areas**: backend (review 11 carry-over in `users.rs`, migration, `routes/post_replies.rs`, heart and lock handlers, two kinds, `Limit::PostReply`, report target, `remove_post` cascade), frontend (`HeartButton` generalised, `PostCard`, `PostThread`, `ReportButton.ariaLabel`, notification texts and switches, admin), desktop (verification test). No engine changes.
 
 ### F032: Home and discover 2 (M, proposed)
 - **Pitch**:
@@ -401,10 +419,19 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **User value**: less hunting for pages, especially on phones, and a consistent feel across the app.
 - **Areas**: frontend only (Layout, styles, page headers); desktop verification.
 
-### F035: Explore creators page (S, proposed; after F028)
-- **Pitch**: `/creators` lists creators with at least one published game, as cards (banner, avatar, name, bio excerpt, game count, followers, Follow button). Sorted by "Popular" (followers), "Active" (latest publish or update) or "New". Backed by `GET /api/creators?sort=&page=`.
-- **User value**: a way to discover people to follow beyond feed suggestions, and the F028 banners give it visual weight.
-- **Areas**: backend (one endpoint), frontend (page, creator card, nav and footer link). No engine changes.
+### F035: Explore creators page (S, shipped → [spec](features/F035-explore-creators.md); ships with F031)
+- **Pitch**:
+  - `/creators` lists every user with at least one published game, as cards. Each card shows a banner, avatar, name, a 160-character bio excerpt, `games · plays · followers` and a Follow button.
+  - Three sorts: "Popular" (followers, then plays), "Recently active" (latest first publish or bundle update) and "New creators" (first publish).
+  - 24 per page, with numbered pages.
+  - Backed by `GET /api/creators?sort=&page=&perPage=`. It is public, with no migration and no rate limit; `isFollowing` is per viewer.
+  - Linked from the header, the footer, the feed's suggestions ("Explore all creators →") and desktop View → Creators.
+- **User value**: a way to discover people to follow beyond the six feed suggestions, open to signed-out visitors too, and the F028 banners give it visual weight.
+- **Areas**: backend (`routes/creators.rs`), frontend (`creators.ts`, `CreatorCard`, `CreatorsPage`, Layout and Feed links), desktop (menu item + test). No engine changes.
+- **Decisions**:
+  - Activity means making games: publishing and bundle updates. Posts, comments and screenshots don't count.
+  - No game thumbnails on the cards.
+  - Search stays in F033 and the spotlight in F032.
 
 ### F036: Tags index and tag pages (S, proposed)
 - **Pitch**: `/tags` shows every tag with its game count (alphabetical or by size), and `/tags/{tag}` is a tag page with its own header, the sortable grid, and the collections that feature that tag's games. Tag chips link there instead of filtering the home grid.
@@ -434,3 +461,63 @@ Status values: `proposed`, `specced` (spec in `docs/features/`), `in progress`, 
 - **Pitch**: "Mute notifications" on a post (permalink and `/notifications` items), stored as a new post mute target and listed in Settings → Muted, suppressing `postReply`/`postHeart` for that post. Hearts on post replies (`post_reply_hearts`, a heart on each reply, a `postReplyHeart` notification or a merge into `postHeart`, decided in the spec).
 - **User value**: participants in a busy thread can step away, and replies get the same "+1" as comments.
 - **Areas**: backend (mute target: `notification_mutes` needs a nullable `game_id` or a separate table, plus `NotificationMute` gaining a post variant; reply hearts), frontend (mute buttons, Muted list rows, reply hearts). No engine changes.
+
+### F041: Link previews: Open Graph and Twitter cards for shared links (S, proposed; added 2026-11-19)
+- **Pitch**:
+  - When the server serves the SPA (`WEB_DIST` set), it injects `<title>`, `og:title`, `og:description`, `og:image`, `og:url` and `twitter:card` meta tags into `index.html` for these routes:
+    - `/games/{id}`: title and description, with the thumbnail as the image;
+    - `/u/{u}`: name and bio, with the banner or else the avatar as the image;
+    - `/p/{id}`: the author and the first 200 characters of the body, with the attachment's image;
+    - `/c/{id}`: title and description, with the cover as the image.
+  - Unknown or private targets (unpublished games, private collections) get the default site tags, so nothing leaks.
+  - Absolute URLs come from a new `PUBLIC_BASE_URL` setting (no tags when it is unset).
+  - Values are HTML-escaped, there is a small in-memory cache, and the SPA itself is unchanged.
+- **User value**: every Copy link and Share button added in F008/F028/F030 produces a rich card in chat apps and social sites instead of a bare URL, which is the main way a small platform grows.
+- **Areas**: backend (an SPA fallback handler with per-route lookups, config, tests). There are no API endpoints, no frontend changes beyond a static default `og:` set in `apps/web/index.html`, and no desktop changes (desktop share links already point at the server).
+
+### F042: Block users (M, proposed; added 2026-11-19; after F031)
+- **Pitch**:
+  - **Block** on any profile, or from a post, reply or comment menu. While A has blocked B:
+    - B can't follow A (an existing follow is removed);
+    - B can't reply to A's posts or comment threads, or heart A's posts and comments;
+    - B can't mention A (F046);
+    - A never gets notifications caused by B;
+    - B's posts, replies and comments are collapsed for A ("Hidden: you blocked @b · Show");
+    - B is filtered out of A's feed, followers lists and Explore creators.
+  - Settings → Blocked lists blocked users (cap 1,000) with Unblock. Blocking is private: B is never told and sees generic 403 `forbidden` texts.
+- **User value**: with posts and replies (F030/F031) players talk to each other directly. A personal block is the basic safety tool every social platform needs, and it doesn't wait for an admin.
+- **Areas**: backend (`user_blocks` table, `PUT`/`DELETE /api/users/{u}/block`, `GET /api/users/me/blocks`; checks in the follow, reply, comment, heart and notification write paths and read-time filters), frontend (block buttons, collapsed items, Settings list), desktop (verification). No engine changes.
+
+### F043: Continue playing: recently played games (S, proposed; added 2026-11-19)
+- **Pitch**:
+  - Signed-in players get a "Continue playing" shelf at the top of the home page: up to 8 games they played most recently, from the existing F003 `play_events` with `user_id`. Each card shows "Played 2 days ago" and an "Updated since you played" badge when `lastUpdatedAt` is later (F004).
+  - A `/me/history` page lists everything played, with "Remove from history".
+  - `GET /api/users/me/recent?limit=8`, `GET /api/users/me/history?page=` and `DELETE /api/users/me/history/{gameId}`, plus a `play_events(user_id, created_at)` index.
+  - Unpublished games are hidden unless you own them.
+- **User value**: returning players are one click from their game, and the updated badge turns F004 changelogs into a reason to come back.
+- **Areas**: backend (migration with an index, three endpoints), frontend (home shelf, history page), desktop (verification). No engine changes.
+
+### F044: Posts about this game, on game pages (S, proposed; added 2026-11-19; after F030)
+- **Pitch**:
+  - A "Posts" section on every game page lists public posts with that game attached (F030), newest first, 5 at a time with "Show more". It uses the F030 `PostCard`, with F031 hearts and reply links.
+  - The owner's own posts get a "Creator" badge, so dev-log posts read as news.
+  - Collection pages get the same section for posts that attach the collection.
+  - `GET /api/games/{id}/posts` and `GET /api/collections/{id}/posts`, which follow the target's visibility rules (404 when it is hidden).
+- **User value**: "✎ Post about this" stops being a dead end. Players see the creator's updates and other players' takes where they decide to play, and creators get a news feed on their game page for free.
+- **Areas**: backend (two list endpoints and an index on `posts(game_id, created_at)` / `posts(collection_id, created_at)`), frontend (a section on two pages). No engine changes.
+
+### F045: Pin a post to your profile (S, proposed; added 2026-11-19; after F031)
+- **Pitch**:
+  - Authors pin one of their posts. It shows first in their Posts section and the Overview shelf, with a "Pinned" badge.
+  - Pinning another post replaces it after a confirmation (the F017 pin pattern).
+  - `PUT`/`DELETE /api/posts/{id}/pin` (author only), `Post.pinned`, and `UserProfileResponse.pinnedPost`.
+- **User value**: creators keep an introduction, an FAQ or their best dev log at the top, which composes with F029 featured games.
+- **Areas**: backend (`users.pinned_post_id` with `ON DELETE SET NULL`, two endpoints, list ordering), frontend (pin action in the card menu, badge, ordering). No engine changes.
+
+### F046: @mentions in posts, replies and comments (M, proposed; added 2026-11-19; after F031, ideally after F042)
+- **Pitch**:
+  - `@username` in post bodies, F031 replies and F006 comments is linked to the profile when the user exists. The client parses it, and the server returns the resolved `mentions: UserRef[]`, so renamed or deleted users stay plain text.
+  - Mentioned users get a `mention` notification ("Mia mentioned you in a post"), at most 5 per item, never for edits (there are none), with a `mentions` setting. F042 blocks and F018 mutes apply.
+  - The composer suggests usernames after `@` (people you follow first).
+- **User value**: people can pull a friend or a creator into a conversation, which makes posts and threads social rather than broadcast.
+- **Areas**: backend (a mention parser shared by three write paths, `post_mentions`/`comment_mentions` tables, a notification kind and setting), frontend (linkify extension, notification text, autocomplete), desktop (verification). No engine changes.

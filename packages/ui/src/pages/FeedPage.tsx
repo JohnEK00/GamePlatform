@@ -105,7 +105,13 @@ function SuggestedCreators({ onFollowed }: { onFollowed: () => void }) {
   const api = useApi();
   const { data, loading, error, reload } = useAsync(() => api.getFeedSuggestions(), [api]);
   if (error) return <LoadError message="Couldn't load suggestions." onRetry={reload} />;
-  if (!loading && (!data || data.length === 0)) return null;
+  // F035: the directory link shows once loaded, even when there is nothing to suggest.
+  const more = (
+    <p className="pf-suggest__more pf-small">
+      <Link to="/creators">Explore all creators →</Link>
+    </p>
+  );
+  if (!loading && (!data || data.length === 0)) return <div className="pf-suggest pf-suggest--empty">{more}</div>;
   return (
     <section className="pf-panel pf-suggest" aria-labelledby="pf-suggest-title">
       <h2 id="pf-suggest-title" className="pf-panel__title">
@@ -144,6 +150,7 @@ function SuggestedCreators({ onFollowed }: { onFollowed: () => void }) {
               </li>
             ))}
       </ul>
+      {!loading && data ? more : null}
     </section>
   );
 }

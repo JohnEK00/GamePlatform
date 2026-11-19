@@ -40,10 +40,10 @@ afterEach(() => {
 });
 
 describe("Settings → Notifications (F024)", () => {
-  it("the field list ends with the screenshots switch, eighth", () => {
-    expect(NOTIFICATION_SETTING_FIELDS).toHaveLength(8);
-    expect(NOTIFICATION_SETTING_FIELDS[7]).toEqual({ key: "screenshots", label: NAME, hint: HINT });
-    expect(NOTIFICATION_SETTING_FIELDS[6].key).toBe("collections");
+  it("the field list ends with the screenshots switch, right after collections (F031 adds two after pins)", () => {
+    expect(NOTIFICATION_SETTING_FIELDS).toHaveLength(10);
+    expect(NOTIFICATION_SETTING_FIELDS[9]).toEqual({ key: "screenshots", label: NAME, hint: HINT });
+    expect(NOTIFICATION_SETTING_FIELDS[8].key).toBe("collections");
   });
 
   it("shows the switch last, after collections, with label and hint verbatim, and round-trips it", async () => {

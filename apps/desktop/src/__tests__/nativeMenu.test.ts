@@ -73,6 +73,7 @@ describe("native menu events", () => {
       ["feed", "/feed"],
       ["notifications", "/notifications"],
       ["collections", "/collections"],
+      ["creators", "/creators"],
       ["docs", "/docs"],
     ]) {
       m.handler!({ payload: id });
@@ -86,6 +87,17 @@ describe("native menu events", () => {
     window.location.hash = "#/play/abc";
     m.handler!({ payload: "collections" });
     expect(window.location.hash).toBe("#/collections");
+  });
+
+  it("creators (View → Creators, F035) navigates to #/creators from any route", async () => {
+    const seen = capture("webgame:player-screenshot", "webgame:player-controls", "webgame:studio-open-folder");
+    cleanup = installNativeIntegrations();
+    await flush();
+    window.location.hash = "#/play/abc";
+    m.handler!({ payload: "creators" });
+    expect(window.location.hash).toBe("#/creators");
+    expect(seen).toEqual([]);
+    expect(pendingFlag()).toBeUndefined();
   });
 
   it("profile (View → My Profile, F028) navigates to #/me from any route", async () => {

@@ -3,7 +3,8 @@
  * Rust handles window actions itself; navigation items arrive as the `app-menu` event with the item id.
  * `"collections"` (View → Collections, F008) navigates to `/collections`, which the UI redirects to the user's
  * collections page (or to login when signed out). `"profile"` (View → My Profile, F028) navigates to `/me`, which
- * the UI redirects to the user's profile (or to login when signed out).
+ * the UI redirects to the user's profile (or to login when signed out). `"creators"` (View → Creators, F035)
+ * navigates to the public `/creators` page.
  * `"screenshot"` (View → Take Screenshot) dispatches `PLAYER_SCREENSHOT_EVENT` for the mounted player or Studio
  * preview and does not navigate; with neither mounted it does nothing. `"controls"` (View → Controls) likewise
  * dispatches `PLAYER_CONTROLS_EVENT` to open the controls panel, without navigating.
@@ -22,6 +23,7 @@ const ROUTES: Record<string, string> = {
   feed: "/feed",
   notifications: "/notifications",
   collections: "/collections",
+  creators: "/creators",
   docs: "/docs",
   "open-folder": "/studio",
 };

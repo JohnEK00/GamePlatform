@@ -1,5 +1,4 @@
-//! Non-blocking per-key claims (used to serialise bundle replaces per game), and blocking
-//! per-user locks for profile image writes ([`UserLocks`]).
+//! Non-blocking per-key claims (used to serialise bundle replaces per game).
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -87,70 +86,55 @@ impl KeyLocks {
     }
 }
 
-/// Review 11 L5: blocking per-user locks that serialise writes to a user's profile images
-/// (avatar and banner upload, banner delete, admin `clearProfile`). Each one holds the lock
-/// across both its file operation and its `UPDATE users`, so a clear can't land between an
-/// upload's file write and the row update. Keys hash onto a fixed set of async mutexes, so
-/// memory stays bounded. Two users who share a stripe just wait for each other briefly.
-#[derive(Clone)]
-pub struct UserLocks {
-    stripes: Arc<[tokio::sync::Mutex<()>]>,
-    /// Test hook ([`UserLocks::install_gate`]); `None` in production.
-    gate: Arc<Mutex<Option<Arc<ClaimGate>>>>,
-}
-
-const USER_LOCK_STRIPES: usize = 64;
-
-impl Default for UserLocks {
-    fn default() -> Self {
-        Self {
-            stripes: (0..USER_LOCK_STRIPES)
-                .map(|_| tokio::sync::Mutex::new(()))
-                .collect(),
-            gate: Arc::default(),
-        }
-    }
-}
-
-impl UserLocks {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Wait for the lock on `user_id`. It is held until the guard is dropped.
-    pub async fn lock(&self, user_id: &str) -> tokio::sync::MutexGuard<'_, ()> {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        user_id.hash(&mut h);
-        let i = (h.finish() % self.stripes.len() as u64) as usize;
-        self.stripes[i].lock().await
-    }
-
-    /// Test hook: the next [`UserLocks::checkpoint`] call pauses at the returned gate.
-    #[doc(hidden)]
-    pub fn install_gate(&self) -> Arc<ClaimGate> {
-        let gate = Arc::new(ClaimGate::default());
-        *self.gate.lock().unwrap_or_else(|p| p.into_inner()) = Some(gate.clone());
-        gate
-    }
-
-    /// Called while a lock is held, between the file write and the row update. A no-op
-    /// unless a test installed a gate (only the first caller takes it).
-    pub async fn checkpoint(&self) {
-        let gate = self.gate.lock().unwrap_or_else(|p| p.into_inner()).take();
-        if let Some(gate) = gate {
-            gate.entered.notify_one();
-            if let Ok(permit) = gate.release.acquire().await {
-                permit.forget();
-            }
-        }
-    }
-}
-
 impl Drop for KeyGuard {
     fn drop(&mut self) {
         let mut set = self.held.lock().unwrap_or_else(|p| p.into_inner());
         set.remove(&self.key);
+    }
+}
+
+/// Waiting per-key mutual exclusion over a fixed set of async mutexes (a key hashes to one
+/// stripe, so unrelated keys may share one; memory stays bounded). Unlike [`KeyLocks`] a
+/// second caller waits instead of failing. Used to serialise each user's profile image writes
+/// (review 11 L5 follow-up).
+#[derive(Clone)]
+pub struct StripedLocks {
+    stripes: Arc<[Arc<tokio::sync::Mutex<()>>]>,
+}
+
+/// Stripes in [`StripedLocks::default`].
+pub const STRIPES: usize = 64;
+
+impl Default for StripedLocks {
+    fn default() -> Self {
+        Self::new(STRIPES)
+    }
+}
+
+impl StripedLocks {
+    pub fn new(stripes: usize) -> Self {
+        Self {
+            stripes: (0..stripes.max(1))
+                .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+                .collect(),
+        }
+    }
+
+    fn stripe(&self, key: &str) -> &Arc<tokio::sync::Mutex<()>> {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+        // A fixed (unseeded) hasher: the stripe of a key never changes during a run.
+        let h = BuildHasherDefault::<DefaultHasher>::default().hash_one(key);
+        &self.stripes[(h % self.stripes.len() as u64) as usize]
+    }
+
+    /// Wait for and hold `key`'s stripe until the guard is dropped.
+    pub async fn lock(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.stripe(key).clone().lock_owned().await
+    }
+
+    /// `key`'s stripe if it is free right now (tests use this to check a holder).
+    pub fn try_lock(&self, key: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.stripe(key).clone().try_lock_owned().ok()
     }
 }
 
@@ -169,6 +153,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn striped_lock_waits_and_is_stable() {
+        let l = StripedLocks::new(4);
+        let g = l.lock("user-1").await;
+        assert!(l.try_lock("user-1").is_none());
+        let l2 = l.clone();
+        let waiter = tokio::spawn(async move {
+            let _g = l2.lock("user-1").await;
+        });
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!waiter.is_finished());
+        drop(g);
+        waiter.await.unwrap();
+        assert!(l.try_lock("user-1").is_some());
+        // One stripe minimum; every key maps to it.
+        let one = StripedLocks::new(0);
+        let _a = one.lock("a").await;
+        assert!(one.try_lock("b").is_none());
+    }
+
+    #[tokio::test]
     async fn gate_is_one_shot() {
         let l = KeyLocks::new();
         // No gate: returns at once.
@@ -181,20 +187,6 @@ mod tests {
         l.after_claim().await;
         assert!(!waiter.is_finished());
         gate.release();
-        waiter.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn user_lock_blocks_the_same_user_only_until_dropped() {
-        let l = UserLocks::new();
-        let g = l.lock("u1").await;
-        let l2 = l.clone();
-        let waiter = tokio::spawn(async move {
-            let _g = l2.lock("u1").await;
-        });
-        tokio::task::yield_now().await;
-        assert!(!waiter.is_finished());
-        drop(g);
         waiter.await.unwrap();
     }
 }
