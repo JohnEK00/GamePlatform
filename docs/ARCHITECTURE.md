@@ -1970,7 +1970,7 @@ Explore creators page (spec: `docs/features/F035-explore-creators.md`). There is
   - `substr` on TEXT counts characters, so `bioExcerpt` is exactly the first 160 code points.
   - `bannerUrl` comes from `models::banner_url`.
   - The scalar two-argument `MAX` inside the aggregate is SQLite's multi-argument `max()`.
-  - The cost is one pass over published games plus a follower count per creator (`idx_follows_followee_created`). If the catalogue grows, a periodic snapshot like F003's `trending.rs` can replace the CTE without a contract change.
+  - The cost is one pass over published games plus a follower count per creator (the plan uses `idx_follows_followee_follower`; review 12). If the catalogue grows, a periodic snapshot like F003's `trending.rs` can replace the CTE without a contract change.
 - **UI** (`@webgame/ui`):
   - `creators.ts` (pure helpers);
   - `components/CreatorCard.tsx` (`CreatorCard`, `CreatorCardSkeleton`);
