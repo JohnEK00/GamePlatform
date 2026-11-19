@@ -74,11 +74,46 @@ describe("CreatorsPage (F035)", () => {
     expect(list.mock.calls[0][0]).toEqual({ sort: undefined, page: 1, perPage: 24 });
   });
 
-  it("shows 6 skeletons while loading", async () => {
+  it("shows 6 skeletons while loading, hidden from screen readers, with a status message", async () => {
     const { container } = await setup("/creators", () => new Promise(() => {}));
     const grid = container.querySelector(".pf-creator-grid")!;
-    expect(grid.getAttribute("aria-busy")).toBe("true");
+    expect(grid.getAttribute("aria-hidden")).toBe("true");
     expect(grid.querySelectorAll(".pf-creator-card--skeleton").length).toBe(6);
+    expect(screen.queryByRole("list")).toBeNull();
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("Loading creators…");
+    expect(status.className).toBe("pf-sr-only");
+  });
+
+  // Review L1: the page sent to the server is always a safe integer in 1–1,000,000.
+  for (const [query, expected] of [
+    ["?page=1e400", 1],
+    ["?page=1e21", 1],
+    ["?page=x", 1],
+    ["?page=2.5", 1],
+    ["?page=0", 1],
+    ["?page=-3", 1],
+    ["?page=", 1],
+    ["?page=7", 7],
+    ["?page=1e3", 1000],
+    ["?page=5000000", 1_000_000],
+  ] as const) {
+    it(`${query} requests page ${expected}`, async () => {
+      const { list } = await setup(`/creators${query}`, async (q) => page([], 30, q?.page ?? 1));
+      expect(list.mock.calls[0][0]).toEqual({ sort: undefined, page: expected, perPage: 24 });
+    });
+  }
+
+  it("page 1 with creators but no readable item shows an error with Retry, not 'No more creators.'", async () => {
+    const { list } = await setup("/creators", async () => page([null, { user: {} }], 2));
+    expect(screen.queryByText("No more creators.")).toBeNull();
+    expect(screen.queryByText("No creators yet.")).toBeNull();
+    expect(screen.getByText("Something went wrong")).toBeTruthy();
+    expect(screen.getByText("Couldn't read the list of creators.")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    });
+    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("ErrorState with a working Retry", async () => {

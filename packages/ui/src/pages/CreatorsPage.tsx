@@ -9,6 +9,19 @@ import { useFollows } from "../components/Follow";
 import { CREATOR_SORTS, CREATOR_SORT_LABELS, CREATORS_PER_PAGE, creatorsPath, isValidCreator, parseCreatorSort } from "../creators";
 import { useAsync, useDocumentTitle } from "../util";
 
+/** The server's page clamp (API § F035: `page` is clamped to 1–1,000,000). */
+const MAX_PAGE = 1_000_000;
+
+/** `?page=` as a safe integer clamped to 1–MAX_PAGE; anything else (missing, "x", 2.5, 1e21, 1e400) is 1. */
+function parsePage(v: string | null): number {
+  const n = Number(v);
+  if (!Number.isSafeInteger(n)) return 1;
+  return Math.min(MAX_PAGE, Math.max(1, n));
+}
+
+/** Shown when page 1 reports creators but none of the items can be read (an incompatible server). */
+const UNREADABLE = new Error("Couldn't read the list of creators.");
+
 /**
  * F035 `/creators?sort=&page=`: the Explore creators directory. Three sort tabs (Popular, Recently active,
  * New creators), 24 cards per page. Public. Seeds the follow store from each loaded card.
@@ -19,7 +32,7 @@ export function CreatorsPage() {
   const { token } = useAuth();
   const [params, setParams] = useSearchParams();
   const sort = parseCreatorSort(params.get("sort"));
-  const page = Math.max(1, Math.floor(Number(params.get("page"))) || 1);
+  const page = parsePage(params.get("page"));
   useDocumentTitle("Creators");
 
   const list = useAsync(
@@ -62,14 +75,21 @@ export function CreatorsPage() {
       {list.error ? (
         <ErrorState error={list.error} onRetry={list.reload} />
       ) : !ready ? (
-        <ul className="pf-creator-grid" aria-busy="true">
-          {Array.from({ length: 6 }, (_, i) => (
-            <li key={i}>
-              <CreatorCardSkeleton />
-            </li>
-          ))}
-        </ul>
-      ) : items.length === 0 && page === 1 && total === 0 ? (
+        <>
+          <p className="pf-sr-only" role="status">
+            Loading creators…
+          </p>
+          <ul className="pf-creator-grid" aria-hidden="true">
+            {Array.from({ length: 6 }, (_, i) => (
+              <li key={i}>
+                <CreatorCardSkeleton />
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : items.length === 0 && page === 1 && total > 0 ? (
+        <ErrorState error={UNREADABLE} onRetry={list.reload} />
+      ) : items.length === 0 && page === 1 ? (
         <EmptyState
           icon="🎨"
           title="No creators yet."
