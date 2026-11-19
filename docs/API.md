@@ -1985,6 +1985,26 @@ An attachment can't be changed after posting. Posts can't be edited.
 Posts are public to everyone, including anonymous visitors, and reach the author's followers' feeds. No reader, follower or view data is exposed. Report previews hold at most the first 140 code points of the body.
 
 
+## Review-fix additions (REVIEW-2026-11-18-11)
+The server half of review 11 L1/L2, shipped with F031 (the client half shipped in `4beec46`). The specification is F031 spec § 0.20.
+- **Shared forbidden set.** The F028 label set, which F030 body rules step 4 also uses, now also contains these characters:
+  - U+061C (ARABIC LETTER MARK);
+  - U+115F and U+1160 (HANGUL CHOSEONG and JUNGSEONG FILLER);
+  - U+180E (MONGOLIAN VOWEL SEPARATOR);
+  - U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR);
+  - U+3164 (HANGUL FILLER) and U+FFA0 (HALFWIDTH HANGUL FILLER).
+
+  The full set is: U+0000–U+001F, U+007F–U+009F, U+061C, U+115F, U+1160, U+180E, U+200B–U+200F, U+2028, U+2029, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+3164, U+FEFF, U+FFA0. The server's `is_forbidden_label_char` and the client's `isForbiddenLabelCodePoint` are the same list and change together. It applies to:
+  - link labels (`links[{i}].label must not contain control characters`);
+  - post bodies and F031 reply bodies (`body must be plain text`; `\n` allowed);
+  - `displayName` and `bio` (below).
+- **`PATCH /api/users/me`**: the order is still displayName → bio → links, and every field is validated before anything is written.
+  - `displayName`: trim → `displayName must be 1-50 characters` (unchanged) → any character of the set → 422 `validation` `displayName must not contain control characters`.
+  - `bio`: `\r\n` and `\r` become `\n` → trim → `bio must be at most 1000 characters` (unchanged) → any character of the set other than `\n` → 422 `validation` `bio must not contain control characters`. The stored and returned bio is the normalised value.
+  - Existing rows are not rewritten. Values stored before this change are returned as they are.
+- **`PUT /api/users/me/banner`** (review 11 L5): if the user's banner changed between the start of processing and the final write (a concurrent `DELETE /api/users/me/banner`, `clearProfile` or another upload) → 409 `conflict` `Your banner changed while uploading; try again`. The `Limit::Image` token is not refunded. `bannerUrl` never points at a missing file.
+
+
 ## F031 additions
 Post replies and hearts, with notifications (spec: `docs/features/F031-post-replies-and-hearts.md`; § 0 there settles every ambiguity). All earlier rules apply, including F006 (heart and reply patterns), F007/F018/F024 (notifications), F017 (locks) and F030 (posts, body rules). There are seven new endpoints, two notification kinds, two settings, one report target and one new rate-limit bucket.
 
@@ -2066,7 +2086,7 @@ Request bodies are ignored on the heart and lock endpoints.
 2. Malformed JSON → 400 `bad_request`. Not an object, `body` missing, or a field with the wrong JSON type (for example `replyToId: 3`) → 422 `validation` (JSON extractor). Unknown fields are ignored.
 3. Unknown post → 404 `Post not found`.
 4. `Limit::PostReply` → 429 `rate_limited` with `Retry-After`.
-5. The F030 body rules → 422 (`body must be 1–500 characters`, `body must be at most 12 lines`, `body must be plain text`).
+5. The F030 body rules, with the review 11 forbidden set → 422 (`body must be 1–500 characters`, `body must be at most 12 lines`, `body must be plain text`).
 6. `replyToId` is a string that names no reply, or a reply of another post → 404 `not_found` `Reply not found`.
 7. The post is locked and the caller is neither its author nor an admin → 422 `validation` `Replies are turned off for this post`.
 8. The post already has **200** replies → 422 `validation` `This post has reached 200 replies`. The insert is guarded (cap, lock and the post's existence), so concurrent replies can't exceed the cap or slip past a lock; a post deleted meanwhile → 404 `Post not found`.
@@ -2117,3 +2137,54 @@ Request bodies are ignored on the heart and lock endpoints.
 
 ### Privacy
 Replies are public like posts. A post's author learns who hearted it (notification actors); nobody else does. Excerpts are read at request time, so deletes apply at once. Report previews hold at most the first 140 code points of the reply.
+
+
+## F035 additions
+Explore creators page (spec: `docs/features/F035-explore-creators.md`; § 0 there settles every ambiguity). All earlier rules apply. There is one new endpoint, no changed endpoints, no new rate-limit bucket and no migration.
+
+### Types
+```ts
+type CreatorSort = "popular" | "active" | "new"
+
+type Creator = {
+  user: UserRef;
+  bannerUrl: string | null;     // F028 "/media/banners/{userId}.jpg?v={n}" (resolve against the API base); null = no banner
+  bioExcerpt: string;           // the first 160 code points of the bio as stored ("" when empty); plain text, may contain "\n"
+  games: number;                // >= 1: the user's published games
+  plays: number;                // sum of GameSummary.plays over those games
+  followers: number;            // users following this creator
+  isFollowing: boolean;         // 🔓 the viewer follows this creator; false when anonymous and on the viewer's own card
+  firstPublishedAt: string;     // RFC3339 millis Z: min over published games of COALESCE(firstPublishedAt, createdAt)
+  lastActiveAt: string;         // RFC3339 millis Z: max over published games of max(that publish time, lastUpdatedAt)
+}
+```
+- A **creator** is a user with at least one published game. Unpublished games are never counted, for any viewer.
+- Clients must drop items that aren't objects with a `user.username` string.
+
+### Endpoints
+| Method | Path | Query | Response |
+|---|---|---|---|
+| GET 🔓 | /api/creators | `?sort=popular\|active\|new&page=1&perPage=24` | `Page<Creator>` |
+
+**`GET /api/creators`**, checked in this order:
+1. `sort`: absent or empty → `popular`. Anything else that isn't a `CreatorSort` → 400 `bad_request` `Unknown sort '{sort}' (expected popular, active or new)`.
+2. `page`: default 1, clamped to 1–1,000,000; non-integer → 400 `bad_request` `page must be an integer`.
+3. `perPage`: default **24**, clamped to **1–48**; non-integer → 400 `bad_request` `perPage must be an integer`.
+
+Orders (each ends with the case-insensitive username, ascending, so pages are stable):
+
+| `sort` | Order |
+|---|---|
+| `popular` | `followers` desc, `plays` desc, username asc |
+| `active` | `lastActiveAt` desc, username asc |
+| `new` | `firstPublishedAt` desc, username asc |
+
+- `total` = the number of creators, which doesn't depend on the sort.
+- The same list for every viewer: only `isFollowing` depends on the viewer. The viewer's own card is included.
+- No rate limit, like `GET /api/games`.
+
+### Web routes
+- `/creators?sort=active&page=2`: the Explore creators page. `sort` is omitted for `popular` and `page` for 1. An unknown `sort` shows Popular. With `WEB_DIST` set it falls back to `index.html` like every SPA route.
+
+### Privacy
+Only public data: users with a published game are already visible through `GET /api/games`, and follower counts are already on profiles. `isFollowing` is about the viewer only.
