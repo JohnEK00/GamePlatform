@@ -95,7 +95,7 @@ impl Drop for KeyGuard {
 
 /// Waiting per-key mutual exclusion over a fixed set of async mutexes (a key hashes to one
 /// stripe, so unrelated keys may share one; memory stays bounded). Unlike [`KeyLocks`] a
-/// second caller waits instead of failing. Used to serialise each user's banner writes
+/// second caller waits instead of failing. Used to serialise each user's profile image writes
 /// (review 11 L5 follow-up).
 #[derive(Clone)]
 pub struct StripedLocks {

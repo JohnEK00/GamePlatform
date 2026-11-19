@@ -385,6 +385,10 @@ pub async fn upload_avatar(
     let bytes = avatar.ok_or_else(|| AppError::validation("avatar file is required"))?;
     let ext = validate_image(&bytes, "avatar")?;
     let dir = state.storage.avatars_dir();
+    // Review 11 L5 follow-up: the file and the row change together relative to
+    // `clear_profile` (which removes the files after its UPDATE), so `avatar_ext` never names
+    // a missing file. Uploads stay last-writer-wins.
+    let guard = state.profile_image_locks.lock(&user.id).await;
     state
         .storage
         .replace_image(&dir, &user.id, ext, &bytes)
@@ -396,6 +400,7 @@ pub async fn upload_avatar(
     .bind(&user.id)
     .execute(&state.db)
     .await?;
+    drop(guard);
     Ok(Json(load_user(&state, &user.id).await?))
 }
 
@@ -445,7 +450,7 @@ pub const BANNER_CHANGED: &str = "Your banner changed while uploading; try again
 /// `banner_version` still equals `expected_version` (read before processing). When a concurrent
 /// clear, delete or upload won, nothing is written and the result is 409 `conflict`.
 ///
-/// The check, the file write and the UPDATE run under the user's [`AppState::banner_locks`]
+/// The check, the file write and the UPDATE run under the user's [`AppState::profile_image_locks`]
 /// stripe, which every banner writer (`delete_banner`, `clear_profile`) also takes, so a losing
 /// upload never overwrites the winner's file and `banner_ext` never names a missing file.
 /// Public so tests can drive the race directly.
@@ -455,7 +460,7 @@ pub async fn store_banner(
     expected_version: i64,
     jpeg: &[u8],
 ) -> AppResult<()> {
-    let _guard = state.banner_locks.lock(user_id).await;
+    let _guard = state.profile_image_locks.lock(user_id).await;
     let current: Option<i64> = sqlx::query_scalar("SELECT banner_version FROM users WHERE id = ?")
         .bind(user_id)
         .fetch_optional(&state.db)
@@ -498,7 +503,7 @@ pub async fn store_banner(
 /// was removed.
 pub async fn delete_banner(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<User>> {
     // Review 11 L5: no upload can write a file between this UPDATE and the removal.
-    let guard = state.banner_locks.lock(&user.id).await;
+    let guard = state.profile_image_locks.lock(&user.id).await;
     sqlx::query(
         "UPDATE users SET banner_ext = NULL, banner_version = banner_version + 1 \
          WHERE id = ? AND banner_ext IS NOT NULL",
@@ -517,8 +522,8 @@ pub async fn delete_banner(State(state): State<AppState>, user: AuthUser) -> App
 /// F028 admin `clearProfile`: display name ← username, bio and links emptied, avatar and banner
 /// removed (versions + 1, files deleted). Content stays. An unknown id is a no-op.
 pub async fn clear_profile(state: &AppState, user_id: &str) -> AppResult<()> {
-    // Review 11 L5: serialised with banner uploads (see `store_banner`).
-    let _banner = state.banner_locks.lock(user_id).await;
+    // Review 11 L5: serialised with banner and avatar uploads (see `store_banner`).
+    let _images = state.profile_image_locks.lock(user_id).await;
     sqlx::query(
         "UPDATE users SET display_name = username, bio = '', links_json = '[]', \
          avatar_ext = NULL, avatar_version = avatar_version + 1, \

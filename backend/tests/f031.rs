@@ -1671,7 +1671,7 @@ async fn review11_banner_writers_share_the_user_lock() {
 
     // 1. An upload waits for the lock before writing anything.
     let (_, v) = banner_state(&t, &uid).await;
-    let guard = t.state.banner_locks.lock(&uid).await;
+    let guard = t.state.profile_image_locks.lock(&uid).await;
     let (state, id) = (t.state.clone(), uid.clone());
     let upload = tokio::spawn(async move { store_banner(&state, &id, v, b"new").await });
     settle().await;
@@ -1687,7 +1687,7 @@ async fn review11_banner_writers_share_the_user_lock() {
     assert_eq!(banner_state(&t, &uid).await, (Some("jpg".into()), v + 1));
 
     // 2. DELETE /api/users/me/banner waits too (UPDATE and file removal stay together).
-    let guard = t.state.banner_locks.lock(&uid).await;
+    let guard = t.state.profile_image_locks.lock(&uid).await;
     let req = Request::builder()
         .method(Method::DELETE)
         .uri("/api/users/me/banner")
@@ -1709,7 +1709,7 @@ async fn review11_banner_writers_share_the_user_lock() {
     // 3. The admin clearProfile path as well.
     let (_, v) = banner_state(&t, &uid).await;
     store_banner(&t.state, &uid, v, b"again").await.unwrap();
-    let guard = t.state.banner_locks.lock(&uid).await;
+    let guard = t.state.profile_image_locks.lock(&uid).await;
     let (state, id) = (t.state.clone(), uid.clone());
     let clear = tokio::spawn(async move { clear_profile(&state, &id).await });
     settle().await;
@@ -1736,4 +1736,77 @@ async fn admin_can_reply_whether_or_not_the_post_is_locked() {
         StatusCode::OK
     );
     reply_ok(&t, &boss, &pid, "admin, locked", None).await;
+}
+
+async fn avatar_state(t: &TestApp, uid: &str) -> (Option<String>, i64) {
+    sqlx::query_as("SELECT avatar_ext, avatar_version FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_one(&t.state.db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn review11_avatar_upload_shares_the_user_lock() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+    use webgame_server::routes::users::clear_profile;
+
+    let t = setup().await;
+    let (mia, uid) = t.register("mia").await;
+    let file = t.state.storage.avatar_path(&uid, "png");
+    let png = png_bytes();
+    let upload = |router: axum::Router| {
+        let (ct, body) = multipart_body(&[Part::File("avatar", "a.png", "image/png", &png)]);
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/api/users/me/avatar")
+            .header("host", "localhost:8080")
+            .header("authorization", format!("Bearer {mia}"))
+            .header("content-type", ct)
+            .body(Body::from(body))
+            .unwrap();
+        tokio::spawn(async move { router.oneshot(req).await.unwrap().status() })
+    };
+
+    // 1. An avatar upload waits for the lock before writing anything.
+    let (_, v) = avatar_state(&t, &uid).await;
+    let guard = t.state.profile_image_locks.lock(&uid).await;
+    let up = upload(t.router.clone());
+    settle().await;
+    assert!(!up.is_finished());
+    assert!(
+        !file.exists(),
+        "no file is written while another writer holds the lock"
+    );
+    assert_eq!(avatar_state(&t, &uid).await, (None, v));
+    drop(guard);
+    assert_eq!(up.await.unwrap(), StatusCode::OK);
+    assert!(file.exists());
+    assert_eq!(avatar_state(&t, &uid).await, (Some("png".into()), v + 1));
+
+    // 2. The old bad interleaving: clearProfile's UPDATE, then an upload's write + UPDATE,
+    //    then clearProfile's file removal. Queued behind one holder, they now run one after
+    //    the other (FIFO), and the row never names a missing file.
+    let guard = t.state.profile_image_locks.lock(&uid).await;
+    let (state, id) = (t.state.clone(), uid.clone());
+    let clear = tokio::spawn(async move { clear_profile(&state, &id).await });
+    settle().await;
+    let up = upload(t.router.clone());
+    settle().await;
+    assert!(!clear.is_finished() && !up.is_finished());
+    drop(guard);
+    clear.await.unwrap().unwrap();
+    assert_eq!(up.await.unwrap(), StatusCode::OK);
+    let (ext, _) = avatar_state(&t, &uid).await;
+    assert_eq!(ext.as_deref(), Some("png"));
+    assert!(file.exists(), "avatar_ext points at an existing file");
+    let me = t.get("/api/auth/me", Some(&mia)).await.json();
+    assert!(me["avatarUrl"].is_string());
+
+    // 3. clearProfile alone removes both, together.
+    clear_profile(&t.state, &uid).await.unwrap();
+    assert_eq!(avatar_state(&t, &uid).await.0, None);
+    assert!(!file.exists());
 }
